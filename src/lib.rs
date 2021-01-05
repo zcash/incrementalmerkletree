@@ -416,8 +416,9 @@ mod tests {
     }
 
     proptest! {
+        #![proptest_config(ProptestConfig::with_cases(100000))]
         #[test]
-        fn do_stuff(ops in proptest::collection::vec(arb_operation(), 1..200)) {
+        fn do_stuff(ops in proptest::collection::vec(arb_operation(), 1..100)) {
             const DEPTH: usize = 4;
             let mut tree = Tree::<Hash>::new(DEPTH);
             let mut tree_size = 0;
