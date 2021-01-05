@@ -2,6 +2,11 @@
 name = "incrementalmerkletree"
 version = "0.1.0"
 authors = ["Sean Bowe <ewillbefull@gmail.com>"]
+edition = "2018"
 
-[dependencies]
-rand = "0.3"
+# [dependencies]
+# rand = "0.8"
+# typenum = "1.12"
+
+[dev-dependencies]
+proptest = "0.10"

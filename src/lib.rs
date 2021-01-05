@@ -1,362 +1,521 @@
-#![feature(rustc_private)]
-extern crate rustc;
-extern crate rand;
+//! # `incrementalmerkletree`
+//!
+//! Incremental Merkle Trees are fixed-depth Merkle trees with two primary
+//! capabilities: appending (assigning a value to the next unused leaf and
+//! advancing the tree) and obtaining the root of the tree. Importantly the tree
+//! structure attempts to store the least amount of information necessary to
+//! continue to function; other information should be pruned eagerly to avoid
+//! waste when the tree state is encoded.
+//!
+//! ## Witnessing
+//!
+//! Merkle trees are typically used to show that a value exists in the tree via
+//! an authentication path. We need an API that allows us to identify the
+//! current leaf as a value we wish to compute authentication paths for even as
+//! the tree continues to be appended to in the future; this is called
+//! maintaining a witness. When we're later uninterested in such a leaf, we can
+//! prune a witness and remove all unnecessary information from the structure as
+//! a consequence.
+//!
+//! ## Checkpoints and Rollbacks
+//!
+//! The structure is not append-only in the strict sense. It is possible to
+//! identify the current state of the tree as a "checkpoint" and to remove older
+//! checkpoints that we're no longer interested in. It should be possible to
+//! roll back to any previous checkpoint.
 
-mod sha256;
+pub trait TreeHasher {
+    type Digest: Clone + PartialEq;
 
-trait Hashable: Clone + Copy {
-    fn combine(&Self, &Self) -> Self;
-    fn blank() -> Self;
+    fn empty_leaf() -> Self::Digest;
+    fn combine(a: &Self::Digest, b: &Self::Digest) -> Self::Digest;
 }
 
-#[derive(Clone)]
-struct IncrementalMerkleTree<T: Hashable> {
-    cursor: Leaf<T>,
-    depth: usize
+pub struct Tree<H: TreeHasher> {
+    leaves: Vec<H::Digest>,
+    current_position: usize,
+    witnesses: Vec<(usize, H::Digest)>,
+    checkpoints: Vec<usize>,
+    depth: usize,
 }
 
-#[derive(Clone)]
-enum Leaf<T: Hashable> {
-    Left{parent: Parent<T>, content: T},
-    Right{parent: Parent<T>, left: T, content: T} 
-}
+impl<H: TreeHasher> Tree<H> {
+    /// Creates a new, empty binary tree of specified depth.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the specified depth is zero.
+    pub fn new(depth: usize) -> Self {
+        if depth == 0 {
+            panic!("invalid depth for incremental merkle tree");
+        }
 
-#[derive(Clone)]
-enum Parent<T: Hashable> {
-    Empty,
-    Left{parent: Box<Parent<T>>},
-    Right{left: T, parent: Box<Parent<T>>}
-}
-
-impl<T: Hashable> Parent<T> {
-    fn ascend<'a, F: FnMut(Option<&'a T>) -> bool>(&'a self, mut cb: F) {
-        match *self {
-            Parent::Empty => {
-                if cb(None) {
-                    self.ascend(cb);
-                }
-            },
-            Parent::Left{ref parent} => {
-                if cb(None) {
-                    parent.ascend(cb);
-                }
-            },
-            Parent::Right{ref left, ref parent} => {
-                if cb(Some(left)) {
-                    parent.ascend(cb);
-                }
-            }
+        Tree {
+            leaves: vec![H::empty_leaf(); 1 << depth],
+            current_position: 0,
+            witnesses: vec![],
+            checkpoints: vec![],
+            depth,
         }
     }
 
-    fn advance(self, hash: T) -> Parent<T> {
-        match self {
-            Parent::Empty => {
-                Parent::Right {
-                    left: hash,
-                    parent: Box::new(Parent::Empty)
-                }
-            },
-            Parent::Left{parent} => {
-                Parent::Right {
-                    left: hash,
-                    parent: parent
-                }
-            },
-            Parent::Right{left, parent} => {
-                Parent::Left{
-                    parent: Box::new(parent.advance(T::combine(&left, &hash)))
-                }
-            }
-        }
-    }
-}
-
-impl<T: Hashable> IncrementalMerkleTree<T> {
-    fn new(d: usize, initial: T) -> IncrementalMerkleTree<T> {
-        assert!(d != 0);
-
-        IncrementalMerkleTree {
-            cursor: Leaf::Left{parent: Parent::Empty, content: initial},
-            depth: d
+    /// Appends a new value to the tree at the next available slot. Returns true
+    /// if successful and false if the tree is full.
+    pub fn append(&mut self, value: &H::Digest) -> bool {
+        if self.current_position == (1 << self.depth) {
+            false
+        } else {
+            self.leaves[self.current_position] = value.clone();
+            self.current_position += 1;
+            true
         }
     }
 
-    fn completed(&self) -> bool {
-        match self.cursor {
-            Leaf::Left{..} => false,
-            Leaf::Right{ref parent, ..} => {
-                let complete = &mut true;
-                let depth = &mut (self.depth - 1);
+    /// Obtains the current root of this Merkle tree.
+    pub fn root(&self) -> H::Digest {
+        lazy_root::<H>(self.leaves.clone())
+    }
 
-                parent.ascend(|left| {
-                    if *depth == 0 {
-                        return false;
-                    }
-
-                    if left.is_none() {
-                        *complete = false;
-                        return false;
-                    }
-
-                    *depth -= 1;
-
-                    true
-                });
-
-                *complete
-            }
+    /// Marks the current tree state leaf as a value that we're interested in
+    /// witnessing. Returns true if successful and false if the tree is empty.
+    pub fn witness(&mut self) -> bool {
+        if self.current_position == 0 {
+            return false;
+        } else {
+            let value = self.leaves[self.current_position - 1].clone();
+            self.witnesses.push((self.current_position - 1, value));
+            true
         }
     }
 
-    fn append(self, obj: T) -> IncrementalMerkleTree<T> {
-        match self.cursor {
-            Leaf::Left{parent, content} => {
-                IncrementalMerkleTree {
-                    cursor: Leaf::Right{
-                        parent: parent,
-                        left: content,
-                        content: obj
-                    },
-                    depth: self.depth
+    /// Obtains an authentication path to the value specified in the tree.
+    /// Returns `None` if there is no available authentication path to the
+    /// specified value.
+    pub fn authentication_path(&self, value: &H::Digest) -> Option<(usize, Vec<H::Digest>)> {
+        self.witnesses
+            .iter()
+            .find(|witness| witness.1 == *value)
+            .map(|&(pos, _)| {
+                let mut path = vec![];
+
+                let mut index = pos;
+                for bit in 0..self.depth {
+                    index ^= 1 << bit;
+                    path.push(lazy_root::<H>(self.leaves[index..][0..(1 << bit)].to_vec()));
+                    index &= usize::MAX << (bit + 1);
                 }
-            },
-            Leaf::Right{parent, left, content} => {
-                IncrementalMerkleTree {
-                    cursor: Leaf::Left{
-                        parent: parent.advance(T::combine(&left, &content)),
-                        content: obj
-                    },
-                    depth: self.depth
-                }
-            }
-        }
+
+                (pos, path)
+            })
     }
 
-    fn unfilled(&self, mut skip: usize) -> usize {
-        let parent = match self.cursor {
-            Leaf::Left{ref parent, ..} => {
-                if skip == 0 {
-                    return 0;
-                } else {
-                    skip -= 1;
-
-                    parent
-                }
-            },
-            Leaf::Right{ref parent, ..} => {
-                parent
-            }
-        };
-
-        let mut depth = &mut 0;
-        parent.ascend(|left| {
-            *depth += 1;
-
-            match left {
-                Some(_) => {
-                    return true;
-                },
-                None => {
-                    if skip == 0 {
-                        return false;
-                    } else {
-                        skip -= 1;
-                        return true;
-                    }
-                }
-            }
-        });
-
-        return *depth;
-    }
-
-    fn root(&self) -> T {
-        self.root_advanced(Some(T::blank()).iter().cycle())
-    }
-
-    fn root_advanced<'a, I: Iterator<Item=&'a T>>(&self, mut it: I) -> T where T: 'a {
-        let (parent, mut child) = match self.cursor {
-            Leaf::Left{ref parent, ref content} => {
-                (parent, T::combine(content, it.next().unwrap()))
-            },
-            Leaf::Right{ref parent, ref left, ref content} => {
-                (parent, T::combine(left, content))
-            }
-        };
-
-        let mut depth = self.depth - 1;
+    /// Marks the specified tree state value as a value we're no longer
+    /// interested in maintaining a witness for. Returns true if successful and
+    /// false if the value is not a known witness.
+    pub fn remove_witness(&mut self, value: &H::Digest) -> bool {
+        if let Some((position, _)) = self
+            .witnesses
+            .iter()
+            .enumerate()
+            .find(|witness| (witness.1).1 == *value)
         {
-            let child = &mut child;
+            self.witnesses.remove(position);
 
-            parent.ascend(move |left| {
-                if depth == 0 {
-                    return false;
-                }
+            true
+        } else {
+            false
+        }
+    }
 
-                match left {
-                    Some(left) => {
-                        *child = T::combine(left, &*child);
-                    },
-                    None => {
-                        *child = T::combine(&*child, it.next().unwrap());
+    /// Marks the current tree state as a checkpoint if it is not already a
+    /// checkpoint.
+    pub fn checkpoint(&mut self) {
+        self.checkpoints.push(self.current_position);
+    }
+
+    /// Rewinds the tree state to the previous checkpoint. This function will
+    /// fail and return false if there is no previous checkpoint or in the event
+    /// witness data would be destroyed in the process.
+    pub fn rewind(&mut self) -> bool {
+        if let Some(checkpoint) = self.checkpoints.pop() {
+            if self.witnesses.iter().any(|&(pos, _)| pos >= checkpoint) {
+                self.checkpoints.push(checkpoint);
+                return false;
+            }
+
+            self.current_position = checkpoint;
+            if checkpoint != (1 << self.depth) {
+                self.leaves[checkpoint..].fill(H::empty_leaf());
+            }
+
+            true
+        } else {
+            false
+        }
+    }
+
+    /// Removes the oldest checkpoint. Returns true if successful and false if
+    /// there are no checkpoints.
+    pub fn pop_checkpoint(&mut self) -> bool {
+        if self.checkpoints.is_empty() {
+            false
+        } else {
+            self.checkpoints.remove(0);
+            true
+        }
+    }
+
+    /// Start a recording of append operations performed on a tree.
+    pub fn recording(&self) -> Recording<H> {
+        Recording {
+            start_position: self.current_position,
+            current_position: self.current_position,
+            depth: self.depth,
+            appends: vec![],
+        }
+    }
+
+    /// Plays a recording of append operations back. Returns true if successful
+    /// and false if the recording is incompatible with the current tree state.
+    pub fn play(&mut self, recording: &Recording<H>) -> bool {
+        if recording.start_position == self.current_position && self.depth == recording.depth {
+            for val in recording.appends.iter() {
+                self.append(val);
+            }
+            true
+        } else {
+            false
+        }
+    }
+}
+
+pub struct Recording<H: TreeHasher> {
+    start_position: usize,
+    current_position: usize,
+    depth: usize,
+    appends: Vec<H::Digest>,
+}
+
+impl<H: TreeHasher> Recording<H> {
+    /// Appends a new value to the tree at the next available slot. Returns true
+    /// if successful and false if the tree is full.
+    pub fn append(&mut self, value: &H::Digest) -> bool {
+        if self.current_position == (1 << self.depth) {
+            false
+        } else {
+            self.appends.push(value.clone());
+            self.current_position += 1;
+
+            true
+        }
+    }
+
+    /// Plays a recording of append operations back. Returns true if successful
+    /// and false if the provided recording is incompatible with `Self`.
+    pub fn play(&mut self, recording: &Self) -> bool {
+        if self.current_position == recording.start_position && self.depth == recording.depth {
+            self.appends.extend_from_slice(&recording.appends);
+            self.current_position = recording.current_position;
+            true
+        } else {
+            false
+        }
+    }
+}
+
+fn lazy_root<H: TreeHasher>(mut leaves: Vec<H::Digest>) -> H::Digest {
+    while leaves.len() != 1 {
+        leaves = leaves
+            .iter()
+            .enumerate()
+            .filter(|(i, _)| (i % 2) == 0)
+            .map(|(_, a)| a)
+            .zip(
+                leaves
+                    .iter()
+                    .enumerate()
+                    .filter(|(i, _)| (i % 2) == 1)
+                    .map(|(_, b)| b),
+            )
+            .map(|(a, b)| H::combine(a, b))
+            .collect();
+    }
+
+    leaves[0].clone()
+}
+
+#[cfg(test)]
+mod tests {
+    #![allow(deprecated)]
+    use super::*;
+    use std::hash::Hasher;
+    use std::hash::SipHasher as Hash;
+
+    impl TreeHasher for Hash {
+        type Digest = u64;
+
+        fn empty_leaf() -> Self::Digest {
+            0
+        }
+        fn combine(a: &Self::Digest, b: &Self::Digest) -> Self::Digest {
+            let mut hasher = Hash::new();
+            hasher.write_u64(*a);
+            hasher.write_u64(*b);
+            hasher.finish()
+        }
+    }
+
+    fn compute_root_from_auth_path<H: TreeHasher>(
+        value: H::Digest,
+        position: usize,
+        path: &[H::Digest],
+    ) -> H::Digest {
+        let mut cur = value;
+        for (i, v) in path
+            .iter()
+            .enumerate()
+            .map(|(i, v)| (((position >> i) & 1) == 1, v))
+        {
+            if i {
+                cur = H::combine(v, &cur);
+            } else {
+                cur = H::combine(&cur, v);
+            }
+        }
+        cur
+    }
+
+    #[test]
+    fn test_compute_root_from_auth_path() {
+        let expected = Hash::combine(
+            &Hash::combine(&Hash::combine(&0, &1), &Hash::combine(&2, &3)),
+            &Hash::combine(&Hash::combine(&4, &5), &Hash::combine(&6, &7)),
+        );
+
+        assert_eq!(
+            compute_root_from_auth_path::<Hash>(
+                0,
+                0,
+                &[
+                    1,
+                    Hash::combine(&2, &3),
+                    Hash::combine(&Hash::combine(&4, &5), &Hash::combine(&6, &7))
+                ]
+            ),
+            expected
+        );
+
+        assert_eq!(
+            compute_root_from_auth_path::<Hash>(
+                4,
+                4,
+                &[
+                    5,
+                    Hash::combine(&6, &7),
+                    Hash::combine(&Hash::combine(&0, &1), &Hash::combine(&2, &3))
+                ]
+            ),
+            expected
+        );
+    }
+
+    #[test]
+    fn correct_empty_root() {
+        const DEPTH: usize = 5;
+        let mut expected = 0u64;
+        for _ in 0..DEPTH {
+            expected = Hash::combine(&expected, &expected);
+        }
+
+        let tree = Tree::<Hash>::new(DEPTH);
+        assert_eq!(tree.root(), expected);
+    }
+
+    #[test]
+    fn correct_root() {
+        const DEPTH: usize = 3;
+        let values: Vec<u64> = (0..(1 << DEPTH)).collect();
+
+        let mut tree = Tree::<Hash>::new(DEPTH);
+        for value in values.iter() {
+            assert!(tree.append(value));
+        }
+        assert!(!tree.append(&0));
+
+        let expected = Hash::combine(
+            &Hash::combine(&Hash::combine(&0, &1), &Hash::combine(&2, &3)),
+            &Hash::combine(&Hash::combine(&4, &5), &Hash::combine(&6, &7)),
+        );
+
+        assert_eq!(tree.root(), expected);
+    }
+
+    #[test]
+    fn correct_auth_path() {
+        const DEPTH: usize = 3;
+        let values: Vec<u64> = (0..(1 << DEPTH)).collect();
+
+        let mut tree = Tree::<Hash>::new(DEPTH);
+        for value in values.iter() {
+            assert!(tree.append(value));
+            tree.witness();
+        }
+        assert!(!tree.append(&0));
+
+        let expected = Hash::combine(
+            &Hash::combine(&Hash::combine(&0, &1), &Hash::combine(&2, &3)),
+            &Hash::combine(&Hash::combine(&4, &5), &Hash::combine(&6, &7)),
+        );
+
+        assert_eq!(tree.root(), expected);
+
+        for i in 0..(1 << DEPTH) {
+            println!("value: {}", i);
+            let (position, path) = tree.authentication_path(&i).unwrap();
+            assert_eq!(
+                compute_root_from_auth_path::<Hash>(i, position, &path),
+                expected
+            );
+        }
+    }
+
+    use proptest::prelude::*;
+
+    #[derive(Clone, Debug)]
+    enum Operation {
+        Append(u64),
+        Witness,
+        Unwitness(u64),
+        Checkpoint,
+        Rewind,
+        PopCheckpoint,
+        Authpath(u64),
+    }
+
+    use Operation::*;
+
+    prop_compose! {
+        fn arb_operation()
+                    (
+                        opid in (0..7),
+                        item in (0..32u64),
+                    )
+                    -> Operation
+        {
+            match opid {
+                0 => Append(item),
+                1 => Witness,
+                2 => Unwitness(item),
+                3 => Checkpoint,
+                4 => Rewind,
+                5 => PopCheckpoint,
+                6 => Authpath(item),
+                _ => unimplemented!()
+            }
+        }
+    }
+
+    proptest! {
+        #[test]
+        fn do_stuff(ops in proptest::collection::vec(arb_operation(), 1..200)) {
+            const DEPTH: usize = 4;
+            let mut tree = Tree::<Hash>::new(DEPTH);
+            let mut tree_size = 0;
+            let mut tree_values = vec![];
+            let mut tree_checkpoints = vec![];
+            let mut tree_witnesses: Vec<(usize, u64)> = vec![];
+
+            for op in ops {
+                assert_eq!(tree_size, tree_values.len());
+                match op {
+                    Append(value) => {
+                        if tree.append(&value) {
+                            assert!(tree_size < (1 << DEPTH));
+                            tree_size += 1;
+                            tree_values.push(value);
+                        } else {
+                            assert!(tree_size == (1 << DEPTH));
+                        }
+                    }
+                    Witness => {
+                        if tree.witness() {
+                            assert!(tree_size != 0);
+                            tree_witnesses.push((tree_size - 1, *tree_values.last().unwrap()));
+                        } else {
+                            assert!(tree_size == 0);
+                        }
+                    }
+                    Unwitness(value) => {
+                        if tree.remove_witness(&value) {
+                            if let Some((i, _)) = tree_witnesses.iter().enumerate().find(|v| (v.1).1 == value) {
+                                tree_witnesses.remove(i);
+                            } else {
+                                panic!("witness should not have been removed");
+                            }
+                        } else {
+                            if tree_witnesses.iter().find(|v| v.1 == value).is_some() {
+                                panic!("witness should have been removed");
+                            }
+                        }
+                    }
+                    Checkpoint => {
+                        tree_checkpoints.push(tree_size);
+                        tree.checkpoint();
+                    }
+                    Rewind => {
+                        if tree.rewind() {
+                            assert!(tree_checkpoints.len() > 0);
+                            let checkpoint_location = tree_checkpoints.pop().unwrap();
+                            for &(index, _) in tree_witnesses.iter() {
+                                // index is the index in tree_values
+                                // checkpoint_location is the size of the tree
+                                // at the time of the checkpoint
+                                // index should always be strictly smaller or
+                                // else a witness would be erased!
+                                assert!(index < checkpoint_location);
+                            }
+                            tree_values.truncate(checkpoint_location);
+                            tree_size = checkpoint_location;
+                        } else {
+                            if tree_checkpoints.len() != 0 {
+                                let checkpoint_location = *tree_checkpoints.last().unwrap();
+                                assert!(tree_witnesses.iter().any(|&(index, _)| index >= checkpoint_location));
+                            }
+                        }
+                    }
+                    PopCheckpoint => {
+                        if tree.pop_checkpoint() {
+                            assert!(tree_checkpoints.len() > 0);
+                            tree_checkpoints.remove(0);
+                        } else {
+                            assert!(tree_checkpoints.len() == 0);
+                        }
+                    }
+                    Authpath(value) => {
+                        if let Some((position, path)) = tree.authentication_path(&value) {
+                            // must be the case that value was a witness
+                            assert!(tree_witnesses.iter().any(|&(_, witness)| witness == value));
+
+                            let mut extended_tree_values = tree_values.clone();
+                            extended_tree_values.resize(1 << DEPTH, Hash::empty_leaf());
+                            let expected_root = lazy_root::<Hash>(extended_tree_values);
+
+                            let tree_root = tree.root();
+                            assert_eq!(tree_root, expected_root);
+
+                            assert_eq!(
+                                compute_root_from_auth_path::<Hash>(value, position, &path),
+                                expected_root
+                            );
+                        } else {
+                            // must be the case that value wasn't a witness
+                            for &(_, witness) in tree_witnesses.iter() {
+                                assert!(witness != value);
+                            }
+                        }
                     }
                 }
-
-                depth = depth - 1;
-
-                true
-            });
-        }
-
-        return child;
-    }
-}
-
-#[derive(Clone)]
-struct IncrementalWitness<T: Hashable> {
-    tree: IncrementalMerkleTree<T>,
-    delta: IncrementalDelta<T>
-}
-
-#[derive(Clone)]
-struct IncrementalDelta<T: Hashable> {
-    filled: Vec<T>,
-    active: Option<IncrementalMerkleTree<T>>
-}
-
-impl<T: Hashable> IncrementalWitness<T> {
-    fn new(from: &IncrementalMerkleTree<T>) -> IncrementalWitness<T> {
-        IncrementalWitness {
-            tree: from.clone(),
-            delta: IncrementalDelta {
-                filled: vec![],
-                active: None
             }
-        }
-    }
-
-    fn append(&mut self, object: T) {
-        match self.delta.active.take() {
-            Some(active) => {
-                let active = active.append(object);
-
-                if active.completed() {
-                    self.delta.filled.push(active.root());
-                } else {
-                    self.delta.active = Some(active);
-                }
-            },
-            None => {
-                match self.tree.unfilled(self.delta.filled.len()) {
-                    0 => {
-                        self.delta.filled.push(object);
-                    },
-                    i => {
-                        self.delta.active = Some(IncrementalMerkleTree::new(i, object));
-                    }
-                }
-            }
-        }
-    }
-
-    fn root(&self) -> T {
-        self.tree.root_advanced(self.delta.filled.iter() // use filled values
-                                .chain(self.delta.active.as_ref().map(|x| x.root()).as_ref()) // then use the active root
-                                .chain(Some(T::blank()).iter().cycle())) // then fill in with blanks
-    }
-}
-
-
-mod test {
-    use super::{IncrementalMerkleTree, IncrementalWitness};
-    use super::sha256::*;
-
-    #[test]
-    fn test_root() {
-        let a = Sha256Digest::rand(0);
-
-        let tree = IncrementalMerkleTree::new(3, a);
-
-        assert_eq!(tree.root(), Sha256Digest([94, 162, 216, 229, 230, 128, 153, 35, 89, 40, 180, 159, 125, 27, 48, 80, 181, 73, 7, 195, 182, 223, 83, 165, 59, 200, 234, 181, 106, 3, 243, 228]));
-
-        let b = Sha256Digest::rand(1);
-
-        let tree = tree.append(b);
-
-        assert_eq!(tree.root(), Sha256Digest([222, 23, 196, 222, 130, 80, 115, 139, 134, 72, 108, 150, 235, 75, 216, 5, 63, 101, 2, 237, 51, 47, 165, 216, 40, 15, 209, 176, 10, 192, 224, 26]));
-    }
-
-    #[test]
-    fn test_unfilled() {
-        let a = Sha256Digest::rand(0);
-        let mut tree = IncrementalMerkleTree::new(3, a);
-
-        for i in 0..4 {
-            let b = Sha256Digest::rand(i+1);
-            tree = tree.append(b);
-        }
-
-        assert_eq!(tree.unfilled(0), 0);
-        assert_eq!(tree.unfilled(1), 1);
-        assert_eq!(tree.unfilled(2), 3);
-    }
-
-    #[test]
-    fn test_complete() {
-        let a = Sha256Digest::rand(0);
-        let mut tree = IncrementalMerkleTree::new(3, a);
-
-        for i in 0..7 {
-            assert_eq!(tree.completed(), false);
-            let b = Sha256Digest::rand(i+1);
-            tree = tree.append(b);
-        }
-
-        assert_eq!(tree.completed(), true);
-    }
-
-    #[test]
-    fn test_witness() {
-        let a = Sha256Digest::rand(0);
-        let mut tree = IncrementalMerkleTree::new(3, a);
-
-        let mut witness = IncrementalWitness::new(&tree);
-
-        assert_eq!(tree.root(), witness.root());
-        assert_eq!(witness.delta.filled.len(), 0);
-        assert!(witness.delta.active.is_none());
-
-        for i in 1..8 {
-            let b = Sha256Digest::rand(i);
-            witness.append(b);
-            tree = tree.append(b);
-
-            match i {
-                1 => {
-                    assert_eq!(witness.delta.filled.len(), 1);
-                    assert!(witness.delta.active.is_none());
-                },
-                i if i <= 2 => {
-                    assert_eq!(witness.delta.filled.len(), 1);
-                    assert!(witness.delta.active.is_some());
-                },
-                i if i == 3 => {
-                    assert_eq!(witness.delta.filled.len(), 2);
-                    assert!(witness.delta.active.is_none());
-                },
-                i if i < 7 => {
-                    assert_eq!(witness.delta.filled.len(), 2);
-                    assert!(witness.delta.active.is_some());
-                },
-                a @ _ => {
-                    assert_eq!(a, 7);
-                    assert_eq!(witness.delta.filled.len(), 3);
-                    assert!(witness.delta.active.is_none());
-                }
-            }
-
-            assert_eq!(tree.root(), witness.root());
         }
     }
 }
