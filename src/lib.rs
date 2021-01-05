@@ -25,10 +25,219 @@
 //! roll back to any previous checkpoint.
 
 pub trait TreeHasher {
-    type Digest: Clone + PartialEq;
+    type Digest: Clone + PartialEq + std::fmt::Debug;
 
     fn empty_leaf() -> Self::Digest;
     fn combine(a: &Self::Digest, b: &Self::Digest) -> Self::Digest;
+}
+
+#[derive(Clone)]
+pub struct EfficientTree<H: TreeHasher> {
+    something: H::Digest
+}
+
+impl<H: TreeHasher> EfficientTree<H> {
+    pub fn new(depth: usize) -> Self {
+        unimplemented!()
+    }
+
+    pub fn append(&mut self, value: &H::Digest) -> bool {
+        unimplemented!()
+    }
+
+    /// Obtains the current root of this Merkle tree.
+    pub fn root(&self) -> H::Digest {
+        unimplemented!()
+    }
+
+    /// Marks the current tree state leaf as a value that we're interested in
+    /// witnessing. Returns true if successful and false if the tree is empty.
+    pub fn witness(&mut self) -> bool {
+        unimplemented!()
+    }
+
+    /// Obtains an authentication path to the value specified in the tree.
+    /// Returns `None` if there is no available authentication path to the
+    /// specified value.
+    pub fn authentication_path(&self, value: &H::Digest) -> Option<(usize, Vec<H::Digest>)> {
+        unimplemented!()
+    }
+
+    /// Marks the specified tree state value as a value we're no longer
+    /// interested in maintaining a witness for. Returns true if successful and
+    /// false if the value is not a known witness.
+    pub fn remove_witness(&mut self, value: &H::Digest) -> bool {
+        unimplemented!()
+    }
+
+    /// Marks the current tree state as a checkpoint if it is not already a
+    /// checkpoint.
+    pub fn checkpoint(&mut self) {
+        unimplemented!()
+    }
+
+    /// Rewinds the tree state to the previous checkpoint. This function will
+    /// fail and return false if there is no previous checkpoint or in the event
+    /// witness data would be destroyed in the process.
+    pub fn rewind(&mut self) -> bool {
+        unimplemented!()
+    }
+
+    /// Removes the oldest checkpoint. Returns true if successful and false if
+    /// there are no checkpoints.
+    pub fn pop_checkpoint(&mut self) -> bool {
+        unimplemented!()
+    }
+
+    /// Start a recording of append operations performed on a tree.
+    pub fn recording(&self) -> EfficientRecording<H> {
+        unimplemented!()
+    }
+
+    /// Plays a recording of append operations back. Returns true if successful
+    /// and false if the recording is incompatible with the current tree state.
+    pub fn play(&mut self, recording: &EfficientRecording<H>) -> bool {
+        unimplemented!()
+    }
+}
+
+#[derive(Clone)]
+pub struct EfficientRecording<H: TreeHasher> {
+    something: H::Digest
+}
+
+impl<H: TreeHasher> EfficientRecording<H> {
+    pub fn append(&mut self, value: &H::Digest) -> bool {
+        unimplemented!()
+    }
+
+    pub fn play(&mut self, recording: &Self) -> bool {
+        unimplemented!()
+    }
+}
+
+#[derive(Clone)]
+pub struct CombinedTree<H: TreeHasher> {
+    inefficient: Tree<H>,
+    efficient: EfficientTree<H>
+}
+
+impl<H: TreeHasher> CombinedTree<H> {
+    pub fn new(depth: usize) -> Self {
+        CombinedTree {
+            inefficient: Tree::new(depth),
+            efficient: EfficientTree::new(depth),
+        }
+    }
+
+    pub fn append(&mut self, value: &H::Digest) -> bool {
+        let a = self.inefficient.append(value);
+        let b = self.efficient.append(value);
+        assert_eq!(a, b);
+        a
+    }
+
+    /// Obtains the current root of this Merkle tree.
+    pub fn root(&self) -> H::Digest {
+        let a = self.inefficient.root();
+        let b = self.efficient.root();
+        assert_eq!(a, b);
+        a
+    }
+
+    /// Marks the current tree state leaf as a value that we're interested in
+    /// witnessing. Returns true if successful and false if the tree is empty.
+    pub fn witness(&mut self) -> bool {
+        let a = self.inefficient.witness();
+        let b = self.efficient.witness();
+        assert_eq!(a, b);
+        a
+    }
+
+    /// Obtains an authentication path to the value specified in the tree.
+    /// Returns `None` if there is no available authentication path to the
+    /// specified value.
+    pub fn authentication_path(&self, value: &H::Digest) -> Option<(usize, Vec<H::Digest>)> {
+        let a = self.inefficient.authentication_path(value);
+        let b = self.efficient.authentication_path(value);
+        assert_eq!(a, b);
+        a
+    }
+
+    /// Marks the specified tree state value as a value we're no longer
+    /// interested in maintaining a witness for. Returns true if successful and
+    /// false if the value is not a known witness.
+    pub fn remove_witness(&mut self, value: &H::Digest) -> bool {
+        let a = self.inefficient.remove_witness(value);
+        let b = self.efficient.remove_witness(value);
+        assert_eq!(a, b);
+        a
+    }
+
+    /// Marks the current tree state as a checkpoint if it is not already a
+    /// checkpoint.
+    pub fn checkpoint(&mut self) {
+        self.inefficient.checkpoint();
+        self.efficient.checkpoint();
+    }
+
+    /// Rewinds the tree state to the previous checkpoint. This function will
+    /// fail and return false if there is no previous checkpoint or in the event
+    /// witness data would be destroyed in the process.
+    pub fn rewind(&mut self) -> bool {
+        let a = self.inefficient.rewind();
+        let b = self.efficient.rewind();
+        assert_eq!(a, b);
+        a
+    }
+
+    /// Removes the oldest checkpoint. Returns true if successful and false if
+    /// there are no checkpoints.
+    pub fn pop_checkpoint(&mut self) -> bool {
+        let a = self.inefficient.pop_checkpoint();
+        let b = self.efficient.pop_checkpoint();
+        assert_eq!(a, b);
+        a
+    }
+
+    /// Start a recording of append operations performed on a tree.
+    pub fn recording(&self) -> CombinedRecording<H> {
+        CombinedRecording {
+            inefficient: self.inefficient.recording(),
+            efficient: self.efficient.recording()
+        }
+    }
+
+    /// Plays a recording of append operations back. Returns true if successful
+    /// and false if the recording is incompatible with the current tree state.
+    pub fn play(&mut self, recording: &CombinedRecording<H>) -> bool {
+        let a = self.inefficient.play(&recording.inefficient);
+        let b = self.efficient.play(&recording.efficient);
+        assert_eq!(a, b);
+        a
+    }
+}
+
+#[derive(Clone)]
+pub struct CombinedRecording<H: TreeHasher> {
+    inefficient: Recording<H>,
+    efficient: EfficientRecording<H>,
+}
+
+impl<H: TreeHasher> CombinedRecording<H> {
+    pub fn append(&mut self, value: &H::Digest) -> bool {
+        let a = self.inefficient.append(value);
+        let b = self.efficient.append(value);
+        assert_eq!(a, b);
+        a
+    }
+
+    pub fn play(&mut self, recording: &Self) -> bool {
+        let a = self.inefficient.play(&recording.inefficient);
+        let b = self.efficient.play(&recording.efficient);
+        assert_eq!(a, b);
+        a
+    }
 }
 
 #[derive(Clone)]
@@ -190,6 +399,7 @@ impl<H: TreeHasher> Tree<H> {
     }
 }
 
+#[derive(Clone)]
 pub struct Recording<H: TreeHasher> {
     start_position: usize,
     current_position: usize,
@@ -421,7 +631,7 @@ mod tests {
         #[test]
         fn do_stuff(ops in proptest::collection::vec(arb_operation(), 1..100)) {
             const DEPTH: usize = 4;
-            let mut tree = Tree::<Hash>::new(DEPTH);
+            let mut tree = CombinedTree::<Hash>::new(DEPTH);
 
             let mut prevtrees = vec![];
 
