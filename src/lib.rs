@@ -31,6 +31,7 @@ pub trait TreeHasher {
     fn combine(a: &Self::Digest, b: &Self::Digest) -> Self::Digest;
 }
 
+#[derive(Clone)]
 pub struct Tree<H: TreeHasher> {
     leaves: Vec<H::Digest>,
     current_position: usize,
@@ -421,6 +422,9 @@ mod tests {
         fn do_stuff(ops in proptest::collection::vec(arb_operation(), 1..100)) {
             const DEPTH: usize = 4;
             let mut tree = Tree::<Hash>::new(DEPTH);
+
+            let mut prevtrees = vec![];
+
             let mut tree_size = 0;
             let mut tree_values = vec![];
             let mut tree_checkpoints = vec![];
@@ -430,10 +434,15 @@ mod tests {
                 assert_eq!(tree_size, tree_values.len());
                 match op {
                     Append(value) => {
+                        prevtrees.push((tree.clone(), tree.recording()));
                         if tree.append(&value) {
                             assert!(tree_size < (1 << DEPTH));
                             tree_size += 1;
                             tree_values.push(value);
+
+                            for &mut (_, ref mut recording) in &mut prevtrees {
+                                assert!(recording.append(&value));
+                            }
                         } else {
                             assert!(tree_size == (1 << DEPTH));
                         }
@@ -464,6 +473,8 @@ mod tests {
                         tree.checkpoint();
                     }
                     Rewind => {
+                        prevtrees.truncate(0);
+
                         if tree.rewind() {
                             assert!(tree_checkpoints.len() > 0);
                             let checkpoint_location = tree_checkpoints.pop().unwrap();
@@ -516,6 +527,11 @@ mod tests {
                         }
                     }
                 }
+            }
+
+            for (mut other_tree, other_recording) in prevtrees {
+                assert!(other_tree.play(&other_recording));
+                assert_eq!(tree.root(), other_tree.root());
             }
         }
     }
