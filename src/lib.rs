@@ -24,13 +24,14 @@
 //! checkpoints that we're no longer interested in. It should be possible to
 //! roll back to any previous checkpoint.
 
-pub mod sample;
 pub mod bridgetree;
+pub mod sample;
 
+use serde::{Deserialize, Serialize};
 use std::ops::Add;
 use std::ops::Sub;
 
-#[derive(Copy, Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(Copy, Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 #[repr(transparent)]
 pub struct Level(u32);
 
@@ -150,21 +151,21 @@ pub(crate) mod tests {
     use std::hash::Hasher;
     use std::hash::SipHasher;
 
-    use super::bridgetree::{EfficientRecording, EfficientTree};
+    use super::bridgetree::{BridgeRecording, BridgeTree};
     use super::sample::{lazy_root, CompleteRecording, CompleteTree};
     use super::{Hashable, Level, Recording, Tree};
 
     #[derive(Clone)]
     pub struct CombinedTree<H: Hashable + Hash + Eq> {
         inefficient: CompleteTree<H>,
-        bridgetree: EfficientTree<H>,
+        efficient: BridgeTree<H>,
     }
 
     impl<H: Hashable + Hash + Eq + Clone> CombinedTree<H> {
         pub fn new(depth: usize) -> Self {
             CombinedTree {
                 inefficient: CompleteTree::new(depth, 100),
-                bridgetree: EfficientTree::new(depth),
+                efficient: BridgeTree::new(depth, 100),
             }
         }
     }
@@ -174,7 +175,7 @@ pub(crate) mod tests {
 
         fn append(&mut self, value: &H) -> bool {
             let a = self.inefficient.append(value);
-            let b = self.bridgetree.append(value);
+            let b = self.efficient.append(value);
             assert_eq!(a, b);
             a
         }
@@ -182,7 +183,7 @@ pub(crate) mod tests {
         /// Obtains the current root of this Merkle tree.
         fn root(&self) -> H {
             let a = self.inefficient.root();
-            let b = self.bridgetree.root();
+            let b = self.efficient.root();
             assert_eq!(a, b);
             a
         }
@@ -191,7 +192,7 @@ pub(crate) mod tests {
         /// witnessing. Returns true if successful and false if the tree is empty.
         fn witness(&mut self) -> bool {
             let a = self.inefficient.witness();
-            let b = self.bridgetree.witness();
+            let b = self.efficient.witness();
             assert_eq!(a, b);
             a
         }
@@ -201,7 +202,7 @@ pub(crate) mod tests {
         /// specified value.
         fn authentication_path(&self, value: &H) -> Option<(usize, Vec<H>)> {
             let a = self.inefficient.authentication_path(value);
-            let b = self.bridgetree.authentication_path(value);
+            let b = self.efficient.authentication_path(value);
             assert_eq!(a, b);
             a
         }
@@ -211,7 +212,7 @@ pub(crate) mod tests {
         /// false if the value is not a known witness.
         fn remove_witness(&mut self, value: &H) -> bool {
             let a = self.inefficient.remove_witness(value);
-            let b = self.bridgetree.remove_witness(value);
+            let b = self.efficient.remove_witness(value);
             assert_eq!(a, b);
             a
         }
@@ -220,7 +221,7 @@ pub(crate) mod tests {
         /// checkpoint.
         fn checkpoint(&mut self) {
             self.inefficient.checkpoint();
-            self.bridgetree.checkpoint();
+            self.efficient.checkpoint();
         }
 
         /// Rewinds the tree state to the previous checkpoint. This function will
@@ -228,7 +229,7 @@ pub(crate) mod tests {
         /// witness data would be destroyed in the process.
         fn rewind(&mut self) -> bool {
             let a = self.inefficient.rewind();
-            let b = self.bridgetree.rewind();
+            let b = self.efficient.rewind();
             assert_eq!(a, b);
             a
         }
@@ -237,7 +238,7 @@ pub(crate) mod tests {
         fn recording(&self) -> CombinedRecording<H> {
             CombinedRecording {
                 inefficient: self.inefficient.recording(),
-                bridgetree: self.bridgetree.recording(),
+                efficient: self.efficient.recording(),
             }
         }
 
@@ -245,7 +246,7 @@ pub(crate) mod tests {
         /// and false if the recording is incompatible with the current tree state.
         fn play(&mut self, recording: &CombinedRecording<H>) -> bool {
             let a = self.inefficient.play(&recording.inefficient);
-            let b = self.bridgetree.play(&recording.bridgetree);
+            let b = self.efficient.play(&recording.efficient);
             assert_eq!(a, b);
             a
         }
@@ -254,20 +255,20 @@ pub(crate) mod tests {
     #[derive(Clone)]
     pub struct CombinedRecording<H: Hashable> {
         inefficient: CompleteRecording<H>,
-        bridgetree: EfficientRecording<H>,
+        efficient: BridgeRecording<H>,
     }
 
     impl<H: Hashable + Clone + PartialEq> Recording<H> for CombinedRecording<H> {
         fn append(&mut self, value: &H) -> bool {
             let a = self.inefficient.append(value);
-            let b = self.bridgetree.append(value);
+            let b = self.efficient.append(value);
             assert_eq!(a, b);
             a
         }
 
         fn play(&mut self, recording: &Self) -> bool {
             let a = self.inefficient.play(&recording.inefficient);
-            let b = self.bridgetree.play(&recording.bridgetree);
+            let b = self.efficient.play(&recording.efficient);
             assert_eq!(a, b);
             a
         }
