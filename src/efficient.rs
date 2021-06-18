@@ -1,25 +1,25 @@
-use crate::{TreeHasher, Recording, Tree};
+use crate::{Hashable, Recording, Tree};
 
 #[derive(Clone)]
-pub struct EfficientTree<H: TreeHasher> {
-    something: H::Digest
+pub struct EfficientTree<H: Hashable> {
+    something: H
 }
 
-impl<H: TreeHasher> EfficientTree<H> {
+impl<H: Hashable> EfficientTree<H> {
     pub fn new(depth: usize) -> Self {
         unimplemented!()
     }
 }
 
-impl<H: TreeHasher> Tree<H> for EfficientTree<H> {
+impl<H: Hashable> Tree<H> for EfficientTree<H> {
     type Recording = EfficientRecording<H>;
 
-    fn append(&mut self, value: &H::Digest) -> bool {
+    fn append(&mut self, value: &H) -> bool {
         unimplemented!()
     }
 
     /// Obtains the current root of this Merkle tree.
-    fn root(&self) -> H::Digest {
+    fn root(&self) -> H {
         unimplemented!()
     }
 
@@ -32,14 +32,14 @@ impl<H: TreeHasher> Tree<H> for EfficientTree<H> {
     /// Obtains an authentication path to the value specified in the tree.
     /// Returns `None` if there is no available authentication path to the
     /// specified value.
-    fn authentication_path(&self, value: &H::Digest) -> Option<(usize, Vec<H::Digest>)> {
+    fn authentication_path(&self, value: &H) -> Option<(usize, Vec<H>)> {
         unimplemented!()
     }
 
     /// Marks the specified tree state value as a value we're no longer
     /// interested in maintaining a witness for. Returns true if successful and
     /// false if the value is not a known witness.
-    fn remove_witness(&mut self, value: &H::Digest) -> bool {
+    fn remove_witness(&mut self, value: &H) -> bool {
         unimplemented!()
     }
 
@@ -56,12 +56,6 @@ impl<H: TreeHasher> Tree<H> for EfficientTree<H> {
         unimplemented!()
     }
 
-    /// Removes the oldest checkpoint. Returns true if successful and false if
-    /// there are no checkpoints.
-    fn pop_checkpoint(&mut self) -> bool {
-        unimplemented!()
-    }
-
     /// Start a recording of append operations performed on a tree.
     fn recording(&self) -> EfficientRecording<H> {
         unimplemented!()
@@ -75,12 +69,12 @@ impl<H: TreeHasher> Tree<H> for EfficientTree<H> {
 }
 
 #[derive(Clone)]
-pub struct EfficientRecording<H: TreeHasher> {
-    something: H::Digest
+pub struct EfficientRecording<H: Hashable> {
+    something: H
 }
 
-impl<H: TreeHasher> Recording<H> for EfficientRecording<H> {
-    fn append(&mut self, value: &H::Digest) -> bool {
+impl<H: Hashable> Recording<H> for EfficientRecording<H> {
+    fn append(&mut self, value: &H) -> bool {
         unimplemented!()
     }
 
