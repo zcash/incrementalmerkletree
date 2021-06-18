@@ -90,15 +90,15 @@ pub struct Parent<A> {
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
-pub struct Frontier<H> {
+pub struct NonEmptyFrontier<H> {
     position: Position,
     leaf: Leaf<H>,
     parents: Vec<Parent<H>>,
 }
 
-impl<H: Hashable + Clone> Frontier<H> {
+impl<H: Hashable + Clone> NonEmptyFrontier<H> {
     pub fn new(value: H) -> Self {
-        Frontier {
+        NonEmptyFrontier {
             position: Position::zero(),
             leaf: Leaf::Left(value),
             parents: vec![],
@@ -279,6 +279,57 @@ impl<H: Hashable + Clone> Frontier<H> {
     }
 }
 
+/// A possibly-empty Merkle frontier. Used when the
+/// full functionality of a Merkle bridge is not necessary.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Frontier<H> {
+    max_level: Level,
+    frontier: Option<NonEmptyFrontier<H>>,
+}
+
+impl<H> Frontier<H> {
+    pub fn new(max_depth: usize) -> Self {
+        Frontier {
+            max_level: Level(max_depth as u32 - 1),
+            frontier: None,
+        }
+    }
+}
+
+impl<H: Hashable + Clone> crate::Frontier<H> for Frontier<H> {
+    /// Appends a new value to the tree at the next available slot. Returns true
+    /// if successful and false if the frontier would exceed the maximum
+    /// allowed depth.
+    fn append(&mut self, value: &H) -> bool {
+        if let Some(frontier) = self.frontier.as_mut() {
+            if frontier.position().is_complete(self.max_level + 1) {
+                false
+            } else {
+                frontier.append(value.clone());
+                true
+            }
+        } else {
+            self.frontier = Some(NonEmptyFrontier::new(value.clone()));
+            true
+        }
+    }
+
+    /// Obtains the current root of this Merkle frontier.
+    fn root(&self) -> H {
+        self.frontier
+            .as_ref()
+            .map_or(H::empty_root(self.max_level + 1), |frontier| {
+                // fold from the current height, combining with empty branches,
+                // up to the maximum height of the tree
+                (frontier.max_level() + 1)
+                    .iter_to(self.max_level + 1)
+                    .fold(frontier.root(), |d, lvl| {
+                        H::combine(lvl, &d, &H::empty_root(lvl))
+                    })
+            })
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AuthFragment<A> {
     position: Position,
@@ -337,7 +388,7 @@ impl<A: Clone> AuthFragment<A> {
 }
 
 impl<H: Hashable + Clone + PartialEq> AuthFragment<H> {
-    pub fn augment(&mut self, frontier: &Frontier<H>) {
+    pub fn augment(&mut self, frontier: &NonEmptyFrontier<H>) {
         if let Some(level) = self.next_required_level() {
             if let Some(digest) = frontier.witness(level) {
                 self.values.push(digest);
@@ -348,12 +399,12 @@ impl<H: Hashable + Clone + PartialEq> AuthFragment<H> {
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
-pub struct MerkleBridge<H: Hashable> {
+pub struct MerkleBridge<H> {
     prior_position: Option<Position>,
     /// fragments of authorization path data for prior bridges,
     /// keyed by bridge index
     auth_fragments: HashMap<usize, AuthFragment<H>>,
-    frontier: Frontier<H>,
+    frontier: NonEmptyFrontier<H>,
 }
 
 impl<H: Hashable + Clone + PartialEq> MerkleBridge<H> {
@@ -361,7 +412,7 @@ impl<H: Hashable + Clone + PartialEq> MerkleBridge<H> {
         MerkleBridge {
             prior_position: None,
             auth_fragments: HashMap::new(),
-            frontier: Frontier::new(value),
+            frontier: NonEmptyFrontier::new(value),
         }
     }
 
@@ -445,7 +496,7 @@ impl<H: Hashable + Clone + PartialEq> MerkleBridge<H> {
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
-pub enum Checkpoint<H: Hashable> {
+pub enum Checkpoint<H> {
     /// checpoint of the empty bridge
     Empty,
     ///
@@ -453,7 +504,7 @@ pub enum Checkpoint<H: Hashable> {
 }
 
 #[derive(Clone, Serialize, Deserialize)]
-pub struct BridgeTree<H: Hashable + Hash + Eq> {
+pub struct BridgeTree<H: Hash + Eq> {
     /// Version value for the serialized form
     ser_version: u8,
     /// The depth of the Merkle tree
@@ -510,12 +561,7 @@ impl<H: Hashable + Hash + Eq + Clone> BridgeTree<H> {
     }
 }
 
-impl<H: Hashable + Hash + Eq + Clone> Tree<H> for BridgeTree<H>
-where
-    H: Eq + Hash,
-{
-    type Recording = BridgeRecording<H>;
-
+impl<H: Hashable + Hash + Eq + Clone> crate::Frontier<H> for BridgeTree<H> {
     fn append(&mut self, value: &H) -> bool {
         if let Some(bridge) = self.bridges.last_mut() {
             if bridge.frontier.position().is_complete(self.max_level + 1) {
@@ -544,6 +590,10 @@ where
                     })
             })
     }
+}
+
+impl<H: Hashable + Hash + Eq + Clone> Tree<H> for BridgeTree<H> {
+    type Recording = BridgeRecording<H>;
 
     /// Marks the current tree state leaf as a value that we're interested in
     /// witnessing. Returns true if successful and false if the tree is empty.
@@ -754,7 +804,7 @@ where
 }
 
 #[derive(Clone)]
-pub struct BridgeRecording<H: Hashable> {
+pub struct BridgeRecording<H> {
     max_level: Level,
     bridge: Option<MerkleBridge<H>>,
 }
@@ -794,6 +844,7 @@ mod tests {
     use super::*;
     use crate::tests::Operation;
     use crate::tests::Operation::*;
+    use crate::{Frontier, Tree};
 
     #[test]
     fn position_levels() {
@@ -1139,7 +1190,7 @@ mod tests {
 
     #[test]
     fn frontier_positions() {
-        let mut frontier = Frontier::<String>::new('a'.to_string());
+        let mut frontier = NonEmptyFrontier::<String>::new('a'.to_string());
         println!(
             "{:?}; {:?}",
             frontier,

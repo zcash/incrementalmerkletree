@@ -1,5 +1,5 @@
 /// Sample implementation of the Tree interface.
-use super::{Hashable, Level, Recording, Tree};
+use super::{Frontier, Hashable, Level, Recording, Tree};
 
 #[derive(Clone)]
 pub struct CompleteTree<H: Hashable> {
@@ -46,9 +46,7 @@ impl<H: Hashable + PartialEq + Clone> CompleteTree<H> {
     }
 }
 
-impl<H: Hashable + PartialEq + Clone> Tree<H> for CompleteTree<H> {
-    type Recording = CompleteRecording<H>;
-
+impl<H: Hashable + Clone> Frontier<H> for CompleteTree<H> {
     /// Appends a new value to the tree at the next available slot. Returns true
     /// if successful and false if the tree is full.
     fn append(&mut self, value: &H) -> bool {
@@ -65,6 +63,10 @@ impl<H: Hashable + PartialEq + Clone> Tree<H> for CompleteTree<H> {
     fn root(&self) -> H {
         lazy_root(self.leaves.clone())
     }
+}
+
+impl<H: Hashable + PartialEq + Clone> Tree<H> for CompleteTree<H> {
+    type Recording = CompleteRecording<H>;
 
     /// Marks the current tree state leaf as a value that we're interested in
     /// witnessing. Returns true if successful and false if the tree is empty.
@@ -237,7 +239,7 @@ pub(crate) fn lazy_root<H: Hashable + Clone>(mut leaves: Vec<H>) -> H {
 #[cfg(test)]
 mod tests {
     use crate::tests::{compute_root_from_auth_path, SipHashable};
-    use crate::{Hashable, Level, Tree};
+    use crate::{Frontier, Hashable, Level, Tree};
 
     use super::CompleteTree;
 

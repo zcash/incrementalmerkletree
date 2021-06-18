@@ -75,6 +75,8 @@ impl From<Level> for usize {
     }
 }
 
+/// A trait describing the operations that make a value  suitable for inclusion in
+/// an incremental merkle tree.
 pub trait Hashable: Sized {
     fn empty_leaf() -> Self;
 
@@ -87,16 +89,24 @@ pub trait Hashable: Sized {
     }
 }
 
-pub trait Tree<H: Hashable> {
-    /// The type of recordings that can be made of the operations of this tree.
-    type Recording: Recording<H>;
-
-    /// Appends a new value to the tree at the next available slot. Returns true
-    /// if successful and false if the tree is full.
+/// A possibly-empty incremental Merkle frontier.
+pub trait Frontier<H> {
+    /// Appends a new value to the frontier at the next available slot.
+    /// Returns true if successful and false if the frontier would exceed
+    /// the maximum allowed depth.
     fn append(&mut self, value: &H) -> bool;
 
-    /// Obtains the current root of this Merkle tree.
+    /// Obtains the current root of this Merkle frontier by hashing
+    /// against empty nodes up to the maximum height of the pruned
+    /// tree that the frontier represents.
     fn root(&self) -> H;
+}
+
+/// A Merkle tree that supports incremental appends, witnessing of
+/// leaf nodes, checkpoints and rollbacks.
+pub trait Tree<H>: Frontier<H> {
+    /// The type of recordings that can be made of the operations of this tree.
+    type Recording: Recording<H>;
 
     /// Marks the current tree state leaf as a value that we're interested in
     /// witnessing. Returns true if successful and false if the tree is empty.
@@ -112,7 +122,7 @@ pub trait Tree<H: Hashable> {
     /// false if the value is not a known witness.
     fn remove_witness(&mut self, value: &H) -> bool;
 
-    // Future work: add fn mark_witness_deferred(&mut self, value: &H) -> bool;
+    // Future work: add fn remove_witness_deferred(&mut self, value: &H) -> bool;
     // This will be used to mark witnesses as spent, so that once the point
     // at which their being spent is is max_checkpoints blocks is the past,
     // the witness can be discarded.
@@ -134,7 +144,7 @@ pub trait Tree<H: Hashable> {
     fn play(&mut self, recording: &Self::Recording) -> bool;
 }
 
-pub trait Recording<H: Hashable> {
+pub trait Recording<H> {
     /// Appends a new value to the tree at the next available slot. Returns true
     /// if successful and false if the tree is full.
     fn append(&mut self, value: &H) -> bool;
@@ -153,7 +163,7 @@ pub(crate) mod tests {
 
     use super::bridgetree::{BridgeRecording, BridgeTree};
     use super::sample::{lazy_root, CompleteRecording, CompleteTree};
-    use super::{Hashable, Level, Recording, Tree};
+    use super::{Frontier, Hashable, Level, Recording, Tree};
 
     #[derive(Clone)]
     pub struct CombinedTree<H: Hashable + Hash + Eq> {
@@ -170,9 +180,7 @@ pub(crate) mod tests {
         }
     }
 
-    impl<H: Hashable + Hash + Eq + Clone + std::fmt::Debug> Tree<H> for CombinedTree<H> {
-        type Recording = CombinedRecording<H>;
-
+    impl<H: Hashable + Hash + Eq + Clone + std::fmt::Debug> Frontier<H> for CombinedTree<H> {
         fn append(&mut self, value: &H) -> bool {
             let a = self.inefficient.append(value);
             let b = self.efficient.append(value);
@@ -187,6 +195,10 @@ pub(crate) mod tests {
             assert_eq!(a, b);
             a
         }
+    }
+
+    impl<H: Hashable + Hash + Eq + Clone + std::fmt::Debug> Tree<H> for CombinedTree<H> {
+        type Recording = CombinedRecording<H>;
 
         /// Marks the current tree state leaf as a value that we're interested in
         /// witnessing. Returns true if successful and false if the tree is empty.
