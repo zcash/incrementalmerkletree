@@ -171,11 +171,6 @@ impl<H: Hashable + Clone> Frontier<H> {
                 Leaf::Left(_) => None,
                 Leaf::Right(_, a) => Some(a.clone()),
             }
-        } else if sibling_level == Level::one() {
-            match &self.leaf {
-                Leaf::Left(_) => None,
-                Leaf::Right(a, b) => Some(H::combine(Level::zero(), &a, &b)),
-            }
         } else if self.position.is_complete(sibling_level) {
             // the "incomplete" subtree root is actually complete
             // if the tree is full to this level
