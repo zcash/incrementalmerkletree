@@ -1,5 +1,5 @@
 /// Sample implementation of the Tree interface.
-use super::{Frontier, Hashable, Level, Recording, Tree};
+use super::{Altitude, Frontier, Hashable, Recording, Tree};
 
 #[derive(Clone)]
 pub struct CompleteTree<H: Hashable> {
@@ -214,7 +214,7 @@ impl<H: Hashable + Clone> Recording<H> for CompleteRecording<H> {
 
 pub(crate) fn lazy_root<H: Hashable + Clone>(mut leaves: Vec<H>) -> H {
     //leaves are always at level zero, so we start there.
-    let mut level = Level::zero();
+    let mut level = Altitude::zero();
     while leaves.len() != 1 {
         leaves = leaves
             .iter()
@@ -239,7 +239,7 @@ pub(crate) fn lazy_root<H: Hashable + Clone>(mut leaves: Vec<H>) -> H {
 #[cfg(test)]
 mod tests {
     use crate::tests::{compute_root_from_auth_path, SipHashable};
-    use crate::{Frontier, Hashable, Level, Tree};
+    use crate::{Altitude, Frontier, Hashable, Tree};
 
     use super::CompleteTree;
 
@@ -267,16 +267,16 @@ mod tests {
         assert!(!tree.append(&SipHashable(0)));
 
         let expected = SipHashable::combine(
-            <Level>::from(2),
+            <Altitude>::from(2),
             &SipHashable::combine(
-                Level::one(),
-                &SipHashable::combine(Level::zero(), &SipHashable(0), &SipHashable(1)),
-                &SipHashable::combine(Level::zero(), &SipHashable(2), &SipHashable(3)),
+                Altitude::one(),
+                &SipHashable::combine(Altitude::zero(), &SipHashable(0), &SipHashable(1)),
+                &SipHashable::combine(Altitude::zero(), &SipHashable(2), &SipHashable(3)),
             ),
             &SipHashable::combine(
-                Level::one(),
-                &SipHashable::combine(Level::zero(), &SipHashable(4), &SipHashable(5)),
-                &SipHashable::combine(Level::zero(), &SipHashable(6), &SipHashable(7)),
+                Altitude::one(),
+                &SipHashable::combine(Altitude::zero(), &SipHashable(4), &SipHashable(5)),
+                &SipHashable::combine(Altitude::zero(), &SipHashable(6), &SipHashable(7)),
             ),
         );
 
@@ -296,16 +296,16 @@ mod tests {
         assert!(!tree.append(&SipHashable(0)));
 
         let expected = SipHashable::combine(
-            <Level>::from(2),
+            <Altitude>::from(2),
             &SipHashable::combine(
-                Level::one(),
-                &SipHashable::combine(Level::zero(), &SipHashable(0), &SipHashable(1)),
-                &SipHashable::combine(Level::zero(), &SipHashable(2), &SipHashable(3)),
+                Altitude::one(),
+                &SipHashable::combine(Altitude::zero(), &SipHashable(0), &SipHashable(1)),
+                &SipHashable::combine(Altitude::zero(), &SipHashable(2), &SipHashable(3)),
             ),
             &SipHashable::combine(
-                Level::one(),
-                &SipHashable::combine(Level::zero(), &SipHashable(4), &SipHashable(5)),
-                &SipHashable::combine(Level::zero(), &SipHashable(6), &SipHashable(7)),
+                Altitude::one(),
+                &SipHashable::combine(Altitude::zero(), &SipHashable(4), &SipHashable(5)),
+                &SipHashable::combine(Altitude::zero(), &SipHashable(6), &SipHashable(7)),
             ),
         );
 

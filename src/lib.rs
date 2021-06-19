@@ -33,44 +33,44 @@ use std::ops::Sub;
 
 #[derive(Copy, Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 #[repr(transparent)]
-pub struct Level(u32);
+pub struct Altitude(u32);
 
-impl Level {
+impl Altitude {
     pub fn zero() -> Self {
-        Level(0)
+        Altitude(0)
     }
 
     pub fn one() -> Self {
-        Level(1)
+        Altitude(1)
     }
 
-    pub fn iter_to(self, other: Level) -> impl Iterator<Item = Level> {
-        (self.0..other.0).into_iter().map(Level)
+    pub fn iter_to(self, other: Altitude) -> impl Iterator<Item = Altitude> {
+        (self.0..other.0).into_iter().map(Altitude)
     }
 }
 
-impl Add<u32> for Level {
-    type Output = Level;
+impl Add<u32> for Altitude {
+    type Output = Altitude;
     fn add(self, value: u32) -> Self {
-        Level(self.0 + value)
+        Altitude(self.0 + value)
     }
 }
 
-impl Sub<u32> for Level {
-    type Output = Level;
+impl Sub<u32> for Altitude {
+    type Output = Altitude;
     fn sub(self, value: u32) -> Self {
-        Level(self.0 - value)
+        Altitude(self.0 - value)
     }
 }
 
-impl From<u32> for Level {
+impl From<u32> for Altitude {
     fn from(value: u32) -> Self {
-        Level(value)
+        Altitude(value)
     }
 }
 
-impl From<Level> for usize {
-    fn from(level: Level) -> usize {
+impl From<Altitude> for usize {
+    fn from(level: Altitude) -> usize {
         level.0 as usize
     }
 }
@@ -80,10 +80,10 @@ impl From<Level> for usize {
 pub trait Hashable: Sized {
     fn empty_leaf() -> Self;
 
-    fn combine(level: Level, a: &Self, b: &Self) -> Self;
+    fn combine(level: Altitude, a: &Self, b: &Self) -> Self;
 
-    fn empty_root(level: Level) -> Self {
-        Level::zero()
+    fn empty_root(level: Altitude) -> Self {
+        Altitude::zero()
             .iter_to(level)
             .fold(Self::empty_leaf(), |v, lvl| Self::combine(lvl, &v, &v))
     }
@@ -163,7 +163,7 @@ pub(crate) mod tests {
 
     use super::bridgetree::{BridgeRecording, BridgeTree};
     use super::sample::{lazy_root, CompleteRecording, CompleteTree};
-    use super::{Frontier, Hashable, Level, Recording, Tree};
+    use super::{Altitude, Frontier, Hashable, Recording, Tree};
 
     #[derive(Clone)]
     pub struct CombinedTree<H: Hashable + Hash + Eq> {
@@ -294,7 +294,7 @@ pub(crate) mod tests {
             SipHashable(0)
         }
 
-        fn combine(_level: Level, a: &Self, b: &Self) -> Self {
+        fn combine(_level: Altitude, a: &Self, b: &Self) -> Self {
             let mut hasher = SipHasher::new();
             hasher.write_u64(a.0);
             hasher.write_u64(b.0);
@@ -307,7 +307,7 @@ pub(crate) mod tests {
             "_".to_string()
         }
 
-        fn combine(_: Level, a: &Self, b: &Self) -> Self {
+        fn combine(_: Altitude, a: &Self, b: &Self) -> Self {
             a.to_string() + b
         }
     }
@@ -369,7 +369,7 @@ pub(crate) mod tests {
         path: &[H],
     ) -> H {
         let mut cur = value;
-        let mut lvl = Level::zero();
+        let mut lvl = Altitude::zero();
         for (i, v) in path
             .iter()
             .enumerate()
@@ -388,16 +388,16 @@ pub(crate) mod tests {
     #[test]
     fn test_compute_root_from_auth_path() {
         let expected = SipHashable::combine(
-            <Level>::from(2),
+            <Altitude>::from(2),
             &SipHashable::combine(
-                Level::one(),
-                &SipHashable::combine(Level::zero(), &SipHashable(0), &SipHashable(1)),
-                &SipHashable::combine(Level::zero(), &SipHashable(2), &SipHashable(3)),
+                Altitude::one(),
+                &SipHashable::combine(Altitude::zero(), &SipHashable(0), &SipHashable(1)),
+                &SipHashable::combine(Altitude::zero(), &SipHashable(2), &SipHashable(3)),
             ),
             &SipHashable::combine(
-                Level::one(),
-                &SipHashable::combine(Level::zero(), &SipHashable(4), &SipHashable(5)),
-                &SipHashable::combine(Level::zero(), &SipHashable(6), &SipHashable(7)),
+                Altitude::one(),
+                &SipHashable::combine(Altitude::zero(), &SipHashable(4), &SipHashable(5)),
+                &SipHashable::combine(Altitude::zero(), &SipHashable(6), &SipHashable(7)),
             ),
         );
 
@@ -407,11 +407,11 @@ pub(crate) mod tests {
                 0,
                 &[
                     SipHashable(1),
-                    SipHashable::combine(Level::zero(), &SipHashable(2), &SipHashable(3)),
+                    SipHashable::combine(Altitude::zero(), &SipHashable(2), &SipHashable(3)),
                     SipHashable::combine(
-                        Level::one(),
-                        &SipHashable::combine(Level::zero(), &SipHashable(4), &SipHashable(5)),
-                        &SipHashable::combine(Level::zero(), &SipHashable(6), &SipHashable(7))
+                        Altitude::one(),
+                        &SipHashable::combine(Altitude::zero(), &SipHashable(4), &SipHashable(5)),
+                        &SipHashable::combine(Altitude::zero(), &SipHashable(6), &SipHashable(7))
                     )
                 ]
             ),
@@ -424,11 +424,11 @@ pub(crate) mod tests {
                 4,
                 &[
                     SipHashable(5),
-                    SipHashable::combine(Level::zero(), &SipHashable(6), &SipHashable(7)),
+                    SipHashable::combine(Altitude::zero(), &SipHashable(6), &SipHashable(7)),
                     SipHashable::combine(
-                        Level::one(),
-                        &SipHashable::combine(Level::zero(), &SipHashable(0), &SipHashable(1)),
-                        &SipHashable::combine(Level::zero(), &SipHashable(2), &SipHashable(3))
+                        Altitude::one(),
+                        &SipHashable::combine(Altitude::zero(), &SipHashable(0), &SipHashable(1)),
+                        &SipHashable::combine(Altitude::zero(), &SipHashable(2), &SipHashable(3))
                     )
                 ]
             ),

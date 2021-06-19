@@ -4,7 +4,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::hash::Hash;
 
-use super::{Hashable, Level, Recording, Tree};
+use super::{Altitude, Hashable, Recording, Tree};
 
 #[derive(Copy, Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 #[repr(transparent)]
@@ -19,18 +19,18 @@ impl Position {
         self.0 += 1
     }
 
-    fn max_level(&self) -> Level {
-        Level(if self.0 == 0 {
+    fn max_level(&self) -> Altitude {
+        Altitude(if self.0 == 0 {
             0
         } else {
             63 - self.0.leading_zeros()
         })
     }
 
-    pub fn parent_levels(&self) -> impl Iterator<Item = Level> + '_ {
+    pub fn parent_levels(&self) -> impl Iterator<Item = Altitude> + '_ {
         (0..=self.max_level().0).into_iter().filter_map(move |i| {
             if i != 0 && self.0 & (1 << i) != 0 {
-                Some(Level(i))
+                Some(Altitude(i))
             } else {
                 None
             }
@@ -41,29 +41,29 @@ impl Position {
         self.levels_required().count()
     }
 
-    pub fn levels_required(&self) -> impl Iterator<Item = Level> + '_ {
+    pub fn levels_required(&self) -> impl Iterator<Item = Altitude> + '_ {
         (0..=(self.max_level() + 1).0)
             .into_iter()
             .filter_map(move |i| {
                 if self.0 == 0 || self.0 & (1 << i) == 0 {
-                    Some(Level(i))
+                    Some(Altitude(i))
                 } else {
                     None
                 }
             })
     }
 
-    pub fn all_levels_required(&self) -> impl Iterator<Item = Level> + '_ {
+    pub fn all_levels_required(&self) -> impl Iterator<Item = Altitude> + '_ {
         (0..64).into_iter().filter_map(move |i| {
             if self.0 == 0 || self.0 & (1 << i) == 0 {
-                Some(Level(i))
+                Some(Altitude(i))
             } else {
                 None
             }
         })
     }
 
-    pub fn is_complete(&self, to_level: Level) -> bool {
+    pub fn is_complete(&self, to_level: Altitude) -> bool {
         for i in 0..(to_level.0) {
             if self.0 & (1 << i) == 0 {
                 return false;
@@ -72,7 +72,7 @@ impl Position {
         true
     }
 
-    pub fn has_observed(&self, level: Level, since: Position) -> bool {
+    pub fn has_observed(&self, level: Altitude, since: Position) -> bool {
         let level_delta = 2usize.pow(level.0);
         self.0 - since.0 > level_delta
     }
@@ -120,9 +120,9 @@ impl<H: Hashable + Clone> NonEmptyFrontier<H> {
             Leaf::Right(a, b) => {
                 carry = Some((
                     Parent {
-                        value: H::combine(Level::zero(), &a, &b),
+                        value: H::combine(Altitude::zero(), &a, &b),
                     },
-                    Level::one(),
+                    Altitude::one(),
                 ));
                 self.leaf = Leaf::Left(value);
             }
@@ -171,8 +171,8 @@ impl<H: Hashable + Clone> NonEmptyFrontier<H> {
 
     /// If the tree is full to the specified level, return the data
     /// required to witness a sibling at that level.
-    pub fn witness(&self, sibling_level: Level) -> Option<H> {
-        if sibling_level == Level::zero() {
+    pub fn witness(&self, sibling_level: Altitude) -> Option<H> {
+        if sibling_level == Altitude::zero() {
             match &self.leaf {
                 Leaf::Left(_) => None,
                 Leaf::Right(_, a) => Some(a.clone()),
@@ -193,13 +193,13 @@ impl<H: Hashable + Clone> NonEmptyFrontier<H> {
 
     /// If the tree is not full, generate the root of the incomplete subtree
     /// by hashing with empty branches
-    pub fn witness_incomplete(&self, level: Level) -> Option<H> {
+    pub fn witness_incomplete(&self, level: Altitude) -> Option<H> {
         if self.position.is_complete(level) {
             // if the tree is complete to this level, its hash should
             // have already been included in an auth fragment.
             None
         } else {
-            Some(if level == Level::zero() {
+            Some(if level == Altitude::zero() {
                 H::empty_leaf()
             } else {
                 Self::inner_root(
@@ -217,14 +217,14 @@ impl<H: Hashable + Clone> NonEmptyFrontier<H> {
         position: Position,
         leaf: &Leaf<H>,
         parents: &[Parent<H>],
-        result_lvl: Option<Level>,
+        result_lvl: Option<Altitude>,
     ) -> H {
         let mut digest = match leaf {
-            Leaf::Left(a) => H::combine(Level::zero(), a, &H::empty_leaf()),
-            Leaf::Right(a, b) => H::combine(Level::zero(), a, b),
+            Leaf::Left(a) => H::combine(Altitude::zero(), a, &H::empty_leaf()),
+            Leaf::Right(a, b) => H::combine(Altitude::zero(), a, b),
         };
 
-        let mut complete_lvl = Level::one();
+        let mut complete_lvl = Altitude::one();
         for (parent, parent_lvl) in parents.iter().zip(position.parent_levels()) {
             // stop once we've reached the max level
             if result_lvl
@@ -264,8 +264,8 @@ impl<H: Hashable + Clone> NonEmptyFrontier<H> {
         }
     }
 
-    pub fn value_at(&self, lvl: Level) -> Option<H> {
-        if lvl == Level::zero() {
+    pub fn value_at(&self, lvl: Altitude) -> Option<H> {
+        if lvl == Altitude::zero() {
             Some(self.leaf_value())
         } else {
             self.parents
@@ -276,7 +276,7 @@ impl<H: Hashable + Clone> NonEmptyFrontier<H> {
         }
     }
 
-    pub fn max_level(&self) -> Level {
+    pub fn max_level(&self) -> Altitude {
         self.position.max_level()
     }
 
@@ -289,14 +289,14 @@ impl<H: Hashable + Clone> NonEmptyFrontier<H> {
 /// full functionality of a Merkle bridge is not necessary.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Frontier<H> {
-    max_level: Level,
+    max_level: Altitude,
     frontier: Option<NonEmptyFrontier<H>>,
 }
 
 impl<H> Frontier<H> {
     pub fn new(max_depth: usize) -> Self {
         Frontier {
-            max_level: Level(max_depth as u32 - 1),
+            max_level: Altitude(max_depth as u32 - 1),
             frontier: None,
         }
     }
@@ -371,7 +371,7 @@ impl<A> AuthFragment<A> {
         self.levels_observed >= self.position.levels_required_count()
     }
 
-    pub fn next_required_level(&self) -> Option<Level> {
+    pub fn next_required_level(&self) -> Option<Altitude> {
         self.position
             .all_levels_required()
             .nth(self.levels_observed)
@@ -449,7 +449,7 @@ impl<H: Hashable + Clone + PartialEq> MerkleBridge<H> {
         }
     }
 
-    pub fn max_level(&self) -> Level {
+    pub fn max_level(&self) -> Altitude {
         self.frontier.max_level()
     }
 
@@ -518,7 +518,7 @@ pub struct BridgeTree<H: Hash + Eq> {
     /// Version value for the serialized form
     ser_version: u8,
     /// The depth of the Merkle tree
-    max_level: Level,
+    max_level: Altitude,
     /// The ordered list of Merkle bridges representing the history
     /// of the tree. There will be one bridge for each saved leaf, plus
     /// the current bridge to the tip of the tree.
@@ -550,7 +550,7 @@ impl<H: Hashable + Hash + Eq + Clone> BridgeTree<H> {
     pub fn new(max_depth: usize, max_checkpoints: usize) -> Self {
         BridgeTree {
             ser_version: 0,
-            max_level: Level(max_depth as u32 - 1),
+            max_level: Altitude(max_depth as u32 - 1),
             bridges: vec![],
             incomplete_from: 0,
             saved: HashMap::new(),
@@ -688,7 +688,7 @@ impl<H: Hashable + Hash + Eq + Clone> Tree<H> for BridgeTree<H> {
                         result.push(
                             auth_values
                                 .next()
-                                .unwrap_or_else(|| H::empty_root(Level(synth_lvl as u32))),
+                                .unwrap_or_else(|| H::empty_root(Altitude(synth_lvl as u32))),
                         )
                     }
                     result.push(parent.value.clone());
@@ -698,7 +698,7 @@ impl<H: Hashable + Hash + Eq + Clone> Tree<H> for BridgeTree<H> {
                     result.push(
                         auth_values
                             .next()
-                            .unwrap_or_else(|| H::empty_root(Level(synth_lvl as u32))),
+                            .unwrap_or_else(|| H::empty_root(Altitude(synth_lvl as u32))),
                     );
                 }
 
@@ -815,7 +815,7 @@ impl<H: Hashable + Hash + Eq + Clone> Tree<H> for BridgeTree<H> {
 
 #[derive(Clone)]
 pub struct BridgeRecording<H> {
-    max_level: Level,
+    max_level: Altitude,
     bridge: Option<MerkleBridge<H>>,
 }
 
@@ -858,13 +858,13 @@ mod tests {
 
     #[test]
     fn position_levels() {
-        assert_eq!(Position(0).max_level(), Level(0));
-        assert_eq!(Position(1).max_level(), Level(0));
-        assert_eq!(Position(2).max_level(), Level(1));
-        assert_eq!(Position(3).max_level(), Level(1));
-        assert_eq!(Position(4).max_level(), Level(2));
-        assert_eq!(Position(7).max_level(), Level(2));
-        assert_eq!(Position(8).max_level(), Level(3));
+        assert_eq!(Position(0).max_level(), Altitude(0));
+        assert_eq!(Position(1).max_level(), Altitude(0));
+        assert_eq!(Position(2).max_level(), Altitude(1));
+        assert_eq!(Position(3).max_level(), Altitude(1));
+        assert_eq!(Position(4).max_level(), Altitude(2));
+        assert_eq!(Position(7).max_level(), Altitude(2));
+        assert_eq!(Position(8).max_level(), Altitude(3));
     }
 
     #[test]
