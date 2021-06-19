@@ -294,6 +294,10 @@ impl<H> Frontier<H> {
             frontier: None,
         }
     }
+
+    pub fn position(&self) -> Option<Position> {
+        self.frontier.as_ref().map(|f| f.position)
+    }
 }
 
 impl<H: Hashable + Clone> crate::Frontier<H> for Frontier<H> {
