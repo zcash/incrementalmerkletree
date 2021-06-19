@@ -78,6 +78,12 @@ impl Position {
     }
 }
 
+impl From<Position> for usize {
+    fn from(p: Position) -> usize {
+        p.0
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub enum Leaf<A> {
     Left(A),
