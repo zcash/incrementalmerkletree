@@ -2,6 +2,7 @@
 use serde::{Deserialize, Serialize};
 
 use std::collections::HashMap;
+use std::fmt::Debug;
 use std::hash::Hash;
 
 use super::{Altitude, Hashable, Recording, Tree};
@@ -530,9 +531,7 @@ pub struct BridgeTree<H: Hash + Eq, const DEPTH: u8> {
     max_checkpoints: usize,
 }
 
-impl<H: Hashable + Hash + Eq + std::fmt::Debug, const DEPTH: u8> std::fmt::Debug
-    for BridgeTree<H, DEPTH>
-{
+impl<H: Hashable + Hash + Eq + Debug, const DEPTH: u8> Debug for BridgeTree<H, DEPTH> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> Result<(), std::fmt::Error> {
         write!(
             f,

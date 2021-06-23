@@ -319,9 +319,9 @@ pub(crate) mod tests {
             "_".to_string()
         }
 
-        fn combine(_: Altitude, a: &Self, b: &Self) -> Self {
-            //format!("{}({}{})", l.0, a, b)
-            a.to_string() + b
+        fn combine(l: Altitude, a: &Self, b: &Self) -> Self {
+            format!("{}({}{})", l.0, a, b)
+            //a.to_string() + b
         }
     }
 
