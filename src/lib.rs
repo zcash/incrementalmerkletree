@@ -33,7 +33,7 @@ use std::ops::Sub;
 
 #[derive(Copy, Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 #[repr(transparent)]
-pub struct Altitude(u32);
+pub struct Altitude(u8);
 
 impl Altitude {
     pub fn zero() -> Self {
@@ -49,23 +49,29 @@ impl Altitude {
     }
 }
 
-impl Add<u32> for Altitude {
+impl Add<u8> for Altitude {
     type Output = Altitude;
-    fn add(self, value: u32) -> Self {
+    fn add(self, value: u8) -> Self {
         Altitude(self.0 + value)
     }
 }
 
-impl Sub<u32> for Altitude {
+impl Sub<u8> for Altitude {
     type Output = Altitude;
-    fn sub(self, value: u32) -> Self {
+    fn sub(self, value: u8) -> Self {
         Altitude(self.0 - value)
     }
 }
 
-impl From<u32> for Altitude {
-    fn from(value: u32) -> Self {
+impl From<u8> for Altitude {
+    fn from(value: u8) -> Self {
         Altitude(value)
+    }
+}
+
+impl From<Altitude> for u8 {
+    fn from(level: Altitude) -> u8 {
+        level.0
     }
 }
 
@@ -166,21 +172,23 @@ pub(crate) mod tests {
     use super::{Altitude, Frontier, Hashable, Recording, Tree};
 
     #[derive(Clone)]
-    pub struct CombinedTree<H: Hashable + Hash + Eq> {
+    pub struct CombinedTree<H: Hashable + Hash + Eq, const DEPTH: u8> {
         inefficient: CompleteTree<H>,
-        efficient: BridgeTree<H>,
+        efficient: BridgeTree<H, DEPTH>,
     }
 
-    impl<H: Hashable + Hash + Eq + Clone> CombinedTree<H> {
-        pub fn new(depth: usize) -> Self {
+    impl<H: Hashable + Hash + Eq + Clone, const DEPTH: u8> CombinedTree<H, DEPTH> {
+        pub fn new() -> Self {
             CombinedTree {
-                inefficient: CompleteTree::new(depth, 100),
-                efficient: BridgeTree::new(depth, 100),
+                inefficient: CompleteTree::new(DEPTH.into(), 100),
+                efficient: BridgeTree::new(100),
             }
         }
     }
 
-    impl<H: Hashable + Hash + Eq + Clone + std::fmt::Debug> Frontier<H> for CombinedTree<H> {
+    impl<H: Hashable + Hash + Eq + Clone + std::fmt::Debug, const DEPTH: u8> Frontier<H>
+        for CombinedTree<H, DEPTH>
+    {
         fn append(&mut self, value: &H) -> bool {
             let a = self.inefficient.append(value);
             let b = self.efficient.append(value);
@@ -197,8 +205,10 @@ pub(crate) mod tests {
         }
     }
 
-    impl<H: Hashable + Hash + Eq + Clone + std::fmt::Debug> Tree<H> for CombinedTree<H> {
-        type Recording = CombinedRecording<H>;
+    impl<H: Hashable + Hash + Eq + Clone + std::fmt::Debug, const DEPTH: u8> Tree<H>
+        for CombinedTree<H, DEPTH>
+    {
+        type Recording = CombinedRecording<H, DEPTH>;
 
         /// Marks the current tree state leaf as a value that we're interested in
         /// witnessing. Returns true if successful and false if the tree is empty.
@@ -247,7 +257,7 @@ pub(crate) mod tests {
         }
 
         /// Start a recording of append operations performed on a tree.
-        fn recording(&self) -> CombinedRecording<H> {
+        fn recording(&self) -> CombinedRecording<H, DEPTH> {
             CombinedRecording {
                 inefficient: self.inefficient.recording(),
                 efficient: self.efficient.recording(),
@@ -256,7 +266,7 @@ pub(crate) mod tests {
 
         /// Plays a recording of append operations back. Returns true if successful
         /// and false if the recording is incompatible with the current tree state.
-        fn play(&mut self, recording: &CombinedRecording<H>) -> bool {
+        fn play(&mut self, recording: &CombinedRecording<H, DEPTH>) -> bool {
             let a = self.inefficient.play(&recording.inefficient);
             let b = self.efficient.play(&recording.efficient);
             assert_eq!(a, b);
@@ -265,12 +275,14 @@ pub(crate) mod tests {
     }
 
     #[derive(Clone)]
-    pub struct CombinedRecording<H: Hashable> {
+    pub struct CombinedRecording<H: Hashable, const DEPTH: u8> {
         inefficient: CompleteRecording<H>,
-        efficient: BridgeRecording<H>,
+        efficient: BridgeRecording<H, DEPTH>,
     }
 
-    impl<H: Hashable + Clone + PartialEq> Recording<H> for CombinedRecording<H> {
+    impl<H: Hashable + Clone + PartialEq, const DEPTH: u8> Recording<H>
+        for CombinedRecording<H, DEPTH>
+    {
         fn append(&mut self, value: &H) -> bool {
             let a = self.inefficient.append(value);
             let b = self.efficient.append(value);
@@ -308,6 +320,7 @@ pub(crate) mod tests {
         }
 
         fn combine(_: Altitude, a: &Self, b: &Self) -> Self {
+            //format!("{}({}{})", l.0, a, b)
             a.to_string() + b
         }
     }
@@ -482,8 +495,8 @@ pub(crate) mod tests {
     fn check_operations<H: Hashable + Clone + std::fmt::Debug + Eq + Hash>(
         ops: Vec<Operation<H>>,
     ) -> Result<(), TestCaseError> {
-        const DEPTH: usize = 4;
-        let mut tree = CombinedTree::<H>::new(DEPTH);
+        const DEPTH: u8 = 4;
+        let mut tree = CombinedTree::<H, DEPTH>::new();
 
         let mut prevtrees = vec![];
 

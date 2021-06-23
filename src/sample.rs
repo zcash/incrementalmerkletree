@@ -13,15 +13,7 @@ pub struct CompleteTree<H: Hashable> {
 
 impl<H: Hashable + Clone> CompleteTree<H> {
     /// Creates a new, empty binary tree of specified depth.
-    ///
-    /// # Panics
-    ///
-    /// Panics if the specified depth is zero.
     pub fn new(depth: usize, max_checkpoints: usize) -> Self {
-        if depth == 0 {
-            panic!("invalid depth for incremental merkle tree");
-        }
-
         CompleteTree {
             leaves: vec![H::empty_leaf(); 1 << depth],
             current_position: 0,
@@ -245,9 +237,9 @@ mod tests {
 
     #[test]
     fn correct_empty_root() {
-        const DEPTH: u32 = 5;
+        const DEPTH: u8 = 5;
         let mut expected = SipHashable(0u64);
-        for lvl in 0u32..DEPTH {
+        for lvl in 0u8..DEPTH {
             expected = SipHashable::combine(lvl.into(), &expected, &expected);
         }
 

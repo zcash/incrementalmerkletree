@@ -23,7 +23,7 @@ impl Position {
         Altitude(if self.0 == 0 {
             0
         } else {
-            63 - self.0.leading_zeros()
+            63 - self.0.leading_zeros() as u8
         })
     }
 
@@ -73,7 +73,7 @@ impl Position {
     }
 
     pub fn has_observed(&self, level: Altitude, since: Position) -> bool {
-        let level_delta = 2usize.pow(level.0);
+        let level_delta = 2usize.pow(level.0.into());
         self.0 - since.0 > level_delta
     }
 }
@@ -288,17 +288,13 @@ impl<H: Hashable + Clone> NonEmptyFrontier<H> {
 /// A possibly-empty Merkle frontier. Used when the
 /// full functionality of a Merkle bridge is not necessary.
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct Frontier<H> {
-    max_level: Altitude,
+pub struct Frontier<H, const DEPTH: u8> {
     frontier: Option<NonEmptyFrontier<H>>,
 }
 
-impl<H> Frontier<H> {
-    pub fn new(max_depth: usize) -> Self {
-        Frontier {
-            max_level: Altitude(max_depth as u32 - 1),
-            frontier: None,
-        }
+impl<H, const DEPTH: u8> Frontier<H, DEPTH> {
+    pub fn new() -> Self {
+        Frontier { frontier: None }
     }
 
     pub fn position(&self) -> Option<Position> {
@@ -306,13 +302,13 @@ impl<H> Frontier<H> {
     }
 }
 
-impl<H: Hashable + Clone> crate::Frontier<H> for Frontier<H> {
+impl<H: Hashable + Clone, const DEPTH: u8> crate::Frontier<H> for Frontier<H, DEPTH> {
     /// Appends a new value to the tree at the next available slot. Returns true
     /// if successful and false if the frontier would exceed the maximum
     /// allowed depth.
     fn append(&mut self, value: &H) -> bool {
         if let Some(frontier) = self.frontier.as_mut() {
-            if frontier.position().is_complete(self.max_level + 1) {
+            if frontier.position().is_complete(Altitude(DEPTH)) {
                 false
             } else {
                 frontier.append(value.clone());
@@ -328,11 +324,11 @@ impl<H: Hashable + Clone> crate::Frontier<H> for Frontier<H> {
     fn root(&self) -> H {
         self.frontier
             .as_ref()
-            .map_or(H::empty_root(self.max_level + 1), |frontier| {
+            .map_or(H::empty_root(Altitude(DEPTH)), |frontier| {
                 // fold from the current height, combining with empty branches,
                 // up to the maximum height of the tree
                 (frontier.max_level() + 1)
-                    .iter_to(self.max_level + 1)
+                    .iter_to(Altitude(DEPTH))
                     .fold(frontier.root(), |d, lvl| {
                         H::combine(lvl, &d, &H::empty_root(lvl))
                     })
@@ -514,11 +510,9 @@ pub enum Checkpoint<H> {
 }
 
 #[derive(Clone, Serialize, Deserialize)]
-pub struct BridgeTree<H: Hash + Eq> {
+pub struct BridgeTree<H: Hash + Eq, const DEPTH: u8> {
     /// Version value for the serialized form
     ser_version: u8,
-    /// The depth of the Merkle tree
-    max_level: Altitude,
     /// The ordered list of Merkle bridges representing the history
     /// of the tree. There will be one bridge for each saved leaf, plus
     /// the current bridge to the tip of the tree.
@@ -536,21 +530,22 @@ pub struct BridgeTree<H: Hash + Eq> {
     max_checkpoints: usize,
 }
 
-impl<H: Hashable + Hash + Eq + std::fmt::Debug> std::fmt::Debug for BridgeTree<H> {
+impl<H: Hashable + Hash + Eq + std::fmt::Debug, const DEPTH: u8> std::fmt::Debug
+    for BridgeTree<H, DEPTH>
+{
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> Result<(), std::fmt::Error> {
         write!(
             f,
-            "BridgeTree {{\n  max_level: {:?},\n  bridges: {:?},\n  incomplete_from: {:?},\n  saved: {:?},\n  checkpoints: {:?},\n  max_checkpoints: {:?}\n}}",
-            self.max_level, self.bridges, self.incomplete_from, self.saved, self.checkpoints, self.max_checkpoints
+            "BridgeTree {{\n  depth: {:?},\n  bridges: {:?},\n  incomplete_from: {:?},\n  saved: {:?},\n  checkpoints: {:?},\n  max_checkpoints: {:?}\n}}",
+            DEPTH, self.bridges, self.incomplete_from, self.saved, self.checkpoints, self.max_checkpoints
         )
     }
 }
 
-impl<H: Hashable + Hash + Eq + Clone> BridgeTree<H> {
-    pub fn new(max_depth: usize, max_checkpoints: usize) -> Self {
+impl<H: Hashable + Hash + Eq + Clone, const DEPTH: u8> BridgeTree<H, DEPTH> {
+    pub fn new(max_checkpoints: usize) -> Self {
         BridgeTree {
             ser_version: 0,
-            max_level: Altitude(max_depth as u32 - 1),
             bridges: vec![],
             incomplete_from: 0,
             saved: HashMap::new(),
@@ -571,10 +566,10 @@ impl<H: Hashable + Hash + Eq + Clone> BridgeTree<H> {
     }
 }
 
-impl<H: Hashable + Hash + Eq + Clone> crate::Frontier<H> for BridgeTree<H> {
+impl<H: Hashable + Hash + Eq + Clone, const DEPTH: u8> crate::Frontier<H> for BridgeTree<H, DEPTH> {
     fn append(&mut self, value: &H) -> bool {
         if let Some(bridge) = self.bridges.last_mut() {
-            if bridge.frontier.position().is_complete(self.max_level + 1) {
+            if bridge.frontier.position().is_complete(Altitude(DEPTH)) {
                 false
             } else {
                 bridge.append(value.clone());
@@ -590,11 +585,11 @@ impl<H: Hashable + Hash + Eq + Clone> crate::Frontier<H> for BridgeTree<H> {
     fn root(&self) -> H {
         self.bridges
             .last()
-            .map_or(H::empty_root(self.max_level + 1), |bridge| {
+            .map_or(H::empty_root(Altitude(DEPTH)), |bridge| {
                 // fold from the current height, combining with empty branches,
                 // up to the maximum height of the tree
                 (bridge.max_level() + 1)
-                    .iter_to(self.max_level + 1)
+                    .iter_to(Altitude(DEPTH))
                     .fold(bridge.root(), |d, lvl| {
                         H::combine(lvl, &d, &H::empty_root(lvl))
                     })
@@ -602,8 +597,8 @@ impl<H: Hashable + Hash + Eq + Clone> crate::Frontier<H> for BridgeTree<H> {
     }
 }
 
-impl<H: Hashable + Hash + Eq + Clone> Tree<H> for BridgeTree<H> {
-    type Recording = BridgeRecording<H>;
+impl<H: Hashable + Hash + Eq + Clone, const DEPTH: u8> Tree<H> for BridgeTree<H, DEPTH> {
+    type Recording = BridgeRecording<H, DEPTH>;
 
     /// Marks the current tree state leaf as a value that we're interested in
     /// witnessing. Returns true if successful and false if the tree is empty.
@@ -684,21 +679,21 @@ impl<H: Hashable + Hash + Eq + Clone> Tree<H> for BridgeTree<H> {
                     .iter()
                     .zip(frontier.position.parent_levels())
                 {
-                    for synth_lvl in result.len()..(<usize>::from(parent_lvl)) {
+                    for synth_lvl in (result.len() as u8)..(parent_lvl.into()) {
                         result.push(
                             auth_values
                                 .next()
-                                .unwrap_or_else(|| H::empty_root(Altitude(synth_lvl as u32))),
+                                .unwrap_or_else(|| H::empty_root(Altitude(synth_lvl))),
                         )
                     }
                     result.push(parent.value.clone());
                 }
 
-                for synth_lvl in result.len()..(<usize>::from(self.max_level + 1)) {
+                for synth_lvl in (result.len() as u8)..DEPTH {
                     result.push(
                         auth_values
                             .next()
-                            .unwrap_or_else(|| H::empty_root(Altitude(synth_lvl as u32))),
+                            .unwrap_or_else(|| H::empty_root(Altitude(synth_lvl))),
                     );
                 }
 
@@ -778,16 +773,15 @@ impl<H: Hashable + Hash + Eq + Clone> Tree<H> for BridgeTree<H> {
     }
 
     /// Start a recording of append operations performed on a tree.
-    fn recording(&self) -> BridgeRecording<H> {
+    fn recording(&self) -> BridgeRecording<H, DEPTH> {
         BridgeRecording {
-            max_level: self.max_level,
             bridge: self.bridges.last().cloned(),
         }
     }
 
     /// Plays a recording of append operations back. Returns true if successful
     /// and false if the recording is incompatible with the current tree state.
-    fn play(&mut self, recording: &BridgeRecording<H>) -> bool {
+    fn play(&mut self, recording: &BridgeRecording<H, DEPTH>) -> bool {
         let bridge_count = self.bridges.len();
         if bridge_count == 0 {
             if let Some(bridge) = &recording.bridge {
@@ -814,15 +808,14 @@ impl<H: Hashable + Hash + Eq + Clone> Tree<H> for BridgeTree<H> {
 }
 
 #[derive(Clone)]
-pub struct BridgeRecording<H> {
-    max_level: Altitude,
+pub struct BridgeRecording<H, const DEPTH: u8> {
     bridge: Option<MerkleBridge<H>>,
 }
 
-impl<H: Hashable + Clone + PartialEq> Recording<H> for BridgeRecording<H> {
+impl<H: Hashable + Clone + PartialEq, const DEPTH: u8> Recording<H> for BridgeRecording<H, DEPTH> {
     fn append(&mut self, value: &H) -> bool {
         if let Some(bridge) = self.bridge.as_mut() {
-            if bridge.frontier.position.is_complete(self.max_level + 1) {
+            if bridge.frontier.position.is_complete(Altitude(DEPTH)) {
                 false
             } else {
                 bridge.append(value.clone());
@@ -869,7 +862,7 @@ mod tests {
 
     #[test]
     fn tree_depth() {
-        let mut tree = BridgeTree::<String>::new(3, 100);
+        let mut tree = BridgeTree::<String, 3>::new(100);
         for c in 'a'..'i' {
             assert!(tree.append(&c.to_string()))
         }
@@ -887,7 +880,7 @@ mod tests {
         bridge.append("c".to_string());
         assert_eq!(bridge.root(), "abc_");
 
-        let mut tree = BridgeTree::<String>::new(4, 100);
+        let mut tree = BridgeTree::<String, 4>::new(100);
         assert_eq!(tree.root(), "________________");
 
         tree.append(&"a".to_string());
@@ -903,7 +896,7 @@ mod tests {
 
     #[test]
     fn auth_paths() {
-        let mut tree = BridgeTree::<String>::new(4, 100);
+        let mut tree = BridgeTree::<String, 4>::new(100);
         tree.append(&"a".to_string());
         tree.witness();
         assert_eq!(
@@ -976,7 +969,7 @@ mod tests {
             ))
         );
 
-        let mut tree = BridgeTree::<String>::new(4, 100);
+        let mut tree = BridgeTree::<String, 4>::new(100);
         tree.append(&"a".to_string());
         tree.witness();
         for c in 'b'..'h' {
@@ -998,7 +991,7 @@ mod tests {
             ))
         );
 
-        let mut tree = BridgeTree::<String>::new(4, 100);
+        let mut tree = BridgeTree::<String, 4>::new(100);
         tree.append(&"a".to_string());
         tree.witness();
         tree.append(&"b".to_string());
@@ -1024,7 +1017,7 @@ mod tests {
             ))
         );
 
-        let mut tree = BridgeTree::<String>::new(4, 100);
+        let mut tree = BridgeTree::<String, 4>::new(100);
         for c in 'a'..'l' {
             tree.append(&c.to_string());
         }
@@ -1044,7 +1037,7 @@ mod tests {
             ))
         );
 
-        let mut tree = BridgeTree::<String>::new(4, 100);
+        let mut tree = BridgeTree::<String, 4>::new(100);
         tree.append(&'a'.to_string());
         tree.witness();
         tree.checkpoint();
@@ -1070,7 +1063,7 @@ mod tests {
             ))
         );
 
-        let mut tree = BridgeTree::<String>::new(4, 100);
+        let mut tree = BridgeTree::<String, 4>::new(100);
         tree.append(&'a'.to_string());
         tree.witness();
         tree.remove_witness(&'a'.to_string());
@@ -1093,7 +1086,7 @@ mod tests {
             ))
         );
 
-        let mut tree = BridgeTree::<String>::new(4, 100);
+        let mut tree = BridgeTree::<String, 4>::new(100);
         tree.append(&'a'.to_string());
         tree.append(&'b'.to_string());
         tree.append(&'c'.to_string());
@@ -1120,7 +1113,7 @@ mod tests {
             ))
         );
 
-        let mut tree = BridgeTree::<String>::new(4, 100);
+        let mut tree = BridgeTree::<String, 4>::new(100);
         for c in 'a'..'n' {
             tree.append(&c.to_string());
         }
@@ -1152,7 +1145,7 @@ mod tests {
             .chain(Some(Authpath('l'.to_string())))
             .collect::<Vec<_>>();
 
-        let mut tree = BridgeTree::<String>::new(4, 100);
+        let mut tree = BridgeTree::<String, 4>::new(100);
         assert_eq!(
             Operation::apply_all(&ops, &mut tree),
             Some((
@@ -1169,7 +1162,7 @@ mod tests {
 
     #[test]
     fn drop_oldest_checkpoint() {
-        let mut t = BridgeTree::<String>::new(6, 100);
+        let mut t = BridgeTree::<String, 6>::new(100);
         t.checkpoint();
         t.append(&"a".to_string());
         t.witness();
@@ -1181,7 +1174,7 @@ mod tests {
 
     #[test]
     fn checkpoint_rewind() {
-        let mut t = BridgeTree::<String>::new(6, 100);
+        let mut t = BridgeTree::<String, 6>::new(100);
         t.append(&"a".to_string());
         t.append(&"b".to_string());
         t.checkpoint();
@@ -1189,7 +1182,7 @@ mod tests {
         t.witness();
         assert_eq!(t.rewind(), false);
 
-        let mut t = BridgeTree::<String>::new(6, 100);
+        let mut t = BridgeTree::<String, 6>::new(100);
         t.append(&"a".to_string());
         t.append(&"b".to_string());
         t.checkpoint();
@@ -1213,6 +1206,15 @@ mod tests {
                 frontier,
                 frontier.position.levels_required().collect::<Vec<_>>()
             );
+        }
+    }
+
+    #[test]
+    fn frontier_roots() {
+        let mut frontier = super::Frontier::<String, 4>::new();
+        for c in 'a'..'f' {
+            frontier.append(&c.to_string());
+            println!("{:?}\n{:?}", frontier, frontier.root());
         }
     }
 }
