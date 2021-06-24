@@ -25,7 +25,7 @@
 //! roll back to any previous checkpoint.
 
 pub mod bridgetree;
-pub mod sample;
+mod sample;
 
 use serde::{Deserialize, Serialize};
 use std::ops::Add;
@@ -319,9 +319,8 @@ pub(crate) mod tests {
             "_".to_string()
         }
 
-        fn combine(l: Altitude, a: &Self, b: &Self) -> Self {
-            format!("{}({}{})", l.0, a, b)
-            //a.to_string() + b
+        fn combine(_: Altitude, a: &Self, b: &Self) -> Self {
+            a.to_string() + b
         }
     }
 
