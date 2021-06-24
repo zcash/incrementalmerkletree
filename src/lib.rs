@@ -24,725 +24,589 @@
 //! checkpoints that we're no longer interested in. It should be possible to
 //! roll back to any previous checkpoint.
 
-pub trait TreeHasher {
-    type Digest: Clone + PartialEq + std::fmt::Debug;
+pub mod bridgetree;
+pub mod sample;
 
-    fn empty_leaf() -> Self::Digest;
-    fn combine(a: &Self::Digest, b: &Self::Digest) -> Self::Digest;
+use serde::{Deserialize, Serialize};
+use std::ops::Add;
+use std::ops::Sub;
+
+#[derive(Copy, Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[repr(transparent)]
+pub struct Altitude(u8);
+
+impl Altitude {
+    pub fn zero() -> Self {
+        Altitude(0)
+    }
+
+    pub fn one() -> Self {
+        Altitude(1)
+    }
+
+    pub fn iter_to(self, other: Altitude) -> impl Iterator<Item = Altitude> {
+        (self.0..other.0).into_iter().map(Altitude)
+    }
 }
 
-#[derive(Clone)]
-pub struct EfficientTree<H: TreeHasher> {
-    something: H::Digest
+impl Add<u8> for Altitude {
+    type Output = Altitude;
+    fn add(self, value: u8) -> Self {
+        Altitude(self.0 + value)
+    }
 }
 
-impl<H: TreeHasher> EfficientTree<H> {
-    pub fn new(depth: usize) -> Self {
-        unimplemented!()
+impl Sub<u8> for Altitude {
+    type Output = Altitude;
+    fn sub(self, value: u8) -> Self {
+        Altitude(self.0 - value)
     }
+}
 
-    pub fn append(&mut self, value: &H::Digest) -> bool {
-        unimplemented!()
+impl From<u8> for Altitude {
+    fn from(value: u8) -> Self {
+        Altitude(value)
     }
+}
 
-    /// Obtains the current root of this Merkle tree.
-    pub fn root(&self) -> H::Digest {
-        unimplemented!()
+impl From<Altitude> for u8 {
+    fn from(level: Altitude) -> u8 {
+        level.0
     }
+}
+
+impl From<Altitude> for usize {
+    fn from(level: Altitude) -> usize {
+        level.0 as usize
+    }
+}
+
+/// A trait describing the operations that make a value  suitable for inclusion in
+/// an incremental merkle tree.
+pub trait Hashable: Sized {
+    fn empty_leaf() -> Self;
+
+    fn combine(level: Altitude, a: &Self, b: &Self) -> Self;
+
+    fn empty_root(level: Altitude) -> Self {
+        Altitude::zero()
+            .iter_to(level)
+            .fold(Self::empty_leaf(), |v, lvl| Self::combine(lvl, &v, &v))
+    }
+}
+
+/// A possibly-empty incremental Merkle frontier.
+pub trait Frontier<H> {
+    /// Appends a new value to the frontier at the next available slot.
+    /// Returns true if successful and false if the frontier would exceed
+    /// the maximum allowed depth.
+    fn append(&mut self, value: &H) -> bool;
+
+    /// Obtains the current root of this Merkle frontier by hashing
+    /// against empty nodes up to the maximum height of the pruned
+    /// tree that the frontier represents.
+    fn root(&self) -> H;
+}
+
+/// A Merkle tree that supports incremental appends, witnessing of
+/// leaf nodes, checkpoints and rollbacks.
+pub trait Tree<H>: Frontier<H> {
+    /// The type of recordings that can be made of the operations of this tree.
+    type Recording: Recording<H>;
 
     /// Marks the current tree state leaf as a value that we're interested in
     /// witnessing. Returns true if successful and false if the tree is empty.
-    pub fn witness(&mut self) -> bool {
-        unimplemented!()
-    }
+    fn witness(&mut self) -> bool;
 
     /// Obtains an authentication path to the value specified in the tree.
     /// Returns `None` if there is no available authentication path to the
     /// specified value.
-    pub fn authentication_path(&self, value: &H::Digest) -> Option<(usize, Vec<H::Digest>)> {
-        unimplemented!()
-    }
+    fn authentication_path(&self, value: &H) -> Option<(usize, Vec<H>)>;
 
     /// Marks the specified tree state value as a value we're no longer
     /// interested in maintaining a witness for. Returns true if successful and
     /// false if the value is not a known witness.
-    pub fn remove_witness(&mut self, value: &H::Digest) -> bool {
-        unimplemented!()
-    }
+    fn remove_witness(&mut self, value: &H) -> bool;
+
+    // Future work: add fn remove_witness_deferred(&mut self, value: &H) -> bool;
+    // This will be used to mark witnesses as spent, so that once the point
+    // at which their being spent is is max_checkpoints blocks is the past,
+    // the witness can be discarded.
 
     /// Marks the current tree state as a checkpoint if it is not already a
     /// checkpoint.
-    pub fn checkpoint(&mut self) {
-        unimplemented!()
-    }
+    fn checkpoint(&mut self);
 
     /// Rewinds the tree state to the previous checkpoint. This function will
     /// fail and return false if there is no previous checkpoint or in the event
     /// witness data would be destroyed in the process.
-    pub fn rewind(&mut self) -> bool {
-        unimplemented!()
-    }
-
-    /// Removes the oldest checkpoint. Returns true if successful and false if
-    /// there are no checkpoints.
-    pub fn pop_checkpoint(&mut self) -> bool {
-        unimplemented!()
-    }
+    fn rewind(&mut self) -> bool;
 
     /// Start a recording of append operations performed on a tree.
-    pub fn recording(&self) -> EfficientRecording<H> {
-        unimplemented!()
-    }
+    fn recording(&self) -> Self::Recording;
 
     /// Plays a recording of append operations back. Returns true if successful
     /// and false if the recording is incompatible with the current tree state.
-    pub fn play(&mut self, recording: &EfficientRecording<H>) -> bool {
-        unimplemented!()
-    }
+    fn play(&mut self, recording: &Self::Recording) -> bool;
 }
 
-#[derive(Clone)]
-pub struct EfficientRecording<H: TreeHasher> {
-    something: H::Digest
-}
-
-impl<H: TreeHasher> EfficientRecording<H> {
-    pub fn append(&mut self, value: &H::Digest) -> bool {
-        unimplemented!()
-    }
-
-    pub fn play(&mut self, recording: &Self) -> bool {
-        unimplemented!()
-    }
-}
-
-#[derive(Clone)]
-pub struct CombinedTree<H: TreeHasher> {
-    inefficient: Tree<H>,
-    efficient: EfficientTree<H>
-}
-
-impl<H: TreeHasher> CombinedTree<H> {
-    pub fn new(depth: usize) -> Self {
-        CombinedTree {
-            inefficient: Tree::new(depth),
-            efficient: EfficientTree::new(depth),
-        }
-    }
-
-    pub fn append(&mut self, value: &H::Digest) -> bool {
-        let a = self.inefficient.append(value);
-        let b = self.efficient.append(value);
-        assert_eq!(a, b);
-        a
-    }
-
-    /// Obtains the current root of this Merkle tree.
-    pub fn root(&self) -> H::Digest {
-        let a = self.inefficient.root();
-        let b = self.efficient.root();
-        assert_eq!(a, b);
-        a
-    }
-
-    /// Marks the current tree state leaf as a value that we're interested in
-    /// witnessing. Returns true if successful and false if the tree is empty.
-    pub fn witness(&mut self) -> bool {
-        let a = self.inefficient.witness();
-        let b = self.efficient.witness();
-        assert_eq!(a, b);
-        a
-    }
-
-    /// Obtains an authentication path to the value specified in the tree.
-    /// Returns `None` if there is no available authentication path to the
-    /// specified value.
-    pub fn authentication_path(&self, value: &H::Digest) -> Option<(usize, Vec<H::Digest>)> {
-        let a = self.inefficient.authentication_path(value);
-        let b = self.efficient.authentication_path(value);
-        assert_eq!(a, b);
-        a
-    }
-
-    /// Marks the specified tree state value as a value we're no longer
-    /// interested in maintaining a witness for. Returns true if successful and
-    /// false if the value is not a known witness.
-    pub fn remove_witness(&mut self, value: &H::Digest) -> bool {
-        let a = self.inefficient.remove_witness(value);
-        let b = self.efficient.remove_witness(value);
-        assert_eq!(a, b);
-        a
-    }
-
-    /// Marks the current tree state as a checkpoint if it is not already a
-    /// checkpoint.
-    pub fn checkpoint(&mut self) {
-        self.inefficient.checkpoint();
-        self.efficient.checkpoint();
-    }
-
-    /// Rewinds the tree state to the previous checkpoint. This function will
-    /// fail and return false if there is no previous checkpoint or in the event
-    /// witness data would be destroyed in the process.
-    pub fn rewind(&mut self) -> bool {
-        let a = self.inefficient.rewind();
-        let b = self.efficient.rewind();
-        assert_eq!(a, b);
-        a
-    }
-
-    /// Removes the oldest checkpoint. Returns true if successful and false if
-    /// there are no checkpoints.
-    pub fn pop_checkpoint(&mut self) -> bool {
-        let a = self.inefficient.pop_checkpoint();
-        let b = self.efficient.pop_checkpoint();
-        assert_eq!(a, b);
-        a
-    }
-
-    /// Start a recording of append operations performed on a tree.
-    pub fn recording(&self) -> CombinedRecording<H> {
-        CombinedRecording {
-            inefficient: self.inefficient.recording(),
-            efficient: self.efficient.recording()
-        }
-    }
-
-    /// Plays a recording of append operations back. Returns true if successful
-    /// and false if the recording is incompatible with the current tree state.
-    pub fn play(&mut self, recording: &CombinedRecording<H>) -> bool {
-        let a = self.inefficient.play(&recording.inefficient);
-        let b = self.efficient.play(&recording.efficient);
-        assert_eq!(a, b);
-        a
-    }
-}
-
-#[derive(Clone)]
-pub struct CombinedRecording<H: TreeHasher> {
-    inefficient: Recording<H>,
-    efficient: EfficientRecording<H>,
-}
-
-impl<H: TreeHasher> CombinedRecording<H> {
-    pub fn append(&mut self, value: &H::Digest) -> bool {
-        let a = self.inefficient.append(value);
-        let b = self.efficient.append(value);
-        assert_eq!(a, b);
-        a
-    }
-
-    pub fn play(&mut self, recording: &Self) -> bool {
-        let a = self.inefficient.play(&recording.inefficient);
-        let b = self.efficient.play(&recording.efficient);
-        assert_eq!(a, b);
-        a
-    }
-}
-
-#[derive(Clone)]
-pub struct Tree<H: TreeHasher> {
-    leaves: Vec<H::Digest>,
-    current_position: usize,
-    witnesses: Vec<(usize, H::Digest)>,
-    checkpoints: Vec<usize>,
-    depth: usize,
-}
-
-impl<H: TreeHasher> Tree<H> {
-    /// Creates a new, empty binary tree of specified depth.
-    ///
-    /// # Panics
-    ///
-    /// Panics if the specified depth is zero.
-    pub fn new(depth: usize) -> Self {
-        if depth == 0 {
-            panic!("invalid depth for incremental merkle tree");
-        }
-
-        Tree {
-            leaves: vec![H::empty_leaf(); 1 << depth],
-            current_position: 0,
-            witnesses: vec![],
-            checkpoints: vec![],
-            depth,
-        }
-    }
-
+pub trait Recording<H> {
     /// Appends a new value to the tree at the next available slot. Returns true
     /// if successful and false if the tree is full.
-    pub fn append(&mut self, value: &H::Digest) -> bool {
-        if self.current_position == (1 << self.depth) {
-            false
-        } else {
-            self.leaves[self.current_position] = value.clone();
-            self.current_position += 1;
-            true
-        }
-    }
-
-    /// Obtains the current root of this Merkle tree.
-    pub fn root(&self) -> H::Digest {
-        lazy_root::<H>(self.leaves.clone())
-    }
-
-    /// Marks the current tree state leaf as a value that we're interested in
-    /// witnessing. Returns true if successful and false if the tree is empty.
-    pub fn witness(&mut self) -> bool {
-        if self.current_position == 0 {
-            return false;
-        } else {
-            let value = self.leaves[self.current_position - 1].clone();
-            self.witnesses.push((self.current_position - 1, value));
-            true
-        }
-    }
-
-    /// Obtains an authentication path to the value specified in the tree.
-    /// Returns `None` if there is no available authentication path to the
-    /// specified value.
-    pub fn authentication_path(&self, value: &H::Digest) -> Option<(usize, Vec<H::Digest>)> {
-        self.witnesses
-            .iter()
-            .find(|witness| witness.1 == *value)
-            .map(|&(pos, _)| {
-                let mut path = vec![];
-
-                let mut index = pos;
-                for bit in 0..self.depth {
-                    index ^= 1 << bit;
-                    path.push(lazy_root::<H>(self.leaves[index..][0..(1 << bit)].to_vec()));
-                    index &= usize::MAX << (bit + 1);
-                }
-
-                (pos, path)
-            })
-    }
-
-    /// Marks the specified tree state value as a value we're no longer
-    /// interested in maintaining a witness for. Returns true if successful and
-    /// false if the value is not a known witness.
-    pub fn remove_witness(&mut self, value: &H::Digest) -> bool {
-        if let Some((position, _)) = self
-            .witnesses
-            .iter()
-            .enumerate()
-            .find(|witness| (witness.1).1 == *value)
-        {
-            self.witnesses.remove(position);
-
-            true
-        } else {
-            false
-        }
-    }
-
-    /// Marks the current tree state as a checkpoint if it is not already a
-    /// checkpoint.
-    pub fn checkpoint(&mut self) {
-        self.checkpoints.push(self.current_position);
-    }
-
-    /// Rewinds the tree state to the previous checkpoint. This function will
-    /// fail and return false if there is no previous checkpoint or in the event
-    /// witness data would be destroyed in the process.
-    pub fn rewind(&mut self) -> bool {
-        if let Some(checkpoint) = self.checkpoints.pop() {
-            if self.witnesses.iter().any(|&(pos, _)| pos >= checkpoint) {
-                self.checkpoints.push(checkpoint);
-                return false;
-            }
-
-            self.current_position = checkpoint;
-            if checkpoint != (1 << self.depth) {
-                self.leaves[checkpoint..].fill(H::empty_leaf());
-            }
-
-            true
-        } else {
-            false
-        }
-    }
-
-    /// Removes the oldest checkpoint. Returns true if successful and false if
-    /// there are no checkpoints.
-    pub fn pop_checkpoint(&mut self) -> bool {
-        if self.checkpoints.is_empty() {
-            false
-        } else {
-            self.checkpoints.remove(0);
-            true
-        }
-    }
-
-    /// Start a recording of append operations performed on a tree.
-    pub fn recording(&self) -> Recording<H> {
-        Recording {
-            start_position: self.current_position,
-            current_position: self.current_position,
-            depth: self.depth,
-            appends: vec![],
-        }
-    }
-
-    /// Plays a recording of append operations back. Returns true if successful
-    /// and false if the recording is incompatible with the current tree state.
-    pub fn play(&mut self, recording: &Recording<H>) -> bool {
-        if recording.start_position == self.current_position && self.depth == recording.depth {
-            for val in recording.appends.iter() {
-                self.append(val);
-            }
-            true
-        } else {
-            false
-        }
-    }
-}
-
-#[derive(Clone)]
-pub struct Recording<H: TreeHasher> {
-    start_position: usize,
-    current_position: usize,
-    depth: usize,
-    appends: Vec<H::Digest>,
-}
-
-impl<H: TreeHasher> Recording<H> {
-    /// Appends a new value to the tree at the next available slot. Returns true
-    /// if successful and false if the tree is full.
-    pub fn append(&mut self, value: &H::Digest) -> bool {
-        if self.current_position == (1 << self.depth) {
-            false
-        } else {
-            self.appends.push(value.clone());
-            self.current_position += 1;
-
-            true
-        }
-    }
+    fn append(&mut self, value: &H) -> bool;
 
     /// Plays a recording of append operations back. Returns true if successful
     /// and false if the provided recording is incompatible with `Self`.
-    pub fn play(&mut self, recording: &Self) -> bool {
-        if self.current_position == recording.start_position && self.depth == recording.depth {
-            self.appends.extend_from_slice(&recording.appends);
-            self.current_position = recording.current_position;
-            true
-        } else {
-            false
-        }
-    }
-}
-
-fn lazy_root<H: TreeHasher>(mut leaves: Vec<H::Digest>) -> H::Digest {
-    while leaves.len() != 1 {
-        leaves = leaves
-            .iter()
-            .enumerate()
-            .filter(|(i, _)| (i % 2) == 0)
-            .map(|(_, a)| a)
-            .zip(
-                leaves
-                    .iter()
-                    .enumerate()
-                    .filter(|(i, _)| (i % 2) == 1)
-                    .map(|(_, b)| b),
-            )
-            .map(|(a, b)| H::combine(a, b))
-            .collect();
-    }
-
-    leaves[0].clone()
+    fn play(&mut self, recording: &Self) -> bool;
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     #![allow(deprecated)]
-    use super::*;
+    use std::hash::Hash;
     use std::hash::Hasher;
-    use std::hash::SipHasher as Hash;
+    use std::hash::SipHasher;
 
-    impl TreeHasher for Hash {
-        type Digest = u64;
+    use super::bridgetree::{BridgeRecording, BridgeTree};
+    use super::sample::{lazy_root, CompleteRecording, CompleteTree};
+    use super::{Altitude, Frontier, Hashable, Recording, Tree};
 
-        fn empty_leaf() -> Self::Digest {
-            0
-        }
-        fn combine(a: &Self::Digest, b: &Self::Digest) -> Self::Digest {
-            let mut hasher = Hash::new();
-            hasher.write_u64(*a);
-            hasher.write_u64(*b);
-            hasher.finish()
+    #[derive(Clone)]
+    pub struct CombinedTree<H: Hashable + Hash + Eq, const DEPTH: u8> {
+        inefficient: CompleteTree<H>,
+        efficient: BridgeTree<H, DEPTH>,
+    }
+
+    impl<H: Hashable + Hash + Eq + Clone, const DEPTH: u8> CombinedTree<H, DEPTH> {
+        pub fn new() -> Self {
+            CombinedTree {
+                inefficient: CompleteTree::new(DEPTH.into(), 100),
+                efficient: BridgeTree::new(100),
+            }
         }
     }
 
-    fn compute_root_from_auth_path<H: TreeHasher>(
-        value: H::Digest,
+    impl<H: Hashable + Hash + Eq + Clone + std::fmt::Debug, const DEPTH: u8> Frontier<H>
+        for CombinedTree<H, DEPTH>
+    {
+        fn append(&mut self, value: &H) -> bool {
+            let a = self.inefficient.append(value);
+            let b = self.efficient.append(value);
+            assert_eq!(a, b);
+            a
+        }
+
+        /// Obtains the current root of this Merkle tree.
+        fn root(&self) -> H {
+            let a = self.inefficient.root();
+            let b = self.efficient.root();
+            assert_eq!(a, b);
+            a
+        }
+    }
+
+    impl<H: Hashable + Hash + Eq + Clone + std::fmt::Debug, const DEPTH: u8> Tree<H>
+        for CombinedTree<H, DEPTH>
+    {
+        type Recording = CombinedRecording<H, DEPTH>;
+
+        /// Marks the current tree state leaf as a value that we're interested in
+        /// witnessing. Returns true if successful and false if the tree is empty.
+        fn witness(&mut self) -> bool {
+            let a = self.inefficient.witness();
+            let b = self.efficient.witness();
+            assert_eq!(a, b);
+            a
+        }
+
+        /// Obtains an authentication path to the value specified in the tree.
+        /// Returns `None` if there is no available authentication path to the
+        /// specified value.
+        fn authentication_path(&self, value: &H) -> Option<(usize, Vec<H>)> {
+            let a = self.inefficient.authentication_path(value);
+            let b = self.efficient.authentication_path(value);
+            assert_eq!(a, b);
+            a
+        }
+
+        /// Marks the specified tree state value as a value we're no longer
+        /// interested in maintaining a witness for. Returns true if successful and
+        /// false if the value is not a known witness.
+        fn remove_witness(&mut self, value: &H) -> bool {
+            let a = self.inefficient.remove_witness(value);
+            let b = self.efficient.remove_witness(value);
+            assert_eq!(a, b);
+            a
+        }
+
+        /// Marks the current tree state as a checkpoint if it is not already a
+        /// checkpoint.
+        fn checkpoint(&mut self) {
+            self.inefficient.checkpoint();
+            self.efficient.checkpoint();
+        }
+
+        /// Rewinds the tree state to the previous checkpoint. This function will
+        /// fail and return false if there is no previous checkpoint or in the event
+        /// witness data would be destroyed in the process.
+        fn rewind(&mut self) -> bool {
+            let a = self.inefficient.rewind();
+            let b = self.efficient.rewind();
+            assert_eq!(a, b);
+            a
+        }
+
+        /// Start a recording of append operations performed on a tree.
+        fn recording(&self) -> CombinedRecording<H, DEPTH> {
+            CombinedRecording {
+                inefficient: self.inefficient.recording(),
+                efficient: self.efficient.recording(),
+            }
+        }
+
+        /// Plays a recording of append operations back. Returns true if successful
+        /// and false if the recording is incompatible with the current tree state.
+        fn play(&mut self, recording: &CombinedRecording<H, DEPTH>) -> bool {
+            let a = self.inefficient.play(&recording.inefficient);
+            let b = self.efficient.play(&recording.efficient);
+            assert_eq!(a, b);
+            a
+        }
+    }
+
+    #[derive(Clone)]
+    pub struct CombinedRecording<H: Hashable, const DEPTH: u8> {
+        inefficient: CompleteRecording<H>,
+        efficient: BridgeRecording<H, DEPTH>,
+    }
+
+    impl<H: Hashable + Clone + PartialEq, const DEPTH: u8> Recording<H>
+        for CombinedRecording<H, DEPTH>
+    {
+        fn append(&mut self, value: &H) -> bool {
+            let a = self.inefficient.append(value);
+            let b = self.efficient.append(value);
+            assert_eq!(a, b);
+            a
+        }
+
+        fn play(&mut self, recording: &Self) -> bool {
+            let a = self.inefficient.play(&recording.inefficient);
+            let b = self.efficient.play(&recording.efficient);
+            assert_eq!(a, b);
+            a
+        }
+    }
+
+    #[derive(Clone, Debug, PartialEq, Eq, Hash)]
+    pub(crate) struct SipHashable(pub(crate) u64);
+
+    impl Hashable for SipHashable {
+        fn empty_leaf() -> Self {
+            SipHashable(0)
+        }
+
+        fn combine(_level: Altitude, a: &Self, b: &Self) -> Self {
+            let mut hasher = SipHasher::new();
+            hasher.write_u64(a.0);
+            hasher.write_u64(b.0);
+            SipHashable(hasher.finish())
+        }
+    }
+
+    impl Hashable for String {
+        fn empty_leaf() -> Self {
+            "_".to_string()
+        }
+
+        fn combine(l: Altitude, a: &Self, b: &Self) -> Self {
+            format!("{}({}{})", l.0, a, b)
+            //a.to_string() + b
+        }
+    }
+
+    #[derive(Clone, Debug)]
+    pub enum Operation<A> {
+        Append(A),
+        Witness,
+        Unwitness(A),
+        Checkpoint,
+        Rewind,
+        Authpath(A),
+    }
+
+    use Operation::*;
+
+    impl<H: Hashable + Hash + Eq> Operation<H> {
+        pub fn apply<T: Tree<H>>(&self, tree: &mut T) -> Option<(usize, Vec<H>)> {
+            match self {
+                Append(a) => {
+                    assert!(tree.append(a), "append failed");
+                    None
+                }
+                Witness => {
+                    assert!(tree.witness(), "witness failed");
+                    None
+                }
+                Unwitness(a) => {
+                    assert!(tree.remove_witness(a), "remove witness failed");
+                    None
+                }
+                Checkpoint => {
+                    tree.checkpoint();
+                    None
+                }
+                Rewind => {
+                    assert!(tree.rewind(), "rewind failed");
+                    None
+                }
+                Authpath(a) => tree.authentication_path(a),
+            }
+        }
+
+        pub fn apply_all<T: Tree<H>>(
+            ops: &[Operation<H>],
+            tree: &mut T,
+        ) -> Option<(usize, Vec<H>)> {
+            let mut result = None;
+            for op in ops {
+                result = op.apply(tree);
+            }
+            result
+        }
+    }
+
+    pub(crate) fn compute_root_from_auth_path<H: Hashable>(
+        value: H,
         position: usize,
-        path: &[H::Digest],
-    ) -> H::Digest {
+        path: &[H],
+    ) -> H {
         let mut cur = value;
+        let mut lvl = Altitude::zero();
         for (i, v) in path
             .iter()
             .enumerate()
             .map(|(i, v)| (((position >> i) & 1) == 1, v))
         {
             if i {
-                cur = H::combine(v, &cur);
+                cur = H::combine(lvl, v, &cur);
             } else {
-                cur = H::combine(&cur, v);
+                cur = H::combine(lvl, &cur, v);
             }
+            lvl = lvl + 1;
         }
         cur
     }
 
     #[test]
     fn test_compute_root_from_auth_path() {
-        let expected = Hash::combine(
-            &Hash::combine(&Hash::combine(&0, &1), &Hash::combine(&2, &3)),
-            &Hash::combine(&Hash::combine(&4, &5), &Hash::combine(&6, &7)),
+        let expected = SipHashable::combine(
+            <Altitude>::from(2),
+            &SipHashable::combine(
+                Altitude::one(),
+                &SipHashable::combine(Altitude::zero(), &SipHashable(0), &SipHashable(1)),
+                &SipHashable::combine(Altitude::zero(), &SipHashable(2), &SipHashable(3)),
+            ),
+            &SipHashable::combine(
+                Altitude::one(),
+                &SipHashable::combine(Altitude::zero(), &SipHashable(4), &SipHashable(5)),
+                &SipHashable::combine(Altitude::zero(), &SipHashable(6), &SipHashable(7)),
+            ),
         );
 
         assert_eq!(
-            compute_root_from_auth_path::<Hash>(
-                0,
+            compute_root_from_auth_path::<SipHashable>(
+                SipHashable(0),
                 0,
                 &[
-                    1,
-                    Hash::combine(&2, &3),
-                    Hash::combine(&Hash::combine(&4, &5), &Hash::combine(&6, &7))
+                    SipHashable(1),
+                    SipHashable::combine(Altitude::zero(), &SipHashable(2), &SipHashable(3)),
+                    SipHashable::combine(
+                        Altitude::one(),
+                        &SipHashable::combine(Altitude::zero(), &SipHashable(4), &SipHashable(5)),
+                        &SipHashable::combine(Altitude::zero(), &SipHashable(6), &SipHashable(7))
+                    )
                 ]
             ),
             expected
         );
 
         assert_eq!(
-            compute_root_from_auth_path::<Hash>(
-                4,
+            compute_root_from_auth_path(
+                SipHashable(4),
                 4,
                 &[
-                    5,
-                    Hash::combine(&6, &7),
-                    Hash::combine(&Hash::combine(&0, &1), &Hash::combine(&2, &3))
+                    SipHashable(5),
+                    SipHashable::combine(Altitude::zero(), &SipHashable(6), &SipHashable(7)),
+                    SipHashable::combine(
+                        Altitude::one(),
+                        &SipHashable::combine(Altitude::zero(), &SipHashable(0), &SipHashable(1)),
+                        &SipHashable::combine(Altitude::zero(), &SipHashable(2), &SipHashable(3))
+                    )
                 ]
             ),
             expected
         );
-    }
-
-    #[test]
-    fn correct_empty_root() {
-        const DEPTH: usize = 5;
-        let mut expected = 0u64;
-        for _ in 0..DEPTH {
-            expected = Hash::combine(&expected, &expected);
-        }
-
-        let tree = Tree::<Hash>::new(DEPTH);
-        assert_eq!(tree.root(), expected);
-    }
-
-    #[test]
-    fn correct_root() {
-        const DEPTH: usize = 3;
-        let values: Vec<u64> = (0..(1 << DEPTH)).collect();
-
-        let mut tree = Tree::<Hash>::new(DEPTH);
-        for value in values.iter() {
-            assert!(tree.append(value));
-        }
-        assert!(!tree.append(&0));
-
-        let expected = Hash::combine(
-            &Hash::combine(&Hash::combine(&0, &1), &Hash::combine(&2, &3)),
-            &Hash::combine(&Hash::combine(&4, &5), &Hash::combine(&6, &7)),
-        );
-
-        assert_eq!(tree.root(), expected);
-    }
-
-    #[test]
-    fn correct_auth_path() {
-        const DEPTH: usize = 3;
-        let values: Vec<u64> = (0..(1 << DEPTH)).collect();
-
-        let mut tree = Tree::<Hash>::new(DEPTH);
-        for value in values.iter() {
-            assert!(tree.append(value));
-            tree.witness();
-        }
-        assert!(!tree.append(&0));
-
-        let expected = Hash::combine(
-            &Hash::combine(&Hash::combine(&0, &1), &Hash::combine(&2, &3)),
-            &Hash::combine(&Hash::combine(&4, &5), &Hash::combine(&6, &7)),
-        );
-
-        assert_eq!(tree.root(), expected);
-
-        for i in 0..(1 << DEPTH) {
-            println!("value: {}", i);
-            let (position, path) = tree.authentication_path(&i).unwrap();
-            assert_eq!(
-                compute_root_from_auth_path::<Hash>(i, position, &path),
-                expected
-            );
-        }
     }
 
     use proptest::prelude::*;
+    use proptest::sample::select;
 
-    #[derive(Clone, Debug)]
-    enum Operation {
-        Append(u64),
-        Witness,
-        Unwitness(u64),
-        Checkpoint,
-        Rewind,
-        PopCheckpoint,
-        Authpath(u64),
-    }
-
-    use Operation::*;
-
-    prop_compose! {
-        fn arb_operation()
-                    (
-                        opid in (0..7),
-                        item in (0..32u64),
-                    )
-                    -> Operation
-        {
-            match opid {
-                0 => Append(item),
-                1 => Witness,
-                2 => Unwitness(item),
-                3 => Checkpoint,
-                4 => Rewind,
-                5 => PopCheckpoint,
-                6 => Authpath(item),
-                _ => unimplemented!()
-            }
-        }
+    fn arb_operation<G: Strategy>(item_gen: G) -> impl Strategy<Value = Operation<G::Value>>
+    where
+        G::Value: Clone + 'static,
+    {
+        item_gen.prop_flat_map(|item| {
+            select(vec![
+                Append(item.clone()),
+                Witness,
+                Unwitness(item.clone()),
+                Checkpoint,
+                Rewind,
+                Authpath(item),
+            ])
+        })
     }
 
     proptest! {
         #![proptest_config(ProptestConfig::with_cases(100000))]
+
         #[test]
-        fn do_stuff(ops in proptest::collection::vec(arb_operation(), 1..100)) {
-            const DEPTH: usize = 4;
-            let mut tree = CombinedTree::<Hash>::new(DEPTH);
+        fn check_randomized_u64_ops(
+            ops in proptest::collection::vec(
+                arb_operation((0..32u64).prop_map(SipHashable)),
+                1..100
+            )
+        ) {
+            check_operations(ops)?;
+        }
 
-            let mut prevtrees = vec![];
+        #[test]
+        fn check_randomized_str_ops(
+            ops in proptest::collection::vec(
+                arb_operation((97u8..123).prop_map(|c| char::from(c).to_string())),
+                1..100
+            )
+        ) {
+            check_operations::<String>(ops)?;
+        }
+    }
 
-            let mut tree_size = 0;
-            let mut tree_values = vec![];
-            let mut tree_checkpoints = vec![];
-            let mut tree_witnesses: Vec<(usize, u64)> = vec![];
+    fn check_operations<H: Hashable + Clone + std::fmt::Debug + Eq + Hash>(
+        ops: Vec<Operation<H>>,
+    ) -> Result<(), TestCaseError> {
+        const DEPTH: u8 = 4;
+        let mut tree = CombinedTree::<H, DEPTH>::new();
 
-            for op in ops {
-                assert_eq!(tree_size, tree_values.len());
-                match op {
-                    Append(value) => {
-                        prevtrees.push((tree.clone(), tree.recording()));
-                        if tree.append(&value) {
-                            assert!(tree_size < (1 << DEPTH));
-                            tree_size += 1;
-                            tree_values.push(value);
+        let mut prevtrees = vec![];
 
-                            for &mut (_, ref mut recording) in &mut prevtrees {
-                                assert!(recording.append(&value));
-                            }
-                        } else {
-                            assert!(tree_size == (1 << DEPTH));
+        let mut tree_size = 0;
+        let mut tree_values = vec![];
+        let mut tree_checkpoints = vec![];
+        let mut tree_witnesses: Vec<(usize, H)> = vec![];
+
+        for op in ops {
+            prop_assert_eq!(tree_size, tree_values.len());
+            match op {
+                Append(value) => {
+                    prevtrees.push((tree.clone(), tree.recording()));
+                    if tree.append(&value) {
+                        prop_assert!(tree_size < (1 << DEPTH));
+                        tree_size += 1;
+                        tree_values.push(value.clone());
+
+                        for &mut (_, ref mut recording) in &mut prevtrees {
+                            prop_assert!(recording.append(&value));
                         }
+                    } else {
+                        prop_assert_eq!(tree_size, 1 << DEPTH);
                     }
-                    Witness => {
-                        if tree.witness() {
-                            assert!(tree_size != 0);
-                            tree_witnesses.push((tree_size - 1, *tree_values.last().unwrap()));
-                        } else {
-                            assert!(tree_size == 0);
+                }
+                Witness => {
+                    if tree.witness() {
+                        prop_assert!(tree_size != 0);
+                        if !tree_witnesses
+                            .iter()
+                            .any(|v| &v.1 == tree_values.last().unwrap())
+                        {
+                            tree_witnesses
+                                .push((tree_size - 1, tree_values.last().unwrap().clone()));
                         }
+                    } else {
+                        prop_assert_eq!(tree_size, 0);
                     }
-                    Unwitness(value) => {
-                        if tree.remove_witness(&value) {
-                            if let Some((i, _)) = tree_witnesses.iter().enumerate().find(|v| (v.1).1 == value) {
-                                tree_witnesses.remove(i);
-                            } else {
-                                panic!("witness should not have been removed");
-                            }
+                }
+                Unwitness(value) => {
+                    if tree.remove_witness(&value) {
+                        if let Some((i, _)) =
+                            tree_witnesses.iter().enumerate().find(|v| (v.1).1 == value)
+                        {
+                            tree_witnesses.remove(i);
                         } else {
-                            if tree_witnesses.iter().find(|v| v.1 == value).is_some() {
-                                panic!("witness should have been removed");
-                            }
+                            panic!("witness should not have been removed");
                         }
+                    } else if tree_witnesses.iter().any(|v| v.1 == value) {
+                        panic!("witness should have been removed");
                     }
-                    Checkpoint => {
-                        tree_checkpoints.push(tree_size);
-                        tree.checkpoint();
+                }
+                Checkpoint => {
+                    tree_checkpoints.push(tree_size);
+                    tree.checkpoint();
+                }
+                Rewind => {
+                    prevtrees.truncate(0);
+
+                    if tree.rewind() {
+                        prop_assert!(!tree_checkpoints.is_empty());
+                        let checkpoint_location = tree_checkpoints.pop().unwrap();
+                        //for &(index, _) in tree_witnesses.iter() {
+                        //    // index is the index in tree_values
+                        //    // checkpoint_location is the size of the tree
+                        //    // at the time of the checkpoint
+                        //    // index should always be strictly smaller or
+                        //    // else a witness would be erased!
+                        //    prop_assert!(index < checkpoint_location);
+                        //}
+                        tree_values.truncate(checkpoint_location);
+                        tree_size = checkpoint_location;
+                    } else if !tree_checkpoints.is_empty() {
+                        let checkpoint_location = *tree_checkpoints.last().unwrap();
+                        prop_assert!(tree_witnesses
+                            .iter()
+                            .any(|&(index, _)| index >= checkpoint_location));
                     }
-                    Rewind => {
-                        prevtrees.truncate(0);
+                }
+                Authpath(value) => {
+                    if let Some((position, path)) = tree.authentication_path(&value) {
+                        // must be the case that value was a witness
+                        assert!(tree_witnesses.iter().any(|(_, witness)| witness == &value));
 
-                        if tree.rewind() {
-                            assert!(tree_checkpoints.len() > 0);
-                            let checkpoint_location = tree_checkpoints.pop().unwrap();
-                            for &(index, _) in tree_witnesses.iter() {
-                                // index is the index in tree_values
-                                // checkpoint_location is the size of the tree
-                                // at the time of the checkpoint
-                                // index should always be strictly smaller or
-                                // else a witness would be erased!
-                                assert!(index < checkpoint_location);
-                            }
-                            tree_values.truncate(checkpoint_location);
-                            tree_size = checkpoint_location;
-                        } else {
-                            if tree_checkpoints.len() != 0 {
-                                let checkpoint_location = *tree_checkpoints.last().unwrap();
-                                assert!(tree_witnesses.iter().any(|&(index, _)| index >= checkpoint_location));
-                            }
-                        }
-                    }
-                    PopCheckpoint => {
-                        if tree.pop_checkpoint() {
-                            assert!(tree_checkpoints.len() > 0);
-                            tree_checkpoints.remove(0);
-                        } else {
-                            assert!(tree_checkpoints.len() == 0);
-                        }
-                    }
-                    Authpath(value) => {
-                        if let Some((position, path)) = tree.authentication_path(&value) {
-                            // must be the case that value was a witness
-                            assert!(tree_witnesses.iter().any(|&(_, witness)| witness == value));
+                        let mut extended_tree_values = tree_values.clone();
+                        extended_tree_values.resize(1 << DEPTH, H::empty_leaf());
+                        let expected_root = lazy_root::<H>(extended_tree_values);
 
-                            let mut extended_tree_values = tree_values.clone();
-                            extended_tree_values.resize(1 << DEPTH, Hash::empty_leaf());
-                            let expected_root = lazy_root::<Hash>(extended_tree_values);
+                        let tree_root = tree.root();
+                        prop_assert_eq!(&tree_root, &expected_root);
 
-                            let tree_root = tree.root();
-                            assert_eq!(tree_root, expected_root);
-
-                            assert_eq!(
-                                compute_root_from_auth_path::<Hash>(value, position, &path),
-                                expected_root
-                            );
-                        } else {
-                            // must be the case that value wasn't a witness
-                            for &(_, witness) in tree_witnesses.iter() {
-                                assert!(witness != value);
-                            }
+                        prop_assert_eq!(
+                            &compute_root_from_auth_path(value, position, &path),
+                            &expected_root
+                        );
+                    } else {
+                        // must be the case that value wasn't a witness
+                        for (_, witness) in tree_witnesses.iter() {
+                            prop_assert!(witness != &value);
                         }
                     }
                 }
             }
-
-            for (mut other_tree, other_recording) in prevtrees {
-                assert!(other_tree.play(&other_recording));
-                assert_eq!(tree.root(), other_tree.root());
-            }
         }
+
+        for (mut other_tree, other_recording) in prevtrees {
+            prop_assert!(other_tree.play(&other_recording));
+            prop_assert_eq!(tree.root(), other_tree.root());
+        }
+
+        Ok(())
     }
 }
