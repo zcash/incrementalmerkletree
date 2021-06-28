@@ -295,19 +295,23 @@ pub struct Frontier<H, const DEPTH: u8> {
 }
 
 impl<H, const DEPTH: u8> Frontier<H, DEPTH> {
+    /// Construct a new empty frontier.
     pub fn new() -> Self {
         Frontier { frontier: None }
     }
 
+    /// Return the position of latest leaf appended to the frontier,
+    /// if the frontier is nonempty.
     pub fn position(&self) -> Option<Position> {
         self.frontier.as_ref().map(|f| f.position)
     }
 
+    /// Return the amount of memory dynamically allocated for parent
+    /// values within the frontier.
     pub fn dynamic_memory_usage(&self) -> usize {
-        size_of::<Option<NonEmptyFrontier<H>>>()
-            + self.frontier.as_ref().map_or(0, |f| {
-                2 * size_of::<usize>() + f.parents.capacity() * size_of::<H>()
-            })
+        self.frontier.as_ref().map_or(0, |f| {
+            2 * size_of::<usize>() + f.parents.capacity() * size_of::<Parent<H>>()
+        })
     }
 }
 
