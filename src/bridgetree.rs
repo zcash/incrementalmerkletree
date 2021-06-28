@@ -4,6 +4,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::fmt::Debug;
 use std::hash::Hash;
+use std::mem::size_of;
 
 use super::{Altitude, Hashable, Recording, Tree};
 
@@ -294,12 +295,29 @@ pub struct Frontier<H, const DEPTH: u8> {
 }
 
 impl<H, const DEPTH: u8> Frontier<H, DEPTH> {
+    /// Construct a new empty frontier.
     pub fn new() -> Self {
         Frontier { frontier: None }
     }
 
+    /// Return the position of latest leaf appended to the frontier,
+    /// if the frontier is nonempty.
     pub fn position(&self) -> Option<Position> {
         self.frontier.as_ref().map(|f| f.position)
+    }
+
+    /// Return the amount of memory dynamically allocated for parent
+    /// values within the frontier.
+    pub fn dynamic_memory_usage(&self) -> usize {
+        self.frontier.as_ref().map_or(0, |f| {
+            2 * size_of::<usize>() + f.parents.capacity() * size_of::<Parent<H>>()
+        })
+    }
+}
+
+impl<H, const DEPTH: u8> Default for Frontier<H, DEPTH> {
+    fn default() -> Self {
+        Self::new()
     }
 }
 
@@ -1167,8 +1185,8 @@ mod tests {
         t.witness();
         t.append(&"b".to_string());
         t.append(&"c".to_string());
-        assert_eq!(t.rewind(), false);
-        assert_eq!(t.drop_oldest_checkpoint(), true);
+        assert!(!t.rewind());
+        assert!(t.drop_oldest_checkpoint());
     }
 
     #[test]
@@ -1179,7 +1197,7 @@ mod tests {
         t.checkpoint();
         t.append(&"c".to_string());
         t.witness();
-        assert_eq!(t.rewind(), false);
+        assert!(!t.rewind());
 
         let mut t = BridgeTree::<String, 6>::new(100);
         t.append(&"a".to_string());
@@ -1187,7 +1205,7 @@ mod tests {
         t.checkpoint();
         t.witness();
         t.witness();
-        assert_eq!(t.rewind(), true);
+        assert!(t.rewind());
     }
 
     #[test]
