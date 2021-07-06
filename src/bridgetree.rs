@@ -99,6 +99,12 @@ impl From<Position> for usize {
     }
 }
 
+impl From<usize> for Position {
+    fn from(sz: usize) -> Self {
+        Position(sz)
+    }
+}
+
 /// A set of leaves of a Merkle tree.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub enum Leaf<A> {
