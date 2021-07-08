@@ -1,7 +1,7 @@
-/// A space-efficient implementation of the `Tree` interface.
-///
-/// In this module, the term "ommer" is used as a gender-neutral term for
-/// the sibling of a parent node in a binary tree.
+//! A space-efficient implementation of the `Tree` interface.
+//!
+//! In this module, the term "ommer" is used as a gender-neutral term for
+//! the sibling of a parent node in a binary tree.
 use serde::{Deserialize, Serialize};
 
 use std::collections::HashMap;
@@ -28,7 +28,8 @@ impl Position {
     }
 
     /// Returns the altitude of the top of a binary tree containing
-    /// `self + 1` nodes.
+    /// a number of nodes equal to the next power of two greater than 
+    /// or equal to `self + 1`.
     fn max_altitude(&self) -> Altitude {
         Altitude(if self.0 == 0 {
             0
@@ -50,10 +51,15 @@ impl Position {
             })
     }
 
+    /// Returns the number of ommers required to construct an authentication
+    /// path to the root of a merkle tree that has `self + 1` nodes.
     pub fn altitudes_required_count(&self) -> usize {
         self.altitudes_required().count()
     }
 
+    /// Returns the altitude of each cousin and/or ommer required to construct 
+    /// an authentication path to the root of a merkle tree of depth `self + 1` 
+    /// nodes.
     pub fn altitudes_required(&self) -> impl Iterator<Item = Altitude> + '_ {
         (0..=(self.max_altitude() + 1).0)
             .into_iter()
@@ -66,6 +72,9 @@ impl Position {
             })
     }
 
+    /// Returns the altitude of each cousin and/or ommer required to construct 
+    /// an authentication path to the root of a merkle tree containing 2^64
+    /// nodes. 
     pub fn all_altitudes_required(&self) -> impl Iterator<Item = Altitude> + '_ {
         (0..64).into_iter().filter_map(move |i| {
             if self.0 == 0 || self.0 & (1 << i) == 0 {
@@ -76,6 +85,10 @@ impl Position {
         })
     }
 
+    /// Returns whether the binary tree having `self` as the position of the
+    /// rightmost leaf contains a perfect balanced tree of height 
+    /// `to_altitude + 1` that contains the aforesaid leaf, without requiring
+    /// any empty leaves or internal nodes.
     pub fn is_complete(&self, to_altitude: Altitude) -> bool {
         for i in 0..(to_altitude.0) {
             if self.0 & (1 << i) == 0 {
@@ -83,11 +96,6 @@ impl Position {
             }
         }
         true
-    }
-
-    pub fn has_observed(&self, altitude: Altitude, since: Position) -> bool {
-        let altitude_delta = 2usize.pow(altitude.0.into());
-        self.0 - since.0 > altitude_delta
     }
 }
 
@@ -97,14 +105,16 @@ impl From<Position> for usize {
     }
 }
 
-///
+/// A set of leaves of a Merkle tree. 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub enum Leaf<A> {
     Left(A),
     Right(A, A),
 }
 
-///
+/// A `[NonEmptyFrontier]` is a reduced representation of a Merkle tree,
+/// having either one or two leaf values, and then a set of hashes produced
+/// by the reduction of previously appended leaf values. 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct NonEmptyFrontier<H> {
     position: Position,
@@ -113,6 +123,7 @@ pub struct NonEmptyFrontier<H> {
 }
 
 impl<H> NonEmptyFrontier<H> {
+    /// Constructs a new frontier with the specified value at position 0.
     pub fn new(value: H) -> Self {
         NonEmptyFrontier {
             position: Position::zero(),
@@ -121,20 +132,24 @@ impl<H> NonEmptyFrontier<H> {
         }
     }
 
+    /// Returns the altitude of the highest ommer in the frontier.
     pub fn max_altitude(&self) -> Altitude {
         self.position.max_altitude()
     }
 
+    /// Returns the position of the most recently appended leaf.
     pub fn position(&self) -> Position {
         self.position
     }
 
+    /// Returns the number of leaves that have been appended to this frontier.
     pub fn size(&self) -> usize {
         self.position.0 + 1
     }
 }
 
 impl<H: Clone> NonEmptyFrontier<H> {
+    /// Returns the value of the leaf or ommer at the specified altitude.
     pub fn value_at(&self, lvl: Altitude) -> Option<H> {
         if lvl == Altitude::zero() {
             Some(self.leaf_value())
@@ -147,6 +162,7 @@ impl<H: Clone> NonEmptyFrontier<H> {
         }
     }
 
+    /// Returns the value of the most recently appended leaf.
     pub fn leaf_value(&self) -> H {
         match &self.leaf {
             Leaf::Left(v) => v.clone(),
@@ -156,6 +172,10 @@ impl<H: Clone> NonEmptyFrontier<H> {
 }
 
 impl<H: Hashable + Clone> NonEmptyFrontier<H> {
+    /// Appends a new leaf value to the Merkle frontier. If the current leaf subtree
+    /// of two nodes is full (if the current leaf before the append is a `Leaf::Right`)
+    /// then recompute the ommers by hashing together full subtrees until an empty
+    /// ommer slot is found.
     pub fn append(&mut self, value: H) {
         let mut carry = None;
         match &self.leaf {
@@ -198,8 +218,7 @@ impl<H: Hashable + Clone> NonEmptyFrontier<H> {
         self.position.increment()
     }
 
-    /// Generate the root of the Merkle tree by hashing against
-    /// empty branches.
+    /// Generate the root of the Merkle tree by hashing against empty branches.
     pub fn root(&self) -> H {
         Self::inner_root(self.position, &self.leaf, &self.ommers, None)
     }
@@ -369,17 +388,25 @@ impl<H: Hashable + Clone, const DEPTH: u8> crate::Frontier<H> for Frontier<H, DE
     }
 }
 
+/// Each AuthFragment stores part of the authentication path for the leaf at a particular position.
+/// Successive fragments may be concatenated to produce the authentication path up to one less than
+/// the maximum altitude of the Merkle frontier corresponding to the leaf at the specified
+/// position. Then, the authentication path may be completed by hashing any 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AuthFragment<A> {
+    /// The position of the leaf for which this path fragment is being constructed.
     position: Position,
-    /// We track the total number of altitudes collected separately
-    /// from the length of the values vector because the
-    /// values vec may be split across multiple bridges.
+    /// We track the total number of altitudes collected across all fragments constructed for
+    /// the specified position separately from the length of the values vector because the values
+    /// will usually be split across multiple fragments.
     altitudes_observed: usize,
+    /// The subtree roots at altitudes required for the position that have not been included in
+    /// preceding fragments.
     values: Vec<A>,
 }
 
 impl<A> AuthFragment<A> {
+    /// Construct the new empty authenticaiton path fragment for the specified position.
     pub fn new(position: Position) -> Self {
         AuthFragment {
             position,
@@ -388,6 +415,8 @@ impl<A> AuthFragment<A> {
         }
     }
 
+    /// Construct the successor fragment for this fragment to produce a new empty fragment
+    /// for the specified position. 
     pub fn successor(&self) -> Self {
         AuthFragment {
             position: self.position,
