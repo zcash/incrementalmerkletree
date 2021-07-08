@@ -158,6 +158,14 @@ impl<H> NonEmptyFrontier<H> {
     pub fn size(&self) -> usize {
         self.position.0 + 1
     }
+
+    pub fn leaf(&self) -> &Leaf<H> {
+        &self.leaf
+    }
+
+    pub fn ommers(&self) -> &Vec<H> {
+        &self.ommers
+    }
 }
 
 impl<H: Clone> NonEmptyFrontier<H> {
@@ -336,6 +344,12 @@ impl<H, const DEPTH: u8> Frontier<H, DEPTH> {
         } else {
             None
         }
+    }
+
+    /// Return the wrapped NonEmptyFrontier reference, or None if
+    /// the frontier is empty.
+    pub fn value(&self) -> Option<&NonEmptyFrontier<H>> {
+        self.frontier.as_ref()
     }
 
     /// Returns the position of latest leaf appended to the frontier,
