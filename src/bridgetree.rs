@@ -106,7 +106,7 @@ impl From<usize> for Position {
 }
 
 /// A set of leaves of a Merkle tree.
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Leaf<A> {
     Left(A),
     Right(A, A),
@@ -124,7 +124,7 @@ impl<A> Leaf<A> {
 /// A `[NonEmptyFrontier]` is a reduced representation of a Merkle tree,
 /// having either one or two leaf values, and then a set of hashes produced
 /// by the reduction of previously appended leaf values.
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct NonEmptyFrontier<H> {
     position: Position,
     leaf: Leaf<H>,
@@ -329,7 +329,7 @@ impl<H: Hashable + Clone> NonEmptyFrontier<H> {
 
 /// A possibly-empty Merkle frontier. Used when the
 /// full functionality of a Merkle bridge is not necessary.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Frontier<H, const DEPTH: u8> {
     frontier: Option<NonEmptyFrontier<H>>,
 }
