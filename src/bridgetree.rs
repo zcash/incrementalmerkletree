@@ -112,6 +112,15 @@ pub enum Leaf<A> {
     Right(A, A),
 }
 
+impl<A> Leaf<A> {
+    pub fn into_value(self) -> A {
+        match self {
+            Leaf::Left(a) => a,
+            Leaf::Right(_, a) => a,
+        }
+    }
+}
+
 /// A `[NonEmptyFrontier]` is a reduced representation of a Merkle tree,
 /// having either one or two leaf values, and then a set of hashes produced
 /// by the reduction of previously appended leaf values.
