@@ -5,6 +5,7 @@
 use serde::{Deserialize, Serialize};
 
 use std::collections::HashMap;
+use std::convert::TryFrom;
 use std::fmt::Debug;
 use std::hash::Hash;
 use std::mem::size_of;
@@ -121,6 +122,12 @@ impl<A> Leaf<A> {
     }
 }
 
+#[derive(Debug, Clone)]
+pub enum FrontierError {
+    PositionMismatch { expected_ommers: usize },
+    MaxDepthExceeded { altitude: Altitude },
+}
+
 /// A `[NonEmptyFrontier]` is a reduced representation of a Merkle tree,
 /// having either one or two leaf values, and then a set of hashes produced
 /// by the reduction of previously appended leaf values.
@@ -141,15 +148,20 @@ impl<H> NonEmptyFrontier<H> {
         }
     }
 
-    pub fn from_parts(position: Position, leaf: Leaf<H>, ommers: Vec<H>) -> Option<Self> {
-        if position.ommer_altitudes().count() == ommers.len() {
-            Some(NonEmptyFrontier {
+    pub fn from_parts(
+        position: Position,
+        leaf: Leaf<H>,
+        ommers: Vec<H>,
+    ) -> Result<Self, FrontierError> {
+        let expected_ommers = position.ommer_altitudes().count();
+        if expected_ommers == ommers.len() {
+            Ok(NonEmptyFrontier {
                 position,
                 leaf,
                 ommers,
             })
         } else {
-            None
+            Err(FrontierError::PositionMismatch { expected_ommers })
         }
     }
 
@@ -334,6 +346,19 @@ pub struct Frontier<H, const DEPTH: u8> {
     frontier: Option<NonEmptyFrontier<H>>,
 }
 
+impl<H, const DEPTH: u8> TryFrom<NonEmptyFrontier<H>> for Frontier<H, DEPTH> {
+    type Error = FrontierError;
+    fn try_from(f: NonEmptyFrontier<H>) -> Result<Self, FrontierError> {
+        if f.position.max_altitude().0 <= DEPTH {
+            Ok(Frontier { frontier: Some(f) })
+        } else {
+            Err(FrontierError::MaxDepthExceeded {
+                altitude: f.position.max_altitude(),
+            })
+        }
+    }
+}
+
 impl<H, const DEPTH: u8> Frontier<H, DEPTH> {
     /// Constructs a new empty frontier.
     pub fn empty() -> Self {
@@ -345,13 +370,19 @@ impl<H, const DEPTH: u8> Frontier<H, DEPTH> {
     /// Returns `None` if the new frontier would exceed the maximum
     /// allowed depth or if the list of ommers provided is not consistent
     /// with the position of the leaf.
-    pub fn from_parts(position: Position, leaf: Leaf<H>, ommers: Vec<H>) -> Option<Self> {
+    pub fn from_parts(
+        position: Position,
+        leaf: Leaf<H>,
+        ommers: Vec<H>,
+    ) -> Result<Self, FrontierError> {
         if position.max_altitude().0 <= DEPTH {
             NonEmptyFrontier::from_parts(position, leaf, ommers).map(|frontier| Frontier {
                 frontier: Some(frontier),
             })
         } else {
-            None
+            Err(FrontierError::MaxDepthExceeded {
+                altitude: position.max_altitude(),
+            })
         }
     }
 
@@ -1278,18 +1309,17 @@ mod tests {
     #[test]
     fn frontier_from_parts() {
         assert!(
-            super::Frontier::<(), 0>::from_parts(Position::zero(), Leaf::Left(()), vec![])
-                .is_some()
+            super::Frontier::<(), 0>::from_parts(Position::zero(), Leaf::Left(()), vec![]).is_ok()
         );
         assert!(super::Frontier::<(), 0>::from_parts(
             Position::zero(),
             Leaf::Right((), ()),
             vec![]
         )
-        .is_some());
+        .is_ok());
         assert!(
             super::Frontier::<(), 0>::from_parts(Position::zero(), Leaf::Left(()), vec![()])
-                .is_none()
+                .is_err()
         );
     }
 }
