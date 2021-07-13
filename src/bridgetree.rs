@@ -191,9 +191,9 @@ impl<H> NonEmptyFrontier<H> {
 
 impl<H: Clone> NonEmptyFrontier<H> {
     /// Returns the value of the most recently appended leaf.
-    pub fn leaf_value(&self) -> H {
+    pub fn leaf_value(&self) -> &H {
         match &self.leaf {
-            Leaf::Left(v) | Leaf::Right(_, v) => v.clone(),
+            Leaf::Left(v) | Leaf::Right(_, v) => v,
         }
     }
 }
@@ -478,6 +478,18 @@ impl<A> AuthFragment<A> {
         }
     }
 
+    pub fn position(&self) -> Position {
+        self.position
+    }
+
+    pub fn altitudes_observed(&self) -> usize {
+        self.altitudes_observed
+    }
+
+    pub fn values(&self) -> &Vec<A> {
+        &self.values
+    }
+
     pub fn is_complete(&self) -> bool {
         self.altitudes_observed >= self.position.altitudes_required().count()
     }
@@ -530,6 +542,30 @@ pub struct MerkleBridge<H> {
     frontier: NonEmptyFrontier<H>,
 }
 
+impl<H> MerkleBridge<H> {
+    pub fn prior_position(&self) -> Option<Position> {
+        self.prior_position.clone()
+    }
+
+    pub fn auth_fragments(&self) -> &HashMap<usize, AuthFragment<H>> {
+        &self.auth_fragments
+    }
+
+    pub fn frontier(&self) -> &NonEmptyFrontier<H> {
+        &self.frontier
+    }
+
+    pub fn max_altitude(&self) -> Altitude {
+        self.frontier.max_altitude()
+    }
+
+    pub fn can_follow(&self, prev: &Self) -> bool {
+        self.prior_position
+            .iter()
+            .all(|p| *p == prev.frontier.position())
+    }
+}
+
 impl<H: Hashable + Clone + PartialEq> MerkleBridge<H> {
     pub fn new(value: H) -> Self {
         MerkleBridge {
@@ -562,22 +598,12 @@ impl<H: Hashable + Clone + PartialEq> MerkleBridge<H> {
         }
     }
 
-    pub fn max_altitude(&self) -> Altitude {
-        self.frontier.max_altitude()
-    }
-
     pub fn root(&self) -> H {
         self.frontier.root()
     }
 
-    pub fn leaf_value(&self) -> H {
+    pub fn leaf_value(&self) -> &H {
         self.frontier.leaf_value()
-    }
-
-    pub fn can_follow(&self, prev: &Self) -> bool {
-        self.prior_position
-            .iter()
-            .all(|p| *p == prev.frontier.position())
     }
 
     fn fuse(&self, next: &Self) -> Option<MerkleBridge<H>> {
@@ -620,23 +646,25 @@ impl<H: Hashable + Clone + PartialEq> MerkleBridge<H> {
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub enum Checkpoint<H> {
-    /// checpoint of the empty bridge
+    /// Checkpoint of the empty bridge
     Empty,
-    ///
+    /// Checkpoint of a particular bridge state to which it is
+    /// possible to rewind.
     AtIndex(usize, MerkleBridge<H>),
+}
+
+impl<H> Checkpoint<H> {
+    pub fn is_empty(&self) -> bool {
+        matches!(&self, Checkpoint::Empty)
+    }
 }
 
 #[derive(Clone, Serialize, Deserialize)]
 pub struct BridgeTree<H: Hash + Eq, const DEPTH: u8> {
-    /// Version value for the serialized form
-    ser_version: u8,
     /// The ordered list of Merkle bridges representing the history
     /// of the tree. There will be one bridge for each saved leaf, plus
     /// the current bridge to the tip of the tree.
     bridges: Vec<MerkleBridge<H>>,
-    /// The last index of bridges for which no additional elements need
-    /// to be added to the trailing edge
-    incomplete_from: usize,
     /// A map from leaf digests to indices within the `bridges` vector.
     saved: HashMap<H, usize>,
     /// A stack of bridge indices to which it's possible to rewind directly.
@@ -651,21 +679,80 @@ impl<H: Hashable + Hash + Eq + Debug, const DEPTH: u8> Debug for BridgeTree<H, D
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> Result<(), std::fmt::Error> {
         write!(
             f,
-            "BridgeTree {{\n  depth: {:?},\n  bridges: {:?},\n  incomplete_from: {:?},\n  saved: {:?},\n  checkpoints: {:?},\n  max_checkpoints: {:?}\n}}",
-            DEPTH, self.bridges, self.incomplete_from, self.saved, self.checkpoints, self.max_checkpoints
+            "BridgeTree {{\n  depth: {:?},\n  bridges: {:?},\n saved: {:?},\n  checkpoints: {:?},\n  max_checkpoints: {:?}\n}}",
+            DEPTH, self.bridges, self.saved, self.checkpoints, self.max_checkpoints
         )
     }
+}
+
+#[derive(Debug, Clone)]
+pub enum BridgeTreeError {
+    IncorrectIncompleteIndex,
+    InvalidWitnessIndex,
+    InvalidSavePoints,
+    ContinuityError,
+    CheckpointMismatch,
 }
 
 impl<H: Hashable + Hash + Eq + Clone, const DEPTH: u8> BridgeTree<H, DEPTH> {
     pub fn new(max_checkpoints: usize) -> Self {
         BridgeTree {
-            ser_version: 0,
             bridges: vec![],
-            incomplete_from: 0,
             saved: HashMap::new(),
             checkpoints: vec![],
             max_checkpoints,
+        }
+    }
+
+    pub fn from_parts(
+        bridges: Vec<MerkleBridge<H>>,
+        saved: HashMap<H, usize>,
+        checkpoints: Vec<Checkpoint<H>>,
+        max_checkpoints: usize,
+    ) -> Result<Self, BridgeTreeError> {
+        // check that saved values correspond to bridges
+        if saved
+            .iter()
+            .any(|(a, i)| i >= &bridges.len() || bridges[*i].frontier().leaf_value() != a)
+        {
+            Err(BridgeTreeError::InvalidWitnessIndex)
+        } else if bridges.is_empty() {
+            // it's okay to return the empty bridge, but only if there are no saved points
+            // and no non-empty checkpoints
+            if saved.is_empty() && checkpoints.iter().all(|c| c.is_empty()) {
+                let mut result = Self::new(max_checkpoints);
+                for _ in checkpoints.iter() {
+                    // restore the correct number of empty checkpoints.
+                    result.checkpoint()
+                }
+                Ok(result)
+            } else {
+                Err(BridgeTreeError::InvalidSavePoints)
+            }
+        // check continuity of bridge order
+        } else if bridges
+            .iter()
+            .zip(bridges.iter().skip(1))
+            .any(|(prev, next)| !next.can_follow(prev))
+        {
+            Err(BridgeTreeError::ContinuityError)
+        // verify checkpoints to ensure continuity from bridge locations
+        } else if checkpoints.len() > max_checkpoints
+            || checkpoints.iter().any(|c| match c {
+                Checkpoint::Empty => false,
+                Checkpoint::AtIndex(i, b) => {
+                    i == &0 || i >= &bridges.len() || !b.can_follow(&bridges[i - 1])
+                }
+            })
+        {
+            Err(BridgeTreeError::CheckpointMismatch)
+        } else {
+            Ok(BridgeTree {
+                bridges,
+                saved,
+                checkpoints,
+                max_checkpoints,
+            })
         }
     }
 
@@ -678,6 +765,22 @@ impl<H: Hashable + Hash + Eq + Clone, const DEPTH: u8> BridgeTree<H, DEPTH> {
             self.checkpoints.remove(0);
             true
         }
+    }
+
+    pub fn bridges(&self) -> &Vec<MerkleBridge<H>> {
+        &self.bridges
+    }
+
+    pub fn witnessable_leaves(&self) -> &HashMap<H, usize> {
+        &self.saved
+    }
+
+    pub fn checkpoints(&self) -> &Vec<Checkpoint<H>> {
+        &self.checkpoints
+    }
+
+    pub fn max_checkpoints(&self) -> usize {
+        self.max_checkpoints
     }
 }
 
@@ -720,7 +823,7 @@ impl<H: Hashable + Hash + Eq + Clone, const DEPTH: u8> Tree<H> for BridgeTree<H,
     fn witness(&mut self) -> bool {
         let next = self.bridges.last().map(|current| {
             (
-                current.leaf_value(),
+                current.leaf_value().clone(),
                 current.successor(self.bridges.len() - 1),
             )
         });
@@ -867,7 +970,7 @@ impl<H: Hashable + Hash + Eq + Clone, const DEPTH: u8> Tree<H> for BridgeTree<H,
                 } else {
                     self.bridges.truncate(i + 1);
                     self.saved.retain(|_, saved_idx| *saved_idx <= i);
-                    if self.saved.contains_key(&bridge.frontier.leaf_value()) {
+                    if self.saved.contains_key(bridge.frontier.leaf_value()) {
                         // if we've rewound to a witnessed point, then "re-witness"
                         let is_duplicate_frontier =
                             i > 0 && bridge.frontier == self.bridges[i - 1].frontier;
