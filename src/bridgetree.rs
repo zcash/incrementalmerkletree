@@ -694,6 +694,35 @@ pub enum BridgeTreeError {
     CheckpointMismatch,
 }
 
+impl<H: Hash + Eq, const DEPTH: u8> BridgeTree<H, DEPTH> {
+    /// Removes the oldest checkpoint. Returns true if successful and false if
+    /// there are no checkpoints.
+    fn drop_oldest_checkpoint(&mut self) -> bool {
+        if self.checkpoints.is_empty() {
+            false
+        } else {
+            self.checkpoints.remove(0);
+            true
+        }
+    }
+
+    pub fn bridges(&self) -> &Vec<MerkleBridge<H>> {
+        &self.bridges
+    }
+
+    pub fn witnessable_leaves(&self) -> &HashMap<H, usize> {
+        &self.saved
+    }
+
+    pub fn checkpoints(&self) -> &Vec<Checkpoint<H>> {
+        &self.checkpoints
+    }
+
+    pub fn max_checkpoints(&self) -> usize {
+        self.max_checkpoints
+    }
+}
+
 impl<H: Hashable + Hash + Eq + Clone, const DEPTH: u8> BridgeTree<H, DEPTH> {
     pub fn new(max_checkpoints: usize) -> Self {
         BridgeTree {
@@ -754,33 +783,6 @@ impl<H: Hashable + Hash + Eq + Clone, const DEPTH: u8> BridgeTree<H, DEPTH> {
                 max_checkpoints,
             })
         }
-    }
-
-    /// Removes the oldest checkpoint. Returns true if successful and false if
-    /// there are no checkpoints.
-    fn drop_oldest_checkpoint(&mut self) -> bool {
-        if self.checkpoints.is_empty() {
-            false
-        } else {
-            self.checkpoints.remove(0);
-            true
-        }
-    }
-
-    pub fn bridges(&self) -> &Vec<MerkleBridge<H>> {
-        &self.bridges
-    }
-
-    pub fn witnessable_leaves(&self) -> &HashMap<H, usize> {
-        &self.saved
-    }
-
-    pub fn checkpoints(&self) -> &Vec<Checkpoint<H>> {
-        &self.checkpoints
-    }
-
-    pub fn max_checkpoints(&self) -> usize {
-        self.max_checkpoints
     }
 }
 
