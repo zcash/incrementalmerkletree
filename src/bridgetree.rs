@@ -468,6 +468,18 @@ impl<A> AuthFragment<A> {
         }
     }
 
+    /// Construct a fragment from its component parts. This cannot
+    /// not perform any meaningful validation that the provided values
+    /// are valid.
+    pub fn from_parts(position: Position, altitudes_observed: usize, values: Vec<A>) -> Self {
+        assert!(altitudes_observed <= values.len());
+        AuthFragment {
+            position,
+            altitudes_observed,
+            values,
+        }
+    }
+
     /// Construct the successor fragment for this fragment to produce a new empty fragment
     /// for the specified position.
     pub fn successor(&self) -> Self {
@@ -535,14 +547,37 @@ impl<H: Hashable + Clone + PartialEq> AuthFragment<H> {
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct MerkleBridge<H> {
+    /// The position of the final leaf in the frontier of the
+    /// bridge that this bridge is the successor of, or None
+    /// if this is the first bridge in a tree.
     prior_position: Option<Position>,
-    /// fragments of authorization path data for prior bridges,
-    /// keyed by bridge index
+    /// Fragments of authorization path data for prior bridges,
+    /// keyed by bridge index.
     auth_fragments: HashMap<usize, AuthFragment<H>>,
     frontier: NonEmptyFrontier<H>,
 }
 
 impl<H> MerkleBridge<H> {
+    pub fn new(value: H) -> Self {
+        MerkleBridge {
+            prior_position: None,
+            auth_fragments: HashMap::new(),
+            frontier: NonEmptyFrontier::new(value),
+        }
+    }
+
+    pub fn from_parts(
+        prior_position: Option<Position>,
+        auth_fragments: HashMap<usize, AuthFragment<H>>,
+        frontier: NonEmptyFrontier<H>,
+    ) -> Self {
+        MerkleBridge {
+            prior_position,
+            auth_fragments,
+            frontier,
+        }
+    }
+
     pub fn prior_position(&self) -> Option<Position> {
         self.prior_position.clone()
     }
@@ -567,14 +602,6 @@ impl<H> MerkleBridge<H> {
 }
 
 impl<H: Hashable + Clone + PartialEq> MerkleBridge<H> {
-    pub fn new(value: H) -> Self {
-        MerkleBridge {
-            prior_position: None,
-            auth_fragments: HashMap::new(),
-            frontier: NonEmptyFrontier::new(value),
-        }
-    }
-
     pub fn successor(&self, cur_idx: usize) -> Self {
         let result = MerkleBridge {
             prior_position: Some(self.frontier.position()),
