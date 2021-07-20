@@ -152,8 +152,7 @@ impl<H: Clone> NonEmptyFrontier<H> {
     /// Returns the value of the most recently appended leaf.
     pub fn leaf_value(&self) -> H {
         match &self.leaf {
-            Leaf::Left(v) => v.clone(),
-            Leaf::Right(_, v) => v.clone(),
+            Leaf::Left(v) | Leaf::Right(_, v) => v.clone(),
         }
     }
 }
