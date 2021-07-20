@@ -149,19 +149,6 @@ impl<H> NonEmptyFrontier<H> {
 }
 
 impl<H: Clone> NonEmptyFrontier<H> {
-    /// Returns the value of the leaf or ommer at the specified altitude.
-    pub fn value_at(&self, lvl: Altitude) -> Option<H> {
-        if lvl == Altitude::zero() {
-            Some(self.leaf_value())
-        } else {
-            self.ommers
-                .iter()
-                .zip(self.position.ommer_altitudes())
-                .find(|(_, l)| *l == lvl)
-                .map(|(p, _)| p.clone())
-        }
-    }
-
     /// Returns the value of the most recently appended leaf.
     pub fn leaf_value(&self) -> H {
         match &self.leaf {
