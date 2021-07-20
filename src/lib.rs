@@ -40,7 +40,7 @@ use std::ops::Sub;
 pub struct Altitude(u8);
 
 impl Altitude {
-    /// Convenience method for returning the zero altitude
+    /// Convenience method for returning the zero altitude.
     pub fn zero() -> Self {
         Altitude(0)
     }

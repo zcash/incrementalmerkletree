@@ -38,7 +38,7 @@ impl Position {
         })
     }
 
-    /// Returns the altitude of each populated ommer
+    /// Returns the altitude of each populated ommer.
     pub fn ommer_altitudes(&self) -> impl Iterator<Item = Altitude> + '_ {
         (0..=self.max_altitude().0)
             .into_iter()
@@ -58,7 +58,7 @@ impl Position {
     }
 
     /// Returns the altitude of each cousin and/or ommer required to construct 
-    /// an authentication path to the root of a merkle tree of depth `self + 1` 
+    /// an authentication path to the root of a merkle tree that has `self + 1` 
     /// nodes.
     pub fn altitudes_required(&self) -> impl Iterator<Item = Altitude> + '_ {
         (0..=(self.max_altitude() + 1).0)
@@ -316,7 +316,7 @@ impl<H, const DEPTH: u8> Frontier<H, DEPTH> {
     /// Returns `None` if the provided frontier exceeds the maximum
     /// allowed depth.
     pub fn new(frontier: NonEmptyFrontier<H>) -> Option<Self> {
-        if frontier.size() >= 1 << DEPTH {
+        if frontier.size() > 1 << DEPTH {
             None
         } else {
             Some(Frontier {
@@ -392,7 +392,7 @@ pub struct AuthFragment<A> {
 }
 
 impl<A> AuthFragment<A> {
-    /// Construct the new empty authenticaiton path fragment for the specified position.
+    /// Construct the new empty authentication path fragment for the specified position.
     pub fn new(position: Position) -> Self {
         AuthFragment {
             position,
