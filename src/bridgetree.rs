@@ -377,7 +377,7 @@ impl<H: Hashable + Clone, const DEPTH: u8> crate::Frontier<H> for Frontier<H, DE
 /// Each AuthFragment stores part of the authentication path for the leaf at a particular position.
 /// Successive fragments may be concatenated to produce the authentication path up to one less than
 /// the maximum altitude of the Merkle frontier corresponding to the leaf at the specified
-/// position. Then, the authentication path may be completed by hashing any 
+/// position. Then, the authentication path may be completed by hashing with empty roots.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AuthFragment<A> {
     /// The position of the leaf for which this path fragment is being constructed.
@@ -424,7 +424,7 @@ impl<A> AuthFragment<A> {
 
 impl<A: Clone> AuthFragment<A> {
     pub fn fuse(&self, other: &Self) -> Option<Self> {
-        if self.position == other.position {
+        if self.position == other.position && self.altitudes_observed + other.values.len() == other.altitudes_observed {
             Some(AuthFragment {
                 position: self.position,
                 altitudes_observed: other.altitudes_observed,
