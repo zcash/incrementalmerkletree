@@ -10,101 +10,7 @@ use std::fmt::Debug;
 use std::hash::Hash;
 use std::mem::size_of;
 
-use super::{Altitude, Hashable, Recording, Tree};
-
-/// A type representing the position of a leaf in a Merkle tree.
-#[derive(Copy, Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
-#[repr(transparent)]
-pub struct Position(usize);
-
-impl Position {
-    /// Returns the position of the first leaf in the tree.
-    pub fn zero() -> Self {
-        Position(0)
-    }
-
-    /// Mutably increment the position value.
-    pub fn increment(&mut self) {
-        self.0 += 1
-    }
-
-    /// Returns the altitude of the top of a binary tree containing
-    /// a number of nodes equal to the next power of two greater than
-    /// or equal to `self + 1`.
-    fn max_altitude(&self) -> Altitude {
-        Altitude(if self.0 == 0 {
-            0
-        } else {
-            63 - self.0.leading_zeros() as u8
-        })
-    }
-
-    /// Returns the altitude of each populated ommer.
-    pub fn ommer_altitudes(&self) -> impl Iterator<Item = Altitude> + '_ {
-        (0..=self.max_altitude().0)
-            .into_iter()
-            .filter_map(move |i| {
-                if i != 0 && self.0 & (1 << i) != 0 {
-                    Some(Altitude(i))
-                } else {
-                    None
-                }
-            })
-    }
-
-    /// Returns the altitude of each cousin and/or ommer required to construct
-    /// an authentication path to the root of a merkle tree that has `self + 1`
-    /// nodes.
-    pub fn altitudes_required(&self) -> impl Iterator<Item = Altitude> + '_ {
-        (0..=self.max_altitude().0)
-            .into_iter()
-            .filter_map(move |i| {
-                if self.0 == 0 || self.0 & (1 << i) == 0 {
-                    Some(Altitude(i))
-                } else {
-                    None
-                }
-            })
-    }
-
-    /// Returns the altitude of each cousin and/or ommer required to construct
-    /// an authentication path to the root of a merkle tree containing 2^64
-    /// nodes.
-    pub fn all_altitudes_required(&self) -> impl Iterator<Item = Altitude> + '_ {
-        (0..64).into_iter().filter_map(move |i| {
-            if self.0 == 0 || self.0 & (1 << i) == 0 {
-                Some(Altitude(i))
-            } else {
-                None
-            }
-        })
-    }
-
-    /// Returns whether the binary tree having `self` as the position of the
-    /// rightmost leaf contains a perfect balanced tree of height
-    /// `to_altitude + 1` that contains the aforesaid leaf, without requiring
-    /// any empty leaves or internal nodes.
-    pub fn is_complete(&self, to_altitude: Altitude) -> bool {
-        for i in 0..(to_altitude.0) {
-            if self.0 & (1 << i) == 0 {
-                return false;
-            }
-        }
-        true
-    }
-}
-
-impl From<Position> for usize {
-    fn from(p: Position) -> usize {
-        p.0
-    }
-}
-
-impl From<usize> for Position {
-    fn from(sz: usize) -> Self {
-        Position(sz)
-    }
-}
+use super::{Altitude, Hashable, Position, Recording, Tree};
 
 /// A set of leaves of a Merkle tree.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -177,7 +83,7 @@ impl<H> NonEmptyFrontier<H> {
 
     /// Returns the number of leaves that have been appended to this frontier.
     pub fn size(&self) -> usize {
-        self.position.0 + 1
+        <usize>::try_from(self.position).expect("The number of leaves must not exceed the representable range of a `usize`") + 1
     }
 
     pub fn leaf(&self) -> &Leaf<H> {
@@ -888,7 +794,7 @@ impl<H: Hashable + Hash + Eq + Clone, const DEPTH: u8> Tree<H> for BridgeTree<H,
     /// Obtains an authentication path to the value specified in the tree.
     /// Returns `None` if there is no available authentication path to the
     /// specified value.
-    fn authentication_path(&self, value: &H) -> Option<(usize, Vec<H>)> {
+    fn authentication_path(&self, value: &H) -> Option<(Position, Vec<H>)> {
         self.saved.get(value).and_then(|idx| {
             let frontier = &self.bridges[*idx].frontier;
 
@@ -944,7 +850,7 @@ impl<H: Hashable + Hash + Eq + Clone, const DEPTH: u8> Tree<H> for BridgeTree<H,
                     );
                 }
 
-                (frontier.position().0, result)
+                (frontier.position(), result)
             })
         })
     }
@@ -1149,7 +1055,7 @@ mod tests {
         assert_eq!(
             tree.authentication_path(&"a".to_string()),
             Some((
-                0,
+                Position::zero(),
                 vec![
                     "_".to_string(),
                     "__".to_string(),
@@ -1163,7 +1069,7 @@ mod tests {
         assert_eq!(
             tree.authentication_path(&"a".to_string()),
             Some((
-                0,
+                Position::zero(),
                 vec![
                     "b".to_string(),
                     "__".to_string(),
@@ -1178,7 +1084,7 @@ mod tests {
         assert_eq!(
             tree.authentication_path(&"c".to_string()),
             Some((
-                2,
+                <Position>::from(2),
                 vec![
                     "_".to_string(),
                     "ab".to_string(),
@@ -1192,7 +1098,7 @@ mod tests {
         assert_eq!(
             tree.authentication_path(&"c".to_string()),
             Some((
-                2,
+                <Position>::from(2),
                 vec![
                     "d".to_string(),
                     "ab".to_string(),
@@ -1206,7 +1112,7 @@ mod tests {
         assert_eq!(
             tree.authentication_path(&"c".to_string()),
             Some((
-                2,
+                <Position>::from(2),
                 vec![
                     "d".to_string(),
                     "ab".to_string(),
@@ -1228,7 +1134,7 @@ mod tests {
         assert_eq!(
             tree.authentication_path(&"a".to_string()),
             Some((
-                0,
+                Position::zero(),
                 vec![
                     "b".to_string(),
                     "cd".to_string(),
@@ -1254,7 +1160,7 @@ mod tests {
         assert_eq!(
             tree.authentication_path(&"f".to_string()),
             Some((
-                5,
+                <Position>::from(5),
                 vec![
                     "e".to_string(),
                     "g_".to_string(),
@@ -1274,7 +1180,7 @@ mod tests {
         assert_eq!(
             tree.authentication_path(&"k".to_string()),
             Some((
-                10,
+                <Position>::from(10),
                 vec![
                     "l".to_string(),
                     "ij".to_string(),
@@ -1300,7 +1206,7 @@ mod tests {
         assert_eq!(
             tree.authentication_path(&"a".to_string()),
             Some((
-                0,
+                Position::zero(),
                 vec![
                     "b".to_string(),
                     "cd".to_string(),
@@ -1323,7 +1229,7 @@ mod tests {
         assert_eq!(
             tree.authentication_path(&"a".to_string()),
             Some((
-                0,
+                Position::zero(),
                 vec![
                     "a".to_string(),
                     "__".to_string(),
@@ -1350,7 +1256,7 @@ mod tests {
         assert_eq!(
             tree.authentication_path(&"c".to_string()),
             Some((
-                2,
+                <Position>::from(2),
                 vec![
                     "d".to_string(),
                     "ab".to_string(),
@@ -1373,7 +1279,7 @@ mod tests {
         assert_eq!(
             tree.authentication_path(&"m".to_string()),
             Some((
-                12,
+                <Position>::from(12),
                 vec![
                     "n".to_string(),
                     "op".to_string(),
@@ -1396,7 +1302,7 @@ mod tests {
         assert_eq!(
             Operation::apply_all(&ops, &mut tree),
             Some((
-                11,
+                <Position>::from(11),
                 vec![
                     "k".to_string(),
                     "ij".to_string(),

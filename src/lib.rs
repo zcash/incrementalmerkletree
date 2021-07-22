@@ -28,6 +28,7 @@ pub mod bridgetree;
 mod sample;
 
 use serde::{Deserialize, Serialize};
+use std::convert::TryFrom;
 use std::ops::Add;
 use std::ops::Sub;
 
@@ -86,6 +87,107 @@ impl From<Altitude> for usize {
     }
 }
 
+/// A type representing the position of a leaf in a Merkle tree.
+#[derive(Copy, Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[repr(transparent)]
+pub struct Position(u64);
+
+impl Position {
+    /// Returns the position of the first leaf in the tree.
+    pub fn zero() -> Self {
+        Position(0)
+    }
+
+    /// Mutably increment the position value.
+    pub fn increment(&mut self) {
+        self.0 += 1
+    }
+
+    /// Returns the altitude of the top of a binary tree containing
+    /// a number of nodes equal to the next power of two greater than
+    /// or equal to `self + 1`.
+    fn max_altitude(&self) -> Altitude {
+        Altitude(if self.0 == 0 {
+            0
+        } else {
+            63 - self.0.leading_zeros() as u8
+        })
+    }
+
+    /// Returns the altitude of each populated ommer.
+    pub fn ommer_altitudes(&self) -> impl Iterator<Item = Altitude> + '_ {
+        (0..=self.max_altitude().0)
+            .into_iter()
+            .filter_map(move |i| {
+                if i != 0 && self.0 & (1 << i) != 0 {
+                    Some(Altitude(i))
+                } else {
+                    None
+                }
+            })
+    }
+
+    /// Returns the altitude of each cousin and/or ommer required to construct
+    /// an authentication path to the root of a merkle tree that has `self + 1`
+    /// nodes.
+    pub fn altitudes_required(&self) -> impl Iterator<Item = Altitude> + '_ {
+        (0..=self.max_altitude().0)
+            .into_iter()
+            .filter_map(move |i| {
+                if self.0 == 0 || self.0 & (1 << i) == 0 {
+                    Some(Altitude(i))
+                } else {
+                    None
+                }
+            })
+    }
+
+    /// Returns the altitude of each cousin and/or ommer required to construct
+    /// an authentication path to the root of a merkle tree containing 2^64
+    /// nodes.
+    pub fn all_altitudes_required(&self) -> impl Iterator<Item = Altitude> + '_ {
+        (0..64).into_iter().filter_map(move |i| {
+            if self.0 == 0 || self.0 & (1 << i) == 0 {
+                Some(Altitude(i))
+            } else {
+                None
+            }
+        })
+    }
+
+    /// Returns whether the binary tree having `self` as the position of the
+    /// rightmost leaf contains a perfect balanced tree of height
+    /// `to_altitude + 1` that contains the aforesaid leaf, without requiring
+    /// any empty leaves or internal nodes.
+    pub fn is_complete(&self, to_altitude: Altitude) -> bool {
+        for i in 0..(to_altitude.0) {
+            if self.0 & (1 << i) == 0 {
+                return false;
+            }
+        }
+        true
+    }
+}
+
+impl TryFrom<Position> for usize {
+    type Error = std::num::TryFromIntError;
+    fn try_from(p: Position) -> Result<usize, Self::Error> {
+        <usize>::try_from(p.0)
+    }
+}
+
+impl From<Position> for u64 {
+    fn from(p: Position) -> Self {
+        p.0
+    }
+}
+
+impl From<usize> for Position {
+    fn from(sz: usize) -> Self {
+        Position(sz as u64)
+    }
+}
+
 /// A trait describing the operations that make a value  suitable for inclusion in
 /// an incremental merkle tree.
 pub trait Hashable: Sized {
@@ -126,7 +228,7 @@ pub trait Tree<H>: Frontier<H> {
     /// Obtains an authentication path to the value specified in the tree.
     /// Returns `None` if there is no available authentication path to the
     /// specified value.
-    fn authentication_path(&self, value: &H) -> Option<(usize, Vec<H>)>;
+    fn authentication_path(&self, value: &H) -> Option<(Position, Vec<H>)>;
 
     /// Marks the specified tree state value as a value we're no longer
     /// interested in maintaining a witness for. Returns true if successful and
@@ -168,13 +270,14 @@ pub trait Recording<H> {
 #[cfg(test)]
 pub(crate) mod tests {
     #![allow(deprecated)]
+    use std::convert::TryFrom;
     use std::hash::Hash;
     use std::hash::Hasher;
     use std::hash::SipHasher;
 
     use super::bridgetree::{BridgeRecording, BridgeTree};
     use super::sample::{lazy_root, CompleteRecording, CompleteTree};
-    use super::{Altitude, Frontier, Hashable, Recording, Tree};
+    use super::{Altitude, Frontier, Hashable, Position, Recording, Tree};
 
     #[derive(Clone)]
     pub struct CombinedTree<H: Hashable + Hash + Eq, const DEPTH: u8> {
@@ -227,7 +330,7 @@ pub(crate) mod tests {
         /// Obtains an authentication path to the value specified in the tree.
         /// Returns `None` if there is no available authentication path to the
         /// specified value.
-        fn authentication_path(&self, value: &H) -> Option<(usize, Vec<H>)> {
+        fn authentication_path(&self, value: &H) -> Option<(Position, Vec<H>)> {
             let a = self.inefficient.authentication_path(value);
             let b = self.efficient.authentication_path(value);
             assert_eq!(a, b);
@@ -342,7 +445,7 @@ pub(crate) mod tests {
     use Operation::*;
 
     impl<H: Hashable + Hash + Eq> Operation<H> {
-        pub fn apply<T: Tree<H>>(&self, tree: &mut T) -> Option<(usize, Vec<H>)> {
+        pub fn apply<T: Tree<H>>(&self, tree: &mut T) -> Option<(Position, Vec<H>)> {
             match self {
                 Append(a) => {
                     assert!(tree.append(a), "append failed");
@@ -371,7 +474,7 @@ pub(crate) mod tests {
         pub fn apply_all<T: Tree<H>>(
             ops: &[Operation<H>],
             tree: &mut T,
-        ) -> Option<(usize, Vec<H>)> {
+        ) -> Option<(Position, Vec<H>)> {
             let mut result = None;
             for op in ops {
                 result = op.apply(tree);
@@ -382,7 +485,7 @@ pub(crate) mod tests {
 
     pub(crate) fn compute_root_from_auth_path<H: Hashable>(
         value: H,
-        position: usize,
+        position: Position,
         path: &[H],
     ) -> H {
         let mut cur = value;
@@ -390,7 +493,7 @@ pub(crate) mod tests {
         for (i, v) in path
             .iter()
             .enumerate()
-            .map(|(i, v)| (((position >> i) & 1) == 1, v))
+            .map(|(i, v)| (((<usize>::try_from(position).unwrap() >> i) & 1) == 1, v))
         {
             if i {
                 cur = H::combine(lvl, v, &cur);
@@ -421,7 +524,7 @@ pub(crate) mod tests {
         assert_eq!(
             compute_root_from_auth_path::<SipHashable>(
                 SipHashable(0),
-                0,
+                Position::zero(),
                 &[
                     SipHashable(1),
                     SipHashable::combine(Altitude::zero(), &SipHashable(2), &SipHashable(3)),
@@ -438,7 +541,7 @@ pub(crate) mod tests {
         assert_eq!(
             compute_root_from_auth_path(
                 SipHashable(4),
-                4,
+                <Position>::from(4),
                 &[
                     SipHashable(5),
                     SipHashable::combine(Altitude::zero(), &SipHashable(6), &SipHashable(7)),
