@@ -51,12 +51,6 @@ impl Position {
             })
     }
 
-    /// Returns the number of ommers required to construct an authentication
-    /// path to the root of a merkle tree that has `self + 1` nodes.
-    pub fn altitudes_required_count(&self) -> usize {
-        self.altitudes_required().count()
-    }
-
     /// Returns the altitude of each cousin and/or ommer required to construct
     /// an authentication path to the root of a merkle tree that has `self + 1`
     /// nodes.
@@ -132,6 +126,18 @@ impl<H> NonEmptyFrontier<H> {
         }
     }
 
+    pub fn from_parts(position: Position, leaf: Leaf<H>, ommers: Vec<H>) -> Option<Self> {
+        if position.ommer_altitudes().count() == ommers.len() {
+            Some(NonEmptyFrontier {
+                position,
+                leaf,
+                ommers,
+            })
+        } else {
+            None
+        }
+    }
+
     /// Returns the altitude of the highest ommer in the frontier.
     pub fn max_altitude(&self) -> Altitude {
         self.position.max_altitude()
@@ -175,7 +181,7 @@ impl<H: Hashable + Clone> NonEmptyFrontier<H> {
         };
 
         if carry.is_some() {
-            let mut new_ommers = Vec::with_capacity(self.position.altitudes_required_count() - 1);
+            let mut new_ommers = Vec::with_capacity(self.position.altitudes_required().count());
             for (ommer, ommer_lvl) in self.ommers.iter().zip(self.position.ommer_altitudes()) {
                 if let Some((carry_ommer, carry_lvl)) = carry.as_ref() {
                     if *carry_lvl == ommer_lvl {
@@ -311,17 +317,18 @@ impl<H, const DEPTH: u8> Frontier<H, DEPTH> {
         Frontier { frontier: None }
     }
 
-    /// Constructs a new frontier from a `[NonEmptyFrontier]`
+    /// Constructs a new non-empty frontier from is constituent parts.
     ///
-    /// Returns `None` if the provided frontier exceeds the maximum
-    /// allowed depth.
-    pub fn new(frontier: NonEmptyFrontier<H>) -> Option<Self> {
-        if frontier.size() > 1 << DEPTH {
-            None
-        } else {
-            Some(Frontier {
+    /// Returns `None` if the new frontier would exceed the maximum
+    /// allowed depth or if the list of ommers provided is not consistent
+    /// with the position of the leaf.
+    pub fn from_parts(position: Position, leaf: Leaf<H>, ommers: Vec<H>) -> Option<Self> {
+        if position.max_altitude().0 <= DEPTH {
+            NonEmptyFrontier::from_parts(position, leaf, ommers).map(|frontier| Frontier {
                 frontier: Some(frontier),
             })
+        } else {
+            None
         }
     }
 
@@ -412,7 +419,7 @@ impl<A> AuthFragment<A> {
     }
 
     pub fn is_complete(&self) -> bool {
-        self.altitudes_observed >= self.position.altitudes_required_count()
+        self.altitudes_observed >= self.position.altitudes_required().count()
     }
 
     pub fn next_required_altitude(&self) -> Option<Altitude> {
@@ -1237,5 +1244,23 @@ mod tests {
         t.witness();
         t.witness();
         assert!(t.rewind());
+    }
+
+    #[test]
+    fn frontier_from_parts() {
+        assert!(
+            super::Frontier::<(), 0>::from_parts(Position::zero(), Leaf::Left(()), vec![])
+                .is_some()
+        );
+        assert!(super::Frontier::<(), 0>::from_parts(
+            Position::zero(),
+            Leaf::Right((), ()),
+            vec![]
+        )
+        .is_some());
+        assert!(
+            super::Frontier::<(), 0>::from_parts(Position::zero(), Leaf::Left(()), vec![()])
+                .is_none()
+        );
     }
 }
