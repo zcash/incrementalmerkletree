@@ -61,7 +61,7 @@ impl Position {
     /// an authentication path to the root of a merkle tree that has `self + 1`
     /// nodes.
     pub fn altitudes_required(&self) -> impl Iterator<Item = Altitude> + '_ {
-        (0..=(self.max_altitude() + 1).0)
+        (0..=self.max_altitude().0)
             .into_iter()
             .filter_map(move |i| {
                 if self.0 == 0 || self.0 & (1 << i) == 0 {
