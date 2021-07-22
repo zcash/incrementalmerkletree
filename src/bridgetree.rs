@@ -1,4 +1,7 @@
-/// A space-efficient implementation of the `Tree` interface.
+//! A space-efficient implementation of the `Tree` interface.
+//!
+//! In this module, the term "ommer" is used as a gender-neutral term for
+//! the sibling of a parent node in a binary tree.
 use serde::{Deserialize, Serialize};
 
 use std::collections::HashMap;
@@ -8,20 +11,26 @@ use std::mem::size_of;
 
 use super::{Altitude, Hashable, Recording, Tree};
 
+/// A type representing the position of a leaf in a Merkle tree.
 #[derive(Copy, Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 #[repr(transparent)]
 pub struct Position(usize);
 
 impl Position {
+    /// Returns the position of the first leaf in the tree.
     pub fn zero() -> Self {
         Position(0)
     }
 
+    /// Mutably increment the position value.
     pub fn increment(&mut self) {
         self.0 += 1
     }
 
-    fn max_level(&self) -> Altitude {
+    /// Returns the altitude of the top of a binary tree containing
+    /// a number of nodes equal to the next power of two greater than 
+    /// or equal to `self + 1`.
+    fn max_altitude(&self) -> Altitude {
         Altitude(if self.0 == 0 {
             0
         } else {
@@ -29,22 +38,30 @@ impl Position {
         })
     }
 
-    pub fn parent_levels(&self) -> impl Iterator<Item = Altitude> + '_ {
-        (0..=self.max_level().0).into_iter().filter_map(move |i| {
-            if i != 0 && self.0 & (1 << i) != 0 {
-                Some(Altitude(i))
-            } else {
-                None
-            }
-        })
+    /// Returns the altitude of each populated ommer.
+    pub fn ommer_altitudes(&self) -> impl Iterator<Item = Altitude> + '_ {
+        (0..=self.max_altitude().0)
+            .into_iter()
+            .filter_map(move |i| {
+                if i != 0 && self.0 & (1 << i) != 0 {
+                    Some(Altitude(i))
+                } else {
+                    None
+                }
+            })
     }
 
-    pub fn levels_required_count(&self) -> usize {
-        self.levels_required().count()
+    /// Returns the number of ommers required to construct an authentication
+    /// path to the root of a merkle tree that has `self + 1` nodes.
+    pub fn altitudes_required_count(&self) -> usize {
+        self.altitudes_required().count()
     }
 
-    pub fn levels_required(&self) -> impl Iterator<Item = Altitude> + '_ {
-        (0..=(self.max_level() + 1).0)
+    /// Returns the altitude of each cousin and/or ommer required to construct 
+    /// an authentication path to the root of a merkle tree that has `self + 1` 
+    /// nodes.
+    pub fn altitudes_required(&self) -> impl Iterator<Item = Altitude> + '_ {
+        (0..=(self.max_altitude() + 1).0)
             .into_iter()
             .filter_map(move |i| {
                 if self.0 == 0 || self.0 & (1 << i) == 0 {
@@ -55,7 +72,10 @@ impl Position {
             })
     }
 
-    pub fn all_levels_required(&self) -> impl Iterator<Item = Altitude> + '_ {
+    /// Returns the altitude of each cousin and/or ommer required to construct 
+    /// an authentication path to the root of a merkle tree containing 2^64
+    /// nodes. 
+    pub fn all_altitudes_required(&self) -> impl Iterator<Item = Altitude> + '_ {
         (0..64).into_iter().filter_map(move |i| {
             if self.0 == 0 || self.0 & (1 << i) == 0 {
                 Some(Altitude(i))
@@ -65,18 +85,17 @@ impl Position {
         })
     }
 
-    pub fn is_complete(&self, to_level: Altitude) -> bool {
-        for i in 0..(to_level.0) {
+    /// Returns whether the binary tree having `self` as the position of the
+    /// rightmost leaf contains a perfect balanced tree of height 
+    /// `to_altitude + 1` that contains the aforesaid leaf, without requiring
+    /// any empty leaves or internal nodes.
+    pub fn is_complete(&self, to_altitude: Altitude) -> bool {
+        for i in 0..(to_altitude.0) {
             if self.0 & (1 << i) == 0 {
                 return false;
             }
         }
         true
-    }
-
-    pub fn has_observed(&self, level: Altitude, since: Position) -> bool {
-        let level_delta = 2usize.pow(level.0.into());
-        self.0 - since.0 > level_delta
     }
 }
 
@@ -86,33 +105,63 @@ impl From<Position> for usize {
     }
 }
 
+/// A set of leaves of a Merkle tree. 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub enum Leaf<A> {
     Left(A),
     Right(A, A),
 }
 
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
-pub struct Parent<A> {
-    value: A,
-}
-
+/// A `[NonEmptyFrontier]` is a reduced representation of a Merkle tree,
+/// having either one or two leaf values, and then a set of hashes produced
+/// by the reduction of previously appended leaf values. 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct NonEmptyFrontier<H> {
     position: Position,
     leaf: Leaf<H>,
-    parents: Vec<Parent<H>>,
+    ommers: Vec<H>,
 }
 
-impl<H: Hashable + Clone> NonEmptyFrontier<H> {
+impl<H> NonEmptyFrontier<H> {
+    /// Constructs a new frontier with the specified value at position 0.
     pub fn new(value: H) -> Self {
         NonEmptyFrontier {
             position: Position::zero(),
             leaf: Leaf::Left(value),
-            parents: vec![],
+            ommers: vec![],
         }
     }
 
+    /// Returns the altitude of the highest ommer in the frontier.
+    pub fn max_altitude(&self) -> Altitude {
+        self.position.max_altitude()
+    }
+
+    /// Returns the position of the most recently appended leaf.
+    pub fn position(&self) -> Position {
+        self.position
+    }
+
+    /// Returns the number of leaves that have been appended to this frontier.
+    pub fn size(&self) -> usize {
+        self.position.0 + 1
+    }
+}
+
+impl<H: Clone> NonEmptyFrontier<H> {
+    /// Returns the value of the most recently appended leaf.
+    pub fn leaf_value(&self) -> H {
+        match &self.leaf {
+            Leaf::Left(v) | Leaf::Right(_, v) => v.clone(),
+        }
+    }
+}
+
+impl<H: Hashable + Clone> NonEmptyFrontier<H> {
+    /// Appends a new leaf value to the Merkle frontier. If the current leaf subtree
+    /// of two nodes is full (if the current leaf before the append is a `Leaf::Right`)
+    /// then recompute the ommers by hashing together full subtrees until an empty
+    /// ommer slot is found.
     pub fn append(&mut self, value: H) {
         let mut carry = None;
         match &self.leaf {
@@ -120,73 +169,62 @@ impl<H: Hashable + Clone> NonEmptyFrontier<H> {
                 self.leaf = Leaf::Right(a.clone(), value);
             }
             Leaf::Right(a, b) => {
-                carry = Some((
-                    Parent {
-                        value: H::combine(Altitude::zero(), &a, &b),
-                    },
-                    Altitude::one(),
-                ));
+                carry = Some((H::combine(Altitude::zero(), &a, &b), Altitude::one()));
                 self.leaf = Leaf::Left(value);
             }
         };
 
         if carry.is_some() {
-            let mut new_parents = Vec::with_capacity(self.position.levels_required_count() - 1);
-            for (parent, parent_lvl) in self.parents.iter().zip(self.position.parent_levels()) {
-                if let Some((carry_parent, carry_lvl)) = carry.as_ref() {
-                    if *carry_lvl == parent_lvl {
-                        carry = Some((
-                            Parent {
-                                value: H::combine(parent_lvl, &parent.value, &carry_parent.value),
-                            },
-                            parent_lvl + 1,
-                        ))
+            let mut new_ommers = Vec::with_capacity(self.position.altitudes_required_count() - 1);
+            for (ommer, ommer_lvl) in self.ommers.iter().zip(self.position.ommer_altitudes()) {
+                if let Some((carry_ommer, carry_lvl)) = carry.as_ref() {
+                    if *carry_lvl == ommer_lvl {
+                        carry = Some((H::combine(ommer_lvl, &ommer, &carry_ommer), ommer_lvl + 1))
                     } else {
                         // insert the carry at the first empty slot; then the rest of the
-                        // parents will remain unchanged
-                        new_parents.push(carry_parent.clone());
-                        new_parents.push(parent.clone());
+                        // ommers will remain unchanged
+                        new_ommers.push(carry_ommer.clone());
+                        new_ommers.push(ommer.clone());
                         carry = None;
                     }
                 } else {
-                    // when there's no carry, just push on the parent value
-                    new_parents.push(parent.clone());
+                    // when there's no carry, just push on the ommer value
+                    new_ommers.push(ommer.clone());
                 }
             }
 
-            // we carried value out, so we need to push on one more parent.
-            if let Some((carry_parent, _)) = carry {
-                new_parents.push(carry_parent);
+            // we carried value out, so we need to push on one more ommer.
+            if let Some((carry_ommer, _)) = carry {
+                new_ommers.push(carry_ommer);
             }
 
-            self.parents = new_parents;
+            self.ommers = new_ommers;
         }
 
         self.position.increment()
     }
 
-    /// Generate the root of the Merkle tree by hashing against
-    /// empty branches.
+    /// Generate the root of the Merkle tree by hashing against empty branches.
     pub fn root(&self) -> H {
-        Self::inner_root(self.position, &self.leaf, &self.parents, None)
+        Self::inner_root(self.position, &self.leaf, &self.ommers, None)
     }
 
-    /// If the tree is full to the specified level, return the data
-    /// required to witness a sibling at that level.
-    pub fn witness(&self, sibling_level: Altitude) -> Option<H> {
-        if sibling_level == Altitude::zero() {
+    /// If the tree is full to the specified altitude, return the data
+    /// required to witness a sibling at that altitude.
+    pub fn witness(&self, sibling_altitude: Altitude) -> Option<H> {
+        if sibling_altitude == Altitude::zero() {
             match &self.leaf {
                 Leaf::Left(_) => None,
                 Leaf::Right(_, a) => Some(a.clone()),
             }
-        } else if self.position.is_complete(sibling_level) {
+        } else if self.position.is_complete(sibling_altitude) {
             // the "incomplete" subtree root is actually complete
-            // if the tree is full to this level
+            // if the tree is full to this altitude
             Some(Self::inner_root(
                 self.position,
                 &self.leaf,
-                self.parents.split_last().map_or(&[], |(_, s)| s),
-                Some(sibling_level),
+                self.ommers.split_last().map_or(&[], |(_, s)| s),
+                Some(sibling_altitude),
             ))
         } else {
             None
@@ -195,20 +233,20 @@ impl<H: Hashable + Clone> NonEmptyFrontier<H> {
 
     /// If the tree is not full, generate the root of the incomplete subtree
     /// by hashing with empty branches
-    pub fn witness_incomplete(&self, level: Altitude) -> Option<H> {
-        if self.position.is_complete(level) {
-            // if the tree is complete to this level, its hash should
+    pub fn witness_incomplete(&self, altitude: Altitude) -> Option<H> {
+        if self.position.is_complete(altitude) {
+            // if the tree is complete to this altitude, its hash should
             // have already been included in an auth fragment.
             None
         } else {
-            Some(if level == Altitude::zero() {
+            Some(if altitude == Altitude::zero() {
                 H::empty_leaf()
             } else {
                 Self::inner_root(
                     self.position,
                     &self.leaf,
-                    self.parents.split_last().map_or(&[], |(_, s)| s),
-                    Some(level),
+                    self.ommers.split_last().map_or(&[], |(_, s)| s),
+                    Some(altitude),
                 )
             })
         }
@@ -218,7 +256,7 @@ impl<H: Hashable + Clone> NonEmptyFrontier<H> {
     fn inner_root(
         position: Position,
         leaf: &Leaf<H>,
-        parents: &[Parent<H>],
+        ommers: &[H],
         result_lvl: Option<Altitude>,
     ) -> H {
         let mut digest = match leaf {
@@ -227,63 +265,36 @@ impl<H: Hashable + Clone> NonEmptyFrontier<H> {
         };
 
         let mut complete_lvl = Altitude::one();
-        for (parent, parent_lvl) in parents.iter().zip(position.parent_levels()) {
-            // stop once we've reached the max level
+        for (ommer, ommer_lvl) in ommers.iter().zip(position.ommer_altitudes()) {
+            // stop once we've reached the max altitude
             if result_lvl
                 .iter()
-                .any(|rl| *rl == complete_lvl || parent_lvl >= *rl)
+                .any(|rl| *rl == complete_lvl || ommer_lvl >= *rl)
             {
                 break;
             }
 
             digest = H::combine(
-                parent_lvl,
-                &parent.value,
-                // fold up to parent.lvl pairing with empty roots; if
-                // complete_lvl == parent.lvl this is just the complete
+                ommer_lvl,
+                &ommer,
+                // fold up to ommer.lvl pairing with empty roots; if
+                // complete_lvl == ommer.lvl this is just the complete
                 // digest to this point
                 &complete_lvl
-                    .iter_to(parent_lvl)
+                    .iter_to(ommer_lvl)
                     .fold(digest, |d, l| H::combine(l, &d, &H::empty_root(l))),
             );
 
-            complete_lvl = parent_lvl + 1;
+            complete_lvl = ommer_lvl + 1;
         }
 
-        // if we've exhausted the parents and still want more levels,
+        // if we've exhausted the ommers and still want more altitudes,
         // continue hashing against empty roots
         digest = complete_lvl
             .iter_to(result_lvl.unwrap_or(complete_lvl))
             .fold(digest, |d, l| H::combine(l, &d, &H::empty_root(l)));
 
         digest
-    }
-
-    pub fn leaf_value(&self) -> H {
-        match &self.leaf {
-            Leaf::Left(v) => v.clone(),
-            Leaf::Right(_, v) => v.clone(),
-        }
-    }
-
-    pub fn value_at(&self, lvl: Altitude) -> Option<H> {
-        if lvl == Altitude::zero() {
-            Some(self.leaf_value())
-        } else {
-            self.parents
-                .iter()
-                .zip(self.position.parent_levels())
-                .find(|(_, l)| *l == lvl)
-                .map(|(p, _)| p.value.clone())
-        }
-    }
-
-    pub fn max_level(&self) -> Altitude {
-        self.position.max_level()
-    }
-
-    pub fn position(&self) -> Position {
-        self.position
     }
 }
 
@@ -295,29 +306,37 @@ pub struct Frontier<H, const DEPTH: u8> {
 }
 
 impl<H, const DEPTH: u8> Frontier<H, DEPTH> {
-    /// Construct a new empty frontier.
-    pub fn new() -> Self {
+    /// Constructs a new empty frontier.
+    pub fn empty() -> Self {
         Frontier { frontier: None }
     }
 
-    /// Return the position of latest leaf appended to the frontier,
+    /// Constructs a new frontier from a `[NonEmptyFrontier]`
+    ///
+    /// Returns `None` if the provided frontier exceeds the maximum
+    /// allowed depth.
+    pub fn new(frontier: NonEmptyFrontier<H>) -> Option<Self> {
+        if frontier.size() > 1 << DEPTH {
+            None
+        } else {
+            Some(Frontier {
+                frontier: Some(frontier),
+            })
+        }
+    }
+
+    /// Returns the position of latest leaf appended to the frontier,
     /// if the frontier is nonempty.
     pub fn position(&self) -> Option<Position> {
         self.frontier.as_ref().map(|f| f.position)
     }
 
-    /// Return the amount of memory dynamically allocated for parent
+    /// Returns the amount of memory dynamically allocated for ommer
     /// values within the frontier.
     pub fn dynamic_memory_usage(&self) -> usize {
         self.frontier.as_ref().map_or(0, |f| {
-            2 * size_of::<usize>() + f.parents.capacity() * size_of::<Parent<H>>()
+            2 * size_of::<usize>() + f.ommers.capacity() * size_of::<H>()
         })
-    }
-}
-
-impl<H, const DEPTH: u8> Default for Frontier<H, DEPTH> {
-    fn default() -> Self {
-        Self::new()
     }
 }
 
@@ -346,7 +365,7 @@ impl<H: Hashable + Clone, const DEPTH: u8> crate::Frontier<H> for Frontier<H, DE
             .map_or(H::empty_root(Altitude(DEPTH)), |frontier| {
                 // fold from the current height, combining with empty branches,
                 // up to the maximum height of the tree
-                (frontier.max_level() + 1)
+                (frontier.max_altitude() + 1)
                     .iter_to(Altitude(DEPTH))
                     .fold(frontier.root(), |d, lvl| {
                         H::combine(lvl, &d, &H::empty_root(lvl))
@@ -355,50 +374,60 @@ impl<H: Hashable + Clone, const DEPTH: u8> crate::Frontier<H> for Frontier<H, DE
     }
 }
 
+/// Each AuthFragment stores part of the authentication path for the leaf at a particular position.
+/// Successive fragments may be concatenated to produce the authentication path up to one less than
+/// the maximum altitude of the Merkle frontier corresponding to the leaf at the specified
+/// position. Then, the authentication path may be completed by hashing with empty roots.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AuthFragment<A> {
+    /// The position of the leaf for which this path fragment is being constructed.
     position: Position,
-    /// We track the total number of levels collected separately
-    /// from the length of the values vector because the
-    /// values vec may be split across multiple bridges.
-    levels_observed: usize,
+    /// We track the total number of altitudes collected across all fragments constructed for
+    /// the specified position separately from the length of the values vector because the values
+    /// will usually be split across multiple fragments.
+    altitudes_observed: usize,
+    /// The subtree roots at altitudes required for the position that have not been included in
+    /// preceding fragments.
     values: Vec<A>,
 }
 
 impl<A> AuthFragment<A> {
+    /// Construct the new empty authentication path fragment for the specified position.
     pub fn new(position: Position) -> Self {
         AuthFragment {
             position,
-            levels_observed: 0,
+            altitudes_observed: 0,
             values: vec![],
         }
     }
 
+    /// Construct the successor fragment for this fragment to produce a new empty fragment
+    /// for the specified position. 
     pub fn successor(&self) -> Self {
         AuthFragment {
             position: self.position,
-            levels_observed: self.levels_observed,
+            altitudes_observed: self.altitudes_observed,
             values: vec![],
         }
     }
 
     pub fn is_complete(&self) -> bool {
-        self.levels_observed >= self.position.levels_required_count()
+        self.altitudes_observed >= self.position.altitudes_required_count()
     }
 
-    pub fn next_required_level(&self) -> Option<Altitude> {
+    pub fn next_required_altitude(&self) -> Option<Altitude> {
         self.position
-            .all_levels_required()
-            .nth(self.levels_observed)
+            .all_altitudes_required()
+            .nth(self.altitudes_observed)
     }
 }
 
 impl<A: Clone> AuthFragment<A> {
     pub fn fuse(&self, other: &Self) -> Option<Self> {
-        if self.position == other.position {
+        if self.position == other.position && self.altitudes_observed + other.values.len() == other.altitudes_observed {
             Some(AuthFragment {
                 position: self.position,
-                levels_observed: other.levels_observed,
+                altitudes_observed: other.altitudes_observed,
                 values: self
                     .values
                     .iter()
@@ -414,10 +443,10 @@ impl<A: Clone> AuthFragment<A> {
 
 impl<H: Hashable + Clone + PartialEq> AuthFragment<H> {
     pub fn augment(&mut self, frontier: &NonEmptyFrontier<H>) {
-        if let Some(level) = self.next_required_level() {
-            if let Some(digest) = frontier.witness(level) {
+        if let Some(altitude) = self.next_required_altitude() {
+            if let Some(digest) = frontier.witness(altitude) {
                 self.values.push(digest);
-                self.levels_observed += 1;
+                self.altitudes_observed += 1;
             }
         }
     }
@@ -464,8 +493,8 @@ impl<H: Hashable + Clone + PartialEq> MerkleBridge<H> {
         }
     }
 
-    pub fn max_level(&self) -> Altitude {
-        self.frontier.max_level()
+    pub fn max_altitude(&self) -> Altitude {
+        self.frontier.max_altitude()
     }
 
     pub fn root(&self) -> H {
@@ -605,7 +634,7 @@ impl<H: Hashable + Hash + Eq + Clone, const DEPTH: u8> crate::Frontier<H> for Br
             .map_or(H::empty_root(Altitude(DEPTH)), |bridge| {
                 // fold from the current height, combining with empty branches,
                 // up to the maximum height of the tree
-                (bridge.max_level() + 1)
+                (bridge.max_altitude() + 1)
                     .iter_to(Altitude(DEPTH))
                     .fold(bridge.root(), |d, lvl| {
                         H::combine(lvl, &d, &H::empty_root(lvl))
@@ -673,9 +702,9 @@ impl<H: Hashable + Hash + Eq + Clone, const DEPTH: u8> Tree<H> for BridgeTree<H,
                 let rest_frontier = fused.frontier;
 
                 let mut auth_values = auth_fragment.iter().flat_map(|auth_fragment| {
-                    let last_level = auth_fragment.next_required_level();
+                    let last_altitude = auth_fragment.next_required_altitude();
                     let last_digest =
-                        last_level.and_then(|lvl| rest_frontier.witness_incomplete(lvl));
+                        last_altitude.and_then(|lvl| rest_frontier.witness_incomplete(lvl));
 
                     // TODO: can we eliminate this .cloned()?
                     auth_fragment.values.iter().cloned().chain(last_digest)
@@ -691,19 +720,19 @@ impl<H: Hashable + Hash + Eq + Clone, const DEPTH: u8> Tree<H> for BridgeTree<H,
                     }
                 }
 
-                for (parent, parent_lvl) in frontier
-                    .parents
+                for (ommer, ommer_lvl) in frontier
+                    .ommers
                     .iter()
-                    .zip(frontier.position.parent_levels())
+                    .zip(frontier.position.ommer_altitudes())
                 {
-                    for synth_lvl in (result.len() as u8)..(parent_lvl.into()) {
+                    for synth_lvl in (result.len() as u8)..(ommer_lvl.into()) {
                         result.push(
                             auth_values
                                 .next()
                                 .unwrap_or_else(|| H::empty_root(Altitude(synth_lvl))),
                         )
                     }
-                    result.push(parent.value.clone());
+                    result.push(ommer.clone());
                 }
 
                 for synth_lvl in (result.len() as u8)..DEPTH {
@@ -867,14 +896,14 @@ mod tests {
     use crate::{Frontier, Tree};
 
     #[test]
-    fn position_levels() {
-        assert_eq!(Position(0).max_level(), Altitude(0));
-        assert_eq!(Position(1).max_level(), Altitude(0));
-        assert_eq!(Position(2).max_level(), Altitude(1));
-        assert_eq!(Position(3).max_level(), Altitude(1));
-        assert_eq!(Position(4).max_level(), Altitude(2));
-        assert_eq!(Position(7).max_level(), Altitude(2));
-        assert_eq!(Position(8).max_level(), Altitude(3));
+    fn position_altitudes() {
+        assert_eq!(Position(0).max_altitude(), Altitude(0));
+        assert_eq!(Position(1).max_altitude(), Altitude(0));
+        assert_eq!(Position(2).max_altitude(), Altitude(1));
+        assert_eq!(Position(3).max_altitude(), Altitude(1));
+        assert_eq!(Position(4).max_altitude(), Altitude(2));
+        assert_eq!(Position(7).max_altitude(), Altitude(2));
+        assert_eq!(Position(8).max_altitude(), Altitude(3));
     }
 
     #[test]
@@ -1206,32 +1235,5 @@ mod tests {
         t.witness();
         t.witness();
         assert!(t.rewind());
-    }
-
-    #[test]
-    fn frontier_positions() {
-        let mut frontier = NonEmptyFrontier::<String>::new('a'.to_string());
-        println!(
-            "{:?}; {:?}",
-            frontier,
-            frontier.position.levels_required().collect::<Vec<_>>()
-        );
-        for c in 'b'..'z' {
-            frontier.append(c.to_string());
-            println!(
-                "{:?}; {:?}",
-                frontier,
-                frontier.position.levels_required().collect::<Vec<_>>()
-            );
-        }
-    }
-
-    #[test]
-    fn frontier_roots() {
-        let mut frontier = super::Frontier::<String, 4>::new();
-        for c in 'a'..'f' {
-            frontier.append(&c.to_string());
-            println!("{:?}\n{:?}", frontier, frontier.root());
-        }
     }
 }
