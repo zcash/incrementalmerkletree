@@ -28,7 +28,7 @@ impl Position {
     }
 
     /// Returns the altitude of the top of a binary tree containing
-    /// a number of nodes equal to the next power of two greater than 
+    /// a number of nodes equal to the next power of two greater than
     /// or equal to `self + 1`.
     fn max_altitude(&self) -> Altitude {
         Altitude(if self.0 == 0 {
@@ -57,8 +57,8 @@ impl Position {
         self.altitudes_required().count()
     }
 
-    /// Returns the altitude of each cousin and/or ommer required to construct 
-    /// an authentication path to the root of a merkle tree that has `self + 1` 
+    /// Returns the altitude of each cousin and/or ommer required to construct
+    /// an authentication path to the root of a merkle tree that has `self + 1`
     /// nodes.
     pub fn altitudes_required(&self) -> impl Iterator<Item = Altitude> + '_ {
         (0..=(self.max_altitude() + 1).0)
@@ -72,9 +72,9 @@ impl Position {
             })
     }
 
-    /// Returns the altitude of each cousin and/or ommer required to construct 
+    /// Returns the altitude of each cousin and/or ommer required to construct
     /// an authentication path to the root of a merkle tree containing 2^64
-    /// nodes. 
+    /// nodes.
     pub fn all_altitudes_required(&self) -> impl Iterator<Item = Altitude> + '_ {
         (0..64).into_iter().filter_map(move |i| {
             if self.0 == 0 || self.0 & (1 << i) == 0 {
@@ -86,7 +86,7 @@ impl Position {
     }
 
     /// Returns whether the binary tree having `self` as the position of the
-    /// rightmost leaf contains a perfect balanced tree of height 
+    /// rightmost leaf contains a perfect balanced tree of height
     /// `to_altitude + 1` that contains the aforesaid leaf, without requiring
     /// any empty leaves or internal nodes.
     pub fn is_complete(&self, to_altitude: Altitude) -> bool {
@@ -105,7 +105,7 @@ impl From<Position> for usize {
     }
 }
 
-/// A set of leaves of a Merkle tree. 
+/// A set of leaves of a Merkle tree.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub enum Leaf<A> {
     Left(A),
@@ -114,7 +114,7 @@ pub enum Leaf<A> {
 
 /// A `[NonEmptyFrontier]` is a reduced representation of a Merkle tree,
 /// having either one or two leaf values, and then a set of hashes produced
-/// by the reduction of previously appended leaf values. 
+/// by the reduction of previously appended leaf values.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct NonEmptyFrontier<H> {
     position: Position,
@@ -402,7 +402,7 @@ impl<A> AuthFragment<A> {
     }
 
     /// Construct the successor fragment for this fragment to produce a new empty fragment
-    /// for the specified position. 
+    /// for the specified position.
     pub fn successor(&self) -> Self {
         AuthFragment {
             position: self.position,
@@ -424,7 +424,9 @@ impl<A> AuthFragment<A> {
 
 impl<A: Clone> AuthFragment<A> {
     pub fn fuse(&self, other: &Self) -> Option<Self> {
-        if self.position == other.position && self.altitudes_observed + other.values.len() == other.altitudes_observed {
+        if self.position == other.position
+            && self.altitudes_observed + other.values.len() == other.altitudes_observed
+        {
             Some(AuthFragment {
                 position: self.position,
                 altitudes_observed: other.altitudes_observed,

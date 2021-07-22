@@ -33,7 +33,7 @@ use std::ops::Sub;
 
 /// A type-safe wrapper for indexing into "levels" of a binary tree, such that
 /// nodes at altitude `0` are leaves, nodes at altitude `1` are parents
-/// of nodes at altitude `0`, and so forth. This type is capable of 
+/// of nodes at altitude `0`, and so forth. This type is capable of
 /// representing altitudes in trees containing up to 2^256 leaves.
 #[derive(Copy, Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 #[repr(transparent)]
