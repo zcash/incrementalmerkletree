@@ -83,14 +83,16 @@ impl<H> NonEmptyFrontier<H> {
 
     /// Returns the number of leaves that have been appended to this frontier.
     pub fn size(&self) -> usize {
-        <usize>::try_from(self.position).expect("The number of leaves must not exceed the representable range of a `usize`") + 1
+        <usize>::try_from(self.position)
+            .expect("The number of leaves must not exceed the representable range of a `usize`")
+            + 1
     }
 
     pub fn leaf(&self) -> &Leaf<H> {
         &self.leaf
     }
 
-    pub fn ommers(&self) -> &Vec<H> {
+    pub fn ommers(&self) -> &[H] {
         &self.ommers
     }
 }
@@ -281,15 +283,7 @@ impl<H, const DEPTH: u8> Frontier<H, DEPTH> {
         leaf: Leaf<H>,
         ommers: Vec<H>,
     ) -> Result<Self, FrontierError> {
-        if position.max_altitude().0 <= DEPTH {
-            NonEmptyFrontier::from_parts(position, leaf, ommers).map(|frontier| Frontier {
-                frontier: Some(frontier),
-            })
-        } else {
-            Err(FrontierError::MaxDepthExceeded {
-                altitude: position.max_altitude(),
-            })
-        }
+        NonEmptyFrontier::from_parts(position, leaf, ommers).and_then(Self::try_from)
     }
 
     /// Return the wrapped NonEmptyFrontier reference, or None if
@@ -404,7 +398,7 @@ impl<A> AuthFragment<A> {
         self.altitudes_observed
     }
 
-    pub fn values(&self) -> &Vec<A> {
+    pub fn values(&self) -> &[A] {
         &self.values
     }
 
@@ -639,7 +633,7 @@ impl<H: Hash + Eq, const DEPTH: u8> BridgeTree<H, DEPTH> {
         }
     }
 
-    pub fn bridges(&self) -> &Vec<MerkleBridge<H>> {
+    pub fn bridges(&self) -> &[MerkleBridge<H>] {
         &self.bridges
     }
 
@@ -647,7 +641,7 @@ impl<H: Hash + Eq, const DEPTH: u8> BridgeTree<H, DEPTH> {
         &self.saved
     }
 
-    pub fn checkpoints(&self) -> &Vec<Checkpoint<H>> {
+    pub fn checkpoints(&self) -> &[Checkpoint<H>] {
         &self.checkpoints
     }
 
@@ -1084,7 +1078,7 @@ mod tests {
         assert_eq!(
             tree.authentication_path(&"c".to_string()),
             Some((
-                <Position>::from(2),
+                Position::from(2),
                 vec![
                     "_".to_string(),
                     "ab".to_string(),
@@ -1098,7 +1092,7 @@ mod tests {
         assert_eq!(
             tree.authentication_path(&"c".to_string()),
             Some((
-                <Position>::from(2),
+                Position::from(2),
                 vec![
                     "d".to_string(),
                     "ab".to_string(),
@@ -1112,7 +1106,7 @@ mod tests {
         assert_eq!(
             tree.authentication_path(&"c".to_string()),
             Some((
-                <Position>::from(2),
+                Position::from(2),
                 vec![
                     "d".to_string(),
                     "ab".to_string(),
@@ -1160,7 +1154,7 @@ mod tests {
         assert_eq!(
             tree.authentication_path(&"f".to_string()),
             Some((
-                <Position>::from(5),
+                Position::from(5),
                 vec![
                     "e".to_string(),
                     "g_".to_string(),
@@ -1180,7 +1174,7 @@ mod tests {
         assert_eq!(
             tree.authentication_path(&"k".to_string()),
             Some((
-                <Position>::from(10),
+                Position::from(10),
                 vec![
                     "l".to_string(),
                     "ij".to_string(),
@@ -1256,7 +1250,7 @@ mod tests {
         assert_eq!(
             tree.authentication_path(&"c".to_string()),
             Some((
-                <Position>::from(2),
+                Position::from(2),
                 vec![
                     "d".to_string(),
                     "ab".to_string(),
@@ -1279,7 +1273,7 @@ mod tests {
         assert_eq!(
             tree.authentication_path(&"m".to_string()),
             Some((
-                <Position>::from(12),
+                Position::from(12),
                 vec![
                     "n".to_string(),
                     "op".to_string(),
@@ -1302,7 +1296,7 @@ mod tests {
         assert_eq!(
             Operation::apply_all(&ops, &mut tree),
             Some((
-                <Position>::from(11),
+                Position::from(11),
                 vec![
                     "k".to_string(),
                     "ij".to_string(),
