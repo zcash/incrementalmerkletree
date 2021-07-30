@@ -458,6 +458,8 @@ pub struct MerkleBridge<H> {
 }
 
 impl<H> MerkleBridge<H> {
+    /// Construct a new Merkle bridge containing only the specified
+    /// leaf.
     pub fn new(value: H) -> Self {
         MerkleBridge {
             prior_position: None,
@@ -466,6 +468,7 @@ impl<H> MerkleBridge<H> {
         }
     }
 
+    /// Construct a new Merkle bridge from its constituent parts.
     pub fn from_parts(
         prior_position: Option<Position>,
         auth_fragments: HashMap<usize, AuthFragment<H>>,
@@ -478,22 +481,31 @@ impl<H> MerkleBridge<H> {
         }
     }
 
+    /// Returns the position of the final leaf in the frontier of the
+    /// bridge that this bridge is the successor of, or None
+    /// if this is the first bridge in a tree.
     pub fn prior_position(&self) -> Option<Position> {
-        self.prior_position.clone()
+        self.prior_position
     }
 
+    /// Returns the fragments of authorization path data for prior bridges,
+    /// keyed by bridge index.
     pub fn auth_fragments(&self) -> &HashMap<usize, AuthFragment<H>> {
         &self.auth_fragments
     }
 
+    /// Returns the non-empty frontier of this Merkle bridge.
     pub fn frontier(&self) -> &NonEmptyFrontier<H> {
         &self.frontier
     }
 
+    /// Returns the maximum altitude of this bridge's frontier.
     pub fn max_altitude(&self) -> Altitude {
         self.frontier.max_altitude()
     }
 
+    /// Checks whether this bridge is a valid successor for the specified
+    /// bridge.
     pub fn can_follow(&self, prev: &Self) -> bool {
         self.prior_position
             .iter()
@@ -502,6 +514,10 @@ impl<H> MerkleBridge<H> {
 }
 
 impl<H: Hashable + Clone + PartialEq> MerkleBridge<H> {
+    /// Constructs a new bridge to follow this one. The 
+    /// successor will track the information necessary to create an
+    /// authentication path for the leaf most recently appended to 
+    /// this bridge's frontier.
     pub fn successor(&self, cur_idx: usize) -> Self {
         let result = MerkleBridge {
             prior_position: Some(self.frontier.position()),
@@ -517,6 +533,8 @@ impl<H: Hashable + Clone + PartialEq> MerkleBridge<H> {
         result
     }
 
+    /// Advances this bridge's frontier by appending the specified node,
+    /// and updates any auth path fragments being tracked if necessary.
     pub fn append(&mut self, value: H) {
         self.frontier.append(value);
 
@@ -525,14 +543,22 @@ impl<H: Hashable + Clone + PartialEq> MerkleBridge<H> {
         }
     }
 
+    /// Returns the Merkle root of this bridge's current frontier, as obtained
+    /// by hashing against empty nodes.
     pub fn root(&self) -> H {
         self.frontier.root()
     }
 
+    /// Returns the most recently appended leaf.
     pub fn leaf_value(&self) -> &H {
         self.frontier.leaf_value()
     }
 
+    /// Returns a single MerkleBridge that contains the aggregate information
+    /// of this bridge and `next`, or None if `next` is not a valid successor
+    /// to this bridge. The resulting Bridge will have the same state as though
+    /// `self` had had every leaf used to construct `next` appended to it 
+    /// directly.
     fn fuse(&self, next: &Self) -> Option<MerkleBridge<H>> {
         if next.can_follow(&self) {
             let fused = MerkleBridge {
@@ -564,6 +590,9 @@ impl<H: Hashable + Clone + PartialEq> MerkleBridge<H> {
         }
     }
 
+    /// Returns a single MerkleBridge that contains the aggregate information
+    /// of all the provided bridges (discarding internal frontiers) or None
+    /// if any of the bridges are not valid successors to one another.
     fn fuse_all(bridges: &[MerkleBridge<H>]) -> Option<MerkleBridge<H>> {
         let mut iter = bridges.iter();
         let first = iter.next();
@@ -633,18 +662,24 @@ impl<H: Hash + Eq, const DEPTH: u8> BridgeTree<H, DEPTH> {
         }
     }
 
+    /// Returns the bridges that make up this tree
     pub fn bridges(&self) -> &[MerkleBridge<H>] {
         &self.bridges
     }
 
+    /// Returns the map from witnessed leaf values to bridge indices.
     pub fn witnessable_leaves(&self) -> &HashMap<H, usize> {
         &self.saved
     }
 
+    /// Returns the checkpoints to which this tree may be rewound.
     pub fn checkpoints(&self) -> &[Checkpoint<H>] {
         &self.checkpoints
     }
 
+    /// Returns the maximum number of checkpoints that will be maintained
+    /// by the data structure. When this number of checkpoints is exceeded,
+    /// the oldest checkpoints are discarded when creating new checkpoints.
     pub fn max_checkpoints(&self) -> usize {
         self.max_checkpoints
     }
