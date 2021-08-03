@@ -5,117 +5,39 @@
 use serde::{Deserialize, Serialize};
 
 use std::collections::HashMap;
+use std::convert::TryFrom;
 use std::fmt::Debug;
 use std::hash::Hash;
 use std::mem::size_of;
 
-use super::{Altitude, Hashable, Recording, Tree};
-
-/// A type representing the position of a leaf in a Merkle tree.
-#[derive(Copy, Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
-#[repr(transparent)]
-pub struct Position(usize);
-
-impl Position {
-    /// Returns the position of the first leaf in the tree.
-    pub fn zero() -> Self {
-        Position(0)
-    }
-
-    /// Mutably increment the position value.
-    pub fn increment(&mut self) {
-        self.0 += 1
-    }
-
-    /// Returns the altitude of the top of a binary tree containing
-    /// a number of nodes equal to the next power of two greater than
-    /// or equal to `self + 1`.
-    fn max_altitude(&self) -> Altitude {
-        Altitude(if self.0 == 0 {
-            0
-        } else {
-            63 - self.0.leading_zeros() as u8
-        })
-    }
-
-    /// Returns the altitude of each populated ommer.
-    pub fn ommer_altitudes(&self) -> impl Iterator<Item = Altitude> + '_ {
-        (0..=self.max_altitude().0)
-            .into_iter()
-            .filter_map(move |i| {
-                if i != 0 && self.0 & (1 << i) != 0 {
-                    Some(Altitude(i))
-                } else {
-                    None
-                }
-            })
-    }
-
-    /// Returns the number of ommers required to construct an authentication
-    /// path to the root of a merkle tree that has `self + 1` nodes.
-    pub fn altitudes_required_count(&self) -> usize {
-        self.altitudes_required().count()
-    }
-
-    /// Returns the altitude of each cousin and/or ommer required to construct
-    /// an authentication path to the root of a merkle tree that has `self + 1`
-    /// nodes.
-    pub fn altitudes_required(&self) -> impl Iterator<Item = Altitude> + '_ {
-        (0..=(self.max_altitude() + 1).0)
-            .into_iter()
-            .filter_map(move |i| {
-                if self.0 == 0 || self.0 & (1 << i) == 0 {
-                    Some(Altitude(i))
-                } else {
-                    None
-                }
-            })
-    }
-
-    /// Returns the altitude of each cousin and/or ommer required to construct
-    /// an authentication path to the root of a merkle tree containing 2^64
-    /// nodes.
-    pub fn all_altitudes_required(&self) -> impl Iterator<Item = Altitude> + '_ {
-        (0..64).into_iter().filter_map(move |i| {
-            if self.0 == 0 || self.0 & (1 << i) == 0 {
-                Some(Altitude(i))
-            } else {
-                None
-            }
-        })
-    }
-
-    /// Returns whether the binary tree having `self` as the position of the
-    /// rightmost leaf contains a perfect balanced tree of height
-    /// `to_altitude + 1` that contains the aforesaid leaf, without requiring
-    /// any empty leaves or internal nodes.
-    pub fn is_complete(&self, to_altitude: Altitude) -> bool {
-        for i in 0..(to_altitude.0) {
-            if self.0 & (1 << i) == 0 {
-                return false;
-            }
-        }
-        true
-    }
-}
-
-impl From<Position> for usize {
-    fn from(p: Position) -> usize {
-        p.0
-    }
-}
+use super::{Altitude, Hashable, Position, Recording, Tree};
 
 /// A set of leaves of a Merkle tree.
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Leaf<A> {
     Left(A),
     Right(A, A),
 }
 
+impl<A> Leaf<A> {
+    pub fn into_value(self) -> A {
+        match self {
+            Leaf::Left(a) => a,
+            Leaf::Right(_, a) => a,
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+pub enum FrontierError {
+    PositionMismatch { expected_ommers: usize },
+    MaxDepthExceeded { altitude: Altitude },
+}
+
 /// A `[NonEmptyFrontier]` is a reduced representation of a Merkle tree,
 /// having either one or two leaf values, and then a set of hashes produced
 /// by the reduction of previously appended leaf values.
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct NonEmptyFrontier<H> {
     position: Position,
     leaf: Leaf<H>,
@@ -132,6 +54,23 @@ impl<H> NonEmptyFrontier<H> {
         }
     }
 
+    pub fn from_parts(
+        position: Position,
+        leaf: Leaf<H>,
+        ommers: Vec<H>,
+    ) -> Result<Self, FrontierError> {
+        let expected_ommers = position.ommer_altitudes().count();
+        if expected_ommers == ommers.len() {
+            Ok(NonEmptyFrontier {
+                position,
+                leaf,
+                ommers,
+            })
+        } else {
+            Err(FrontierError::PositionMismatch { expected_ommers })
+        }
+    }
+
     /// Returns the altitude of the highest ommer in the frontier.
     pub fn max_altitude(&self) -> Altitude {
         self.position.max_altitude()
@@ -144,15 +83,25 @@ impl<H> NonEmptyFrontier<H> {
 
     /// Returns the number of leaves that have been appended to this frontier.
     pub fn size(&self) -> usize {
-        self.position.0 + 1
+        <usize>::try_from(self.position)
+            .expect("The number of leaves must not exceed the representable range of a `usize`")
+            + 1
+    }
+
+    pub fn leaf(&self) -> &Leaf<H> {
+        &self.leaf
+    }
+
+    pub fn ommers(&self) -> &[H] {
+        &self.ommers
     }
 }
 
 impl<H: Clone> NonEmptyFrontier<H> {
     /// Returns the value of the most recently appended leaf.
-    pub fn leaf_value(&self) -> H {
+    pub fn leaf_value(&self) -> &H {
         match &self.leaf {
-            Leaf::Left(v) | Leaf::Right(_, v) => v.clone(),
+            Leaf::Left(v) | Leaf::Right(_, v) => v,
         }
     }
 }
@@ -175,7 +124,7 @@ impl<H: Hashable + Clone> NonEmptyFrontier<H> {
         };
 
         if carry.is_some() {
-            let mut new_ommers = Vec::with_capacity(self.position.altitudes_required_count() - 1);
+            let mut new_ommers = Vec::with_capacity(self.position.altitudes_required().count());
             for (ommer, ommer_lvl) in self.ommers.iter().zip(self.position.ommer_altitudes()) {
                 if let Some((carry_ommer, carry_lvl)) = carry.as_ref() {
                     if *carry_lvl == ommer_lvl {
@@ -300,9 +249,22 @@ impl<H: Hashable + Clone> NonEmptyFrontier<H> {
 
 /// A possibly-empty Merkle frontier. Used when the
 /// full functionality of a Merkle bridge is not necessary.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Frontier<H, const DEPTH: u8> {
     frontier: Option<NonEmptyFrontier<H>>,
+}
+
+impl<H, const DEPTH: u8> TryFrom<NonEmptyFrontier<H>> for Frontier<H, DEPTH> {
+    type Error = FrontierError;
+    fn try_from(f: NonEmptyFrontier<H>) -> Result<Self, FrontierError> {
+        if f.position.max_altitude().0 <= DEPTH {
+            Ok(Frontier { frontier: Some(f) })
+        } else {
+            Err(FrontierError::MaxDepthExceeded {
+                altitude: f.position.max_altitude(),
+            })
+        }
+    }
 }
 
 impl<H, const DEPTH: u8> Frontier<H, DEPTH> {
@@ -311,18 +273,23 @@ impl<H, const DEPTH: u8> Frontier<H, DEPTH> {
         Frontier { frontier: None }
     }
 
-    /// Constructs a new frontier from a `[NonEmptyFrontier]`
+    /// Constructs a new non-empty frontier from its constituent parts.
     ///
-    /// Returns `None` if the provided frontier exceeds the maximum
-    /// allowed depth.
-    pub fn new(frontier: NonEmptyFrontier<H>) -> Option<Self> {
-        if frontier.size() > 1 << DEPTH {
-            None
-        } else {
-            Some(Frontier {
-                frontier: Some(frontier),
-            })
-        }
+    /// Returns `None` if the new frontier would exceed the maximum
+    /// allowed depth or if the list of ommers provided is not consistent
+    /// with the position of the leaf.
+    pub fn from_parts(
+        position: Position,
+        leaf: Leaf<H>,
+        ommers: Vec<H>,
+    ) -> Result<Self, FrontierError> {
+        NonEmptyFrontier::from_parts(position, leaf, ommers).and_then(Self::try_from)
+    }
+
+    /// Return the wrapped NonEmptyFrontier reference, or None if
+    /// the frontier is empty.
+    pub fn value(&self) -> Option<&NonEmptyFrontier<H>> {
+        self.frontier.as_ref()
     }
 
     /// Returns the position of latest leaf appended to the frontier,
@@ -401,6 +368,18 @@ impl<A> AuthFragment<A> {
         }
     }
 
+    /// Construct a fragment from its component parts. This cannot
+    /// perform any meaningful validation that the provided values
+    /// are valid.
+    pub fn from_parts(position: Position, altitudes_observed: usize, values: Vec<A>) -> Self {
+        assert!(altitudes_observed <= values.len());
+        AuthFragment {
+            position,
+            altitudes_observed,
+            values,
+        }
+    }
+
     /// Construct the successor fragment for this fragment to produce a new empty fragment
     /// for the specified position.
     pub fn successor(&self) -> Self {
@@ -411,8 +390,20 @@ impl<A> AuthFragment<A> {
         }
     }
 
+    pub fn position(&self) -> Position {
+        self.position
+    }
+
+    pub fn altitudes_observed(&self) -> usize {
+        self.altitudes_observed
+    }
+
+    pub fn values(&self) -> &[A] {
+        &self.values
+    }
+
     pub fn is_complete(&self) -> bool {
-        self.altitudes_observed >= self.position.altitudes_required_count()
+        self.altitudes_observed >= self.position.altitudes_required().count()
     }
 
     pub fn next_required_altitude(&self) -> Option<Altitude> {
@@ -456,14 +447,19 @@ impl<H: Hashable + Clone + PartialEq> AuthFragment<H> {
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct MerkleBridge<H> {
+    /// The position of the final leaf in the frontier of the
+    /// bridge that this bridge is the successor of, or None
+    /// if this is the first bridge in a tree.
     prior_position: Option<Position>,
-    /// fragments of authorization path data for prior bridges,
-    /// keyed by bridge index
+    /// Fragments of authorization path data for prior bridges,
+    /// keyed by bridge index.
     auth_fragments: HashMap<usize, AuthFragment<H>>,
     frontier: NonEmptyFrontier<H>,
 }
 
-impl<H: Hashable + Clone + PartialEq> MerkleBridge<H> {
+impl<H> MerkleBridge<H> {
+    /// Construct a new Merkle bridge containing only the specified
+    /// leaf.
     pub fn new(value: H) -> Self {
         MerkleBridge {
             prior_position: None,
@@ -472,6 +468,56 @@ impl<H: Hashable + Clone + PartialEq> MerkleBridge<H> {
         }
     }
 
+    /// Construct a new Merkle bridge from its constituent parts.
+    pub fn from_parts(
+        prior_position: Option<Position>,
+        auth_fragments: HashMap<usize, AuthFragment<H>>,
+        frontier: NonEmptyFrontier<H>,
+    ) -> Self {
+        MerkleBridge {
+            prior_position,
+            auth_fragments,
+            frontier,
+        }
+    }
+
+    /// Returns the position of the final leaf in the frontier of the
+    /// bridge that this bridge is the successor of, or None
+    /// if this is the first bridge in a tree.
+    pub fn prior_position(&self) -> Option<Position> {
+        self.prior_position
+    }
+
+    /// Returns the fragments of authorization path data for prior bridges,
+    /// keyed by bridge index.
+    pub fn auth_fragments(&self) -> &HashMap<usize, AuthFragment<H>> {
+        &self.auth_fragments
+    }
+
+    /// Returns the non-empty frontier of this Merkle bridge.
+    pub fn frontier(&self) -> &NonEmptyFrontier<H> {
+        &self.frontier
+    }
+
+    /// Returns the maximum altitude of this bridge's frontier.
+    pub fn max_altitude(&self) -> Altitude {
+        self.frontier.max_altitude()
+    }
+
+    /// Checks whether this bridge is a valid successor for the specified
+    /// bridge.
+    pub fn can_follow(&self, prev: &Self) -> bool {
+        self.prior_position
+            .iter()
+            .all(|p| *p == prev.frontier.position())
+    }
+}
+
+impl<H: Hashable + Clone + PartialEq> MerkleBridge<H> {
+    /// Constructs a new bridge to follow this one. The 
+    /// successor will track the information necessary to create an
+    /// authentication path for the leaf most recently appended to 
+    /// this bridge's frontier.
     pub fn successor(&self, cur_idx: usize) -> Self {
         let result = MerkleBridge {
             prior_position: Some(self.frontier.position()),
@@ -487,6 +533,8 @@ impl<H: Hashable + Clone + PartialEq> MerkleBridge<H> {
         result
     }
 
+    /// Advances this bridge's frontier by appending the specified node,
+    /// and updates any auth path fragments being tracked if necessary.
     pub fn append(&mut self, value: H) {
         self.frontier.append(value);
 
@@ -495,24 +543,22 @@ impl<H: Hashable + Clone + PartialEq> MerkleBridge<H> {
         }
     }
 
-    pub fn max_altitude(&self) -> Altitude {
-        self.frontier.max_altitude()
-    }
-
+    /// Returns the Merkle root of this bridge's current frontier, as obtained
+    /// by hashing against empty nodes.
     pub fn root(&self) -> H {
         self.frontier.root()
     }
 
-    pub fn leaf_value(&self) -> H {
+    /// Returns the most recently appended leaf.
+    pub fn leaf_value(&self) -> &H {
         self.frontier.leaf_value()
     }
 
-    pub fn can_follow(&self, prev: &Self) -> bool {
-        self.prior_position
-            .iter()
-            .all(|p| *p == prev.frontier.position())
-    }
-
+    /// Returns a single MerkleBridge that contains the aggregate information
+    /// of this bridge and `next`, or None if `next` is not a valid successor
+    /// to this bridge. The resulting Bridge will have the same state as though
+    /// `self` had had every leaf used to construct `next` appended to it 
+    /// directly.
     fn fuse(&self, next: &Self) -> Option<MerkleBridge<H>> {
         if next.can_follow(&self) {
             let fused = MerkleBridge {
@@ -544,6 +590,9 @@ impl<H: Hashable + Clone + PartialEq> MerkleBridge<H> {
         }
     }
 
+    /// Returns a single MerkleBridge that contains the aggregate information
+    /// of all the provided bridges (discarding internal frontiers) or None
+    /// if any of the bridges are not valid successors to one another.
     fn fuse_all(bridges: &[MerkleBridge<H>]) -> Option<MerkleBridge<H>> {
         let mut iter = bridges.iter();
         let first = iter.next();
@@ -553,23 +602,25 @@ impl<H: Hashable + Clone + PartialEq> MerkleBridge<H> {
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub enum Checkpoint<H> {
-    /// checpoint of the empty bridge
+    /// Checkpoint of the empty bridge
     Empty,
-    ///
+    /// Checkpoint of a particular bridge state to which it is
+    /// possible to rewind.
     AtIndex(usize, MerkleBridge<H>),
+}
+
+impl<H> Checkpoint<H> {
+    pub fn is_empty(&self) -> bool {
+        matches!(&self, Checkpoint::Empty)
+    }
 }
 
 #[derive(Clone, Serialize, Deserialize)]
 pub struct BridgeTree<H: Hash + Eq, const DEPTH: u8> {
-    /// Version value for the serialized form
-    ser_version: u8,
     /// The ordered list of Merkle bridges representing the history
     /// of the tree. There will be one bridge for each saved leaf, plus
     /// the current bridge to the tip of the tree.
     bridges: Vec<MerkleBridge<H>>,
-    /// The last index of bridges for which no additional elements need
-    /// to be added to the trailing edge
-    incomplete_from: usize,
     /// A map from leaf digests to indices within the `bridges` vector.
     saved: HashMap<H, usize>,
     /// A stack of bridge indices to which it's possible to rewind directly.
@@ -584,24 +635,22 @@ impl<H: Hashable + Hash + Eq + Debug, const DEPTH: u8> Debug for BridgeTree<H, D
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> Result<(), std::fmt::Error> {
         write!(
             f,
-            "BridgeTree {{\n  depth: {:?},\n  bridges: {:?},\n  incomplete_from: {:?},\n  saved: {:?},\n  checkpoints: {:?},\n  max_checkpoints: {:?}\n}}",
-            DEPTH, self.bridges, self.incomplete_from, self.saved, self.checkpoints, self.max_checkpoints
+            "BridgeTree {{\n  depth: {:?},\n  bridges: {:?},\n saved: {:?},\n  checkpoints: {:?},\n  max_checkpoints: {:?}\n}}",
+            DEPTH, self.bridges, self.saved, self.checkpoints, self.max_checkpoints
         )
     }
 }
 
-impl<H: Hashable + Hash + Eq + Clone, const DEPTH: u8> BridgeTree<H, DEPTH> {
-    pub fn new(max_checkpoints: usize) -> Self {
-        BridgeTree {
-            ser_version: 0,
-            bridges: vec![],
-            incomplete_from: 0,
-            saved: HashMap::new(),
-            checkpoints: vec![],
-            max_checkpoints,
-        }
-    }
+#[derive(Debug, Clone)]
+pub enum BridgeTreeError {
+    IncorrectIncompleteIndex,
+    InvalidWitnessIndex,
+    InvalidSavePoints,
+    ContinuityError,
+    CheckpointMismatch,
+}
 
+impl<H: Hash + Eq, const DEPTH: u8> BridgeTree<H, DEPTH> {
     /// Removes the oldest checkpoint. Returns true if successful and false if
     /// there are no checkpoints.
     fn drop_oldest_checkpoint(&mut self) -> bool {
@@ -610,6 +659,91 @@ impl<H: Hashable + Hash + Eq + Clone, const DEPTH: u8> BridgeTree<H, DEPTH> {
         } else {
             self.checkpoints.remove(0);
             true
+        }
+    }
+
+    /// Returns the bridges that make up this tree
+    pub fn bridges(&self) -> &[MerkleBridge<H>] {
+        &self.bridges
+    }
+
+    /// Returns the map from witnessed leaf values to bridge indices.
+    pub fn witnessable_leaves(&self) -> &HashMap<H, usize> {
+        &self.saved
+    }
+
+    /// Returns the checkpoints to which this tree may be rewound.
+    pub fn checkpoints(&self) -> &[Checkpoint<H>] {
+        &self.checkpoints
+    }
+
+    /// Returns the maximum number of checkpoints that will be maintained
+    /// by the data structure. When this number of checkpoints is exceeded,
+    /// the oldest checkpoints are discarded when creating new checkpoints.
+    pub fn max_checkpoints(&self) -> usize {
+        self.max_checkpoints
+    }
+}
+
+impl<H: Hashable + Hash + Eq + Clone, const DEPTH: u8> BridgeTree<H, DEPTH> {
+    pub fn new(max_checkpoints: usize) -> Self {
+        BridgeTree {
+            bridges: vec![],
+            saved: HashMap::new(),
+            checkpoints: vec![],
+            max_checkpoints,
+        }
+    }
+
+    pub fn from_parts(
+        bridges: Vec<MerkleBridge<H>>,
+        saved: HashMap<H, usize>,
+        checkpoints: Vec<Checkpoint<H>>,
+        max_checkpoints: usize,
+    ) -> Result<Self, BridgeTreeError> {
+        // check that saved values correspond to bridges
+        if saved
+            .iter()
+            .any(|(a, i)| i >= &bridges.len() || bridges[*i].frontier().leaf_value() != a)
+        {
+            Err(BridgeTreeError::InvalidWitnessIndex)
+        } else if bridges.is_empty() {
+            // it's okay to return the empty bridge, but only if there are no saved points
+            // and no non-empty checkpoints
+            if saved.is_empty() && checkpoints.iter().all(|c| c.is_empty()) {
+                let mut result = Self::new(max_checkpoints);
+                for _ in checkpoints.iter() {
+                    // restore the correct number of empty checkpoints.
+                    result.checkpoint()
+                }
+                Ok(result)
+            } else {
+                Err(BridgeTreeError::InvalidSavePoints)
+            }
+        // check continuity of bridge order
+        } else if bridges
+            .iter()
+            .zip(bridges.iter().skip(1))
+            .any(|(prev, next)| !next.can_follow(prev))
+        {
+            Err(BridgeTreeError::ContinuityError)
+        // verify checkpoints to ensure continuity from bridge locations
+        } else if checkpoints.len() > max_checkpoints
+            || checkpoints.iter().any(|c| match c {
+                Checkpoint::Empty => false,
+                Checkpoint::AtIndex(i, b) => {
+                    i == &0 || i >= &bridges.len() || !b.can_follow(&bridges[i - 1])
+                }
+            })
+        {
+            Err(BridgeTreeError::CheckpointMismatch)
+        } else {
+            Ok(BridgeTree {
+                bridges,
+                saved,
+                checkpoints,
+                max_checkpoints,
+            })
         }
     }
 }
@@ -653,7 +787,7 @@ impl<H: Hashable + Hash + Eq + Clone, const DEPTH: u8> Tree<H> for BridgeTree<H,
     fn witness(&mut self) -> bool {
         let next = self.bridges.last().map(|current| {
             (
-                current.leaf_value(),
+                current.leaf_value().clone(),
                 current.successor(self.bridges.len() - 1),
             )
         });
@@ -689,7 +823,7 @@ impl<H: Hashable + Hash + Eq + Clone, const DEPTH: u8> Tree<H> for BridgeTree<H,
     /// Obtains an authentication path to the value specified in the tree.
     /// Returns `None` if there is no available authentication path to the
     /// specified value.
-    fn authentication_path(&self, value: &H) -> Option<(usize, Vec<H>)> {
+    fn authentication_path(&self, value: &H) -> Option<(Position, Vec<H>)> {
         self.saved.get(value).and_then(|idx| {
             let frontier = &self.bridges[*idx].frontier;
 
@@ -745,7 +879,7 @@ impl<H: Hashable + Hash + Eq + Clone, const DEPTH: u8> Tree<H> for BridgeTree<H,
                     );
                 }
 
-                (frontier.position().0, result)
+                (frontier.position(), result)
             })
         })
     }
@@ -800,7 +934,7 @@ impl<H: Hashable + Hash + Eq + Clone, const DEPTH: u8> Tree<H> for BridgeTree<H,
                 } else {
                     self.bridges.truncate(i + 1);
                     self.saved.retain(|_, saved_idx| *saved_idx <= i);
-                    if self.saved.contains_key(&bridge.frontier.leaf_value()) {
+                    if self.saved.contains_key(bridge.frontier.leaf_value()) {
                         // if we've rewound to a witnessed point, then "re-witness"
                         let is_duplicate_frontier =
                             i > 0 && bridge.frontier == self.bridges[i - 1].frontier;
@@ -950,7 +1084,7 @@ mod tests {
         assert_eq!(
             tree.authentication_path(&"a".to_string()),
             Some((
-                0,
+                Position::zero(),
                 vec![
                     "_".to_string(),
                     "__".to_string(),
@@ -964,7 +1098,7 @@ mod tests {
         assert_eq!(
             tree.authentication_path(&"a".to_string()),
             Some((
-                0,
+                Position::zero(),
                 vec![
                     "b".to_string(),
                     "__".to_string(),
@@ -979,7 +1113,7 @@ mod tests {
         assert_eq!(
             tree.authentication_path(&"c".to_string()),
             Some((
-                2,
+                Position::from(2),
                 vec![
                     "_".to_string(),
                     "ab".to_string(),
@@ -993,7 +1127,7 @@ mod tests {
         assert_eq!(
             tree.authentication_path(&"c".to_string()),
             Some((
-                2,
+                Position::from(2),
                 vec![
                     "d".to_string(),
                     "ab".to_string(),
@@ -1007,7 +1141,7 @@ mod tests {
         assert_eq!(
             tree.authentication_path(&"c".to_string()),
             Some((
-                2,
+                Position::from(2),
                 vec![
                     "d".to_string(),
                     "ab".to_string(),
@@ -1029,7 +1163,7 @@ mod tests {
         assert_eq!(
             tree.authentication_path(&"a".to_string()),
             Some((
-                0,
+                Position::zero(),
                 vec![
                     "b".to_string(),
                     "cd".to_string(),
@@ -1055,7 +1189,7 @@ mod tests {
         assert_eq!(
             tree.authentication_path(&"f".to_string()),
             Some((
-                5,
+                Position::from(5),
                 vec![
                     "e".to_string(),
                     "g_".to_string(),
@@ -1075,7 +1209,7 @@ mod tests {
         assert_eq!(
             tree.authentication_path(&"k".to_string()),
             Some((
-                10,
+                Position::from(10),
                 vec![
                     "l".to_string(),
                     "ij".to_string(),
@@ -1101,7 +1235,7 @@ mod tests {
         assert_eq!(
             tree.authentication_path(&"a".to_string()),
             Some((
-                0,
+                Position::zero(),
                 vec![
                     "b".to_string(),
                     "cd".to_string(),
@@ -1124,7 +1258,7 @@ mod tests {
         assert_eq!(
             tree.authentication_path(&"a".to_string()),
             Some((
-                0,
+                Position::zero(),
                 vec![
                     "a".to_string(),
                     "__".to_string(),
@@ -1151,7 +1285,7 @@ mod tests {
         assert_eq!(
             tree.authentication_path(&"c".to_string()),
             Some((
-                2,
+                Position::from(2),
                 vec![
                     "d".to_string(),
                     "ab".to_string(),
@@ -1174,7 +1308,7 @@ mod tests {
         assert_eq!(
             tree.authentication_path(&"m".to_string()),
             Some((
-                12,
+                Position::from(12),
                 vec![
                     "n".to_string(),
                     "op".to_string(),
@@ -1197,7 +1331,7 @@ mod tests {
         assert_eq!(
             Operation::apply_all(&ops, &mut tree),
             Some((
-                11,
+                Position::from(11),
                 vec![
                     "k".to_string(),
                     "ij".to_string(),
@@ -1237,5 +1371,22 @@ mod tests {
         t.witness();
         t.witness();
         assert!(t.rewind());
+    }
+
+    #[test]
+    fn frontier_from_parts() {
+        assert!(
+            super::Frontier::<(), 0>::from_parts(Position::zero(), Leaf::Left(()), vec![]).is_ok()
+        );
+        assert!(super::Frontier::<(), 0>::from_parts(
+            Position::zero(),
+            Leaf::Right((), ()),
+            vec![]
+        )
+        .is_ok());
+        assert!(
+            super::Frontier::<(), 0>::from_parts(Position::zero(), Leaf::Left(()), vec![()])
+                .is_err()
+        );
     }
 }

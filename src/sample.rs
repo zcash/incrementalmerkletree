@@ -1,5 +1,5 @@
 /// Sample implementation of the Tree interface.
-use super::{Altitude, Frontier, Hashable, Recording, Tree};
+use super::{Altitude, Frontier, Hashable, Position, Recording, Tree};
 
 #[derive(Clone)]
 pub struct CompleteTree<H: Hashable> {
@@ -78,7 +78,7 @@ impl<H: Hashable + PartialEq + Clone> Tree<H> for CompleteTree<H> {
     /// Obtains an authentication path to the value specified in the tree.
     /// Returns `None` if there is no available authentication path to the
     /// specified value.
-    fn authentication_path(&self, value: &H) -> Option<(usize, Vec<H>)> {
+    fn authentication_path(&self, value: &H) -> Option<(Position, Vec<H>)> {
         self.witnesses
             .iter()
             .find(|witness| witness.1 == *value)
@@ -92,7 +92,7 @@ impl<H: Hashable + PartialEq + Clone> Tree<H> for CompleteTree<H> {
                     index &= usize::MAX << (bit + 1);
                 }
 
-                (pos, path)
+                (pos.into(), path)
             })
     }
 
