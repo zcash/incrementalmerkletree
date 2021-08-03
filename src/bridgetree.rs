@@ -273,7 +273,7 @@ impl<H, const DEPTH: u8> Frontier<H, DEPTH> {
         Frontier { frontier: None }
     }
 
-    /// Constructs a new non-empty frontier from is constituent parts.
+    /// Constructs a new non-empty frontier from its constituent parts.
     ///
     /// Returns `None` if the new frontier would exceed the maximum
     /// allowed depth or if the list of ommers provided is not consistent
@@ -369,7 +369,7 @@ impl<A> AuthFragment<A> {
     }
 
     /// Construct a fragment from its component parts. This cannot
-    /// not perform any meaningful validation that the provided values
+    /// perform any meaningful validation that the provided values
     /// are valid.
     pub fn from_parts(position: Position, altitudes_observed: usize, values: Vec<A>) -> Self {
         assert!(altitudes_observed <= values.len());
