@@ -641,12 +641,19 @@ impl<H: Hashable + Hash + Eq + Debug, const DEPTH: u8> Debug for BridgeTree<H, D
     }
 }
 
+/// An internal-only enum used to indicate whether the `witness_internal`
+/// method is being called in the context of marking a leaf as one for
+/// which it needs to be able to construct a witness, or whether that
+/// leaf is merely being marked as a checkpoint to which it is possible
+/// to rewind.
 #[derive(Debug, Copy, Clone, PartialEq, Eq)]
 enum BoundaryType {
     Witness,
     Checkpoint,
 }
 
+/// Errors that can appear when validating the internal consistency of a `[MerkleBridge]`
+/// value when constructing a bridge from its constituent parts.
 #[derive(Debug, Clone)]
 pub enum BridgeTreeError {
     IncorrectIncompleteIndex,

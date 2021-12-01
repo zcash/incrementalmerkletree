@@ -240,13 +240,21 @@ pub trait Tree<H>: Frontier<H> {
     // at which their being spent is is max_checkpoints blocks is the past,
     // the witness can be discarded.
 
-    /// Marks the current tree state as a checkpoint if it is not already a
-    /// checkpoint.
+    /// Creates a new checkpoint for the current tree state. It is valid to
+    /// have multiple checkpoints for the same tree state, and each `rewind`
+    /// call will remove a single checkpoint.
     fn checkpoint(&mut self);
 
-    /// Rewinds the tree state to the previous checkpoint. This function will
-    /// fail and return false if there is no previous checkpoint or in the event
-    /// witness data would be destroyed in the process.
+    /// Rewinds the tree state to the previous checkpoint, and then removes
+    /// that checkpoint record. If there are multiple checkpoints at a given
+    /// tree state, the tree state will not be altered until all checkpoints
+    /// at that tree state have been removed using `rewind`. This function
+    /// will fail and return false if there is no previous checkpoint or in
+    /// the event witness data would be destroyed in the process.
+    ///
+    /// In the case that this method returns `false`, the user should have
+    /// explicitly called `remove_witness` for each witnessed leaf marked
+    /// since the last checkpoint.
     fn rewind(&mut self) -> bool;
 
     /// Start a recording of append operations performed on a tree.
