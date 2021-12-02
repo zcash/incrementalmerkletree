@@ -514,9 +514,9 @@ impl<H> MerkleBridge<H> {
 }
 
 impl<H: Hashable + Clone + PartialEq> MerkleBridge<H> {
-    /// Constructs a new bridge to follow this one. The 
+    /// Constructs a new bridge to follow this one. The
     /// successor will track the information necessary to create an
-    /// authentication path for the leaf most recently appended to 
+    /// authentication path for the leaf most recently appended to
     /// this bridge's frontier.
     pub fn successor(&self, cur_idx: usize) -> Self {
         let result = MerkleBridge {
@@ -557,7 +557,7 @@ impl<H: Hashable + Clone + PartialEq> MerkleBridge<H> {
     /// Returns a single MerkleBridge that contains the aggregate information
     /// of this bridge and `next`, or None if `next` is not a valid successor
     /// to this bridge. The resulting Bridge will have the same state as though
-    /// `self` had had every leaf used to construct `next` appended to it 
+    /// `self` had had every leaf used to construct `next` appended to it
     /// directly.
     fn fuse(&self, next: &Self) -> Option<MerkleBridge<H>> {
         if next.can_follow(&self) {
@@ -911,17 +911,13 @@ impl<H: Hashable + Hash + Eq + Clone, const DEPTH: u8> Tree<H> for BridgeTree<H,
     /// Marks the current tree state as a checkpoint if it is not already a
     /// checkpoint.
     fn checkpoint(&mut self) {
-        match self.witness_internal(BoundaryType::Checkpoint) {
-            Some(save_idx) => {
-                self.checkpoints.push(Checkpoint::AtIndex(save_idx));
+        let new_checkpoint = self
+            .witness_internal(BoundaryType::Checkpoint)
+            .map_or(Checkpoint::Empty, |save_idx| Checkpoint::AtIndex(save_idx));
+        self.checkpoints.push(new_checkpoint);
 
-                if self.checkpoints.len() > self.max_checkpoints {
-                    self.drop_oldest_checkpoint();
-                }
-            }
-            None => {
-                self.checkpoints.push(Checkpoint::Empty);
-            }
+        if self.checkpoints.len() > self.max_checkpoints {
+            self.drop_oldest_checkpoint();
         }
     }
 
@@ -969,7 +965,12 @@ impl<H: Hashable + Hash + Eq + Clone, const DEPTH: u8> Tree<H> for BridgeTree<H,
                         // if the checkpoint removed was a duplicate, we need to
                         // restore the successor bridge so that future appends correctly
                         // affect the successor bridge
-                        if self.checkpoints.last().iter().any(|c| **c == Checkpoint::AtIndex(i)) {
+                        if self
+                            .checkpoints
+                            .last()
+                            .iter()
+                            .any(|c| **c == Checkpoint::AtIndex(i))
+                        {
                             self.witness_internal(BoundaryType::Checkpoint);
                         }
                         true
