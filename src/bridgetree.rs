@@ -118,7 +118,7 @@ impl<H: Hashable + Clone> NonEmptyFrontier<H> {
                 self.leaf = Leaf::Right(a.clone(), value);
             }
             Leaf::Right(a, b) => {
-                carry = Some((H::combine(Altitude::zero(), &a, &b), Altitude::one()));
+                carry = Some((H::combine(Altitude::zero(), a, b), Altitude::one()));
                 self.leaf = Leaf::Left(value);
             }
         };
@@ -128,7 +128,7 @@ impl<H: Hashable + Clone> NonEmptyFrontier<H> {
             for (ommer, ommer_lvl) in self.ommers.iter().zip(self.position.ommer_altitudes()) {
                 if let Some((carry_ommer, carry_lvl)) = carry.as_ref() {
                     if *carry_lvl == ommer_lvl {
-                        carry = Some((H::combine(ommer_lvl, &ommer, &carry_ommer), ommer_lvl + 1))
+                        carry = Some((H::combine(ommer_lvl, ommer, carry_ommer), ommer_lvl + 1))
                     } else {
                         // insert the carry at the first empty slot; then the rest of the
                         // ommers will remain unchanged
@@ -225,7 +225,7 @@ impl<H: Hashable + Clone> NonEmptyFrontier<H> {
 
             digest = H::combine(
                 ommer_lvl,
-                &ommer,
+                ommer,
                 // fold up to ommer.lvl pairing with empty roots; if
                 // complete_lvl == ommer.lvl this is just the complete
                 // digest to this point
@@ -560,7 +560,7 @@ impl<H: Hashable + Clone + PartialEq> MerkleBridge<H> {
     /// `self` had had every leaf used to construct `next` appended to it
     /// directly.
     fn fuse(&self, next: &Self) -> Option<MerkleBridge<H>> {
-        if next.can_follow(&self) {
+        if next.can_follow(self) {
             let fused = MerkleBridge {
                 prior_position: self.prior_position,
                 auth_fragments: self
@@ -763,37 +763,32 @@ impl<H: Hashable + Hash + Eq + Clone, const DEPTH: u8> BridgeTree<H, DEPTH> {
     }
 
     fn witness_internal(&mut self, btype: BoundaryType) -> Option<usize> {
-        let next = self.bridges.last().map(|current| {
-            (
-                current.leaf_value().clone(),
-                current.successor(self.bridges.len() - 1),
-            )
-        });
+        let blen = self.bridges.len();
+        let (leaf, succ) = self
+            .bridges
+            .last()
+            .map(|current| (current.leaf_value().clone(), current.successor(blen - 1)))?;
 
-        next.map(|(leaf, succ)| {
-            let blen = self.bridges.len();
+        // a duplicate frontier might occur when we observe a previously witnessed
+        // value where that value was subsequently removed.
+        let is_duplicate_frontier =
+            blen > 1 && self.bridges[blen - 1].frontier == self.bridges[blen - 2].frontier;
 
-            // a duplicate frontier might occur when we observe a previously witnessed
-            // value where that value was subsequently removed.
-            let is_duplicate_frontier =
-                blen > 1 && self.bridges[blen - 1].frontier == self.bridges[blen - 2].frontier;
+        let save_idx = if is_duplicate_frontier {
+            // By saving at `blen - 2` we effectively restore the original witness.
+            // We do not push new duplicate frontiers.
+            blen - 2
+        } else {
+            // only push the successor if its frontier is not a duplicate
+            self.bridges.push(succ);
+            blen - 1
+        };
 
-            let save_idx = if is_duplicate_frontier {
-                // By saving at `blen - 2` we effectively restore the original witness.
-                // We do not push new duplicate frontiers.
-                blen - 2
-            } else {
-                // only push the successor if its frontier is not a duplicate
-                self.bridges.push(succ);
-                blen - 1
-            };
+        if btype == BoundaryType::Witness {
+            self.saved.entry(leaf).or_insert(save_idx);
+        }
 
-            if btype == BoundaryType::Witness {
-                self.saved.entry(leaf).or_insert(save_idx);
-            }
-
-            save_idx
-        })
+        Some(save_idx)
     }
 }
 
@@ -913,7 +908,7 @@ impl<H: Hashable + Hash + Eq + Clone, const DEPTH: u8> Tree<H> for BridgeTree<H,
     fn checkpoint(&mut self) {
         let new_checkpoint = self
             .witness_internal(BoundaryType::Checkpoint)
-            .map_or(Checkpoint::Empty, |save_idx| Checkpoint::AtIndex(save_idx));
+            .map_or(Checkpoint::Empty, Checkpoint::AtIndex);
         self.checkpoints.push(new_checkpoint);
 
         if self.checkpoints.len() > self.max_checkpoints {
@@ -1038,7 +1033,7 @@ impl<H: Hashable + Clone + PartialEq, const DEPTH: u8> Recording<H> for BridgeRe
 
     fn play(&mut self, recording: &Self) -> bool {
         if let Some((current, next)) = self.bridge.as_ref().zip(recording.bridge.as_ref()) {
-            if let Some(fused) = current.fuse(&next) {
+            if let Some(fused) = current.fuse(next) {
                 self.bridge = Some(fused);
                 true
             } else {
