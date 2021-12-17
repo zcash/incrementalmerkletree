@@ -1,19 +1,19 @@
 [package]
 name = "incrementalmerkletree"
-version = "0.1.0"
+version = "0.2.0"
 authors = [
     "Sean Bowe <ewillbefull@gmail.com>",
     "Kris Nuttycombe <kris@nutty.land>",
 ]
 edition = "2018"
-license = "MIT/Apache-2.0"
+license = "MIT OR Apache-2.0"
 description = "Implementation of an Incremental Merkle Tree"
-documentation = "https://docs.rs/incrementalmerkletree/"
 homepage = "https://github.com/zcash/incrementalmerkletree"
 repository = "https://github.com/zcash/incrementalmerkletree"
+categories = ["algorithms", "data-structures"]
 
 [dependencies]
 serde = { version = "1", features = ["derive"] }
 
 [dev-dependencies]
-proptest = "0.10"
+proptest = "1"
