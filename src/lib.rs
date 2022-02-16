@@ -287,7 +287,6 @@ pub trait Recording<H> {
 pub(crate) mod tests {
     #![allow(deprecated)]
     use std::convert::TryFrom;
-    use std::hash::Hash;
     use std::hash::Hasher;
     use std::hash::SipHasher;
 
@@ -296,12 +295,12 @@ pub(crate) mod tests {
     use super::{Altitude, Frontier, Hashable, Position, Recording, Tree};
 
     #[derive(Clone)]
-    pub struct CombinedTree<H: Hashable + Hash + Eq, const DEPTH: u8> {
+    pub struct CombinedTree<H: Hashable + Ord + Eq, const DEPTH: u8> {
         inefficient: CompleteTree<H>,
         efficient: BridgeTree<H, DEPTH>,
     }
 
-    impl<H: Hashable + Hash + Eq + Clone, const DEPTH: u8> CombinedTree<H, DEPTH> {
+    impl<H: Hashable + Ord + Eq + Clone, const DEPTH: u8> CombinedTree<H, DEPTH> {
         pub fn new() -> Self {
             CombinedTree {
                 inefficient: CompleteTree::new(DEPTH.into(), 100),
@@ -310,7 +309,7 @@ pub(crate) mod tests {
         }
     }
 
-    impl<H: Hashable + Hash + Eq + Clone + std::fmt::Debug, const DEPTH: u8> Frontier<H>
+    impl<H: Hashable + Ord + Eq + Clone + std::fmt::Debug, const DEPTH: u8> Frontier<H>
         for CombinedTree<H, DEPTH>
     {
         fn append(&mut self, value: &H) -> bool {
@@ -329,7 +328,7 @@ pub(crate) mod tests {
         }
     }
 
-    impl<H: Hashable + Hash + Eq + Clone + std::fmt::Debug, const DEPTH: u8> Tree<H>
+    impl<H: Hashable + Ord + Eq + Clone + std::fmt::Debug, const DEPTH: u8> Tree<H>
         for CombinedTree<H, DEPTH>
     {
         type Recording = CombinedRecording<H, DEPTH>;
@@ -439,7 +438,7 @@ pub(crate) mod tests {
         }
     }
 
-    #[derive(Clone, Debug, PartialEq, Eq, Hash)]
+    #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
     pub(crate) struct SipHashable(pub(crate) u64);
 
     impl Hashable for SipHashable {
@@ -477,7 +476,7 @@ pub(crate) mod tests {
 
     use Operation::*;
 
-    impl<H: Hashable + Hash + Eq> Operation<H> {
+    impl<H: Hashable + Ord + Eq> Operation<H> {
         pub fn apply<T: Tree<H>>(&self, tree: &mut T) -> Option<(Position, Vec<H>)> {
             match self {
                 Append(a) => {
@@ -632,7 +631,7 @@ pub(crate) mod tests {
         }
     }
 
-    fn check_operations<H: Hashable + Clone + std::fmt::Debug + Eq + Hash>(
+    fn check_operations<H: Hashable + Clone + std::fmt::Debug + Eq + Ord>(
         ops: Vec<Operation<H>>,
     ) -> Result<(), TestCaseError> {
         const DEPTH: u8 = 4;

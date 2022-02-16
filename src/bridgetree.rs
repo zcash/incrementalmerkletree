@@ -4,10 +4,9 @@
 //! the sibling of a parent node in a binary tree.
 use serde::{Deserialize, Serialize};
 
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use std::convert::TryFrom;
 use std::fmt::Debug;
-use std::hash::Hash;
 use std::mem::size_of;
 
 use super::{Altitude, Hashable, Position, Recording, Tree};
@@ -616,13 +615,13 @@ impl Checkpoint {
 }
 
 #[derive(Clone, Serialize, Deserialize)]
-pub struct BridgeTree<H: Hash + Eq, const DEPTH: u8> {
+pub struct BridgeTree<H: Ord + Eq, const DEPTH: u8> {
     /// The ordered list of Merkle bridges representing the history
     /// of the tree. There will be one bridge for each saved leaf, plus
     /// the current bridge to the tip of the tree.
     bridges: Vec<MerkleBridge<H>>,
     /// An index from leaf digests to indices within the `bridges` vector.
-    saved: HashMap<H, usize>,
+    saved: BTreeMap<H, usize>,
     /// A stack of bridge indices to which it's possible to rewind directly.
     checkpoints: Vec<Checkpoint>,
     /// The maximum number of checkpoints to retain. If this number is
@@ -631,7 +630,7 @@ pub struct BridgeTree<H: Hash + Eq, const DEPTH: u8> {
     max_checkpoints: usize,
 }
 
-impl<H: Hashable + Hash + Eq + Debug, const DEPTH: u8> Debug for BridgeTree<H, DEPTH> {
+impl<H: Hashable + Ord + Eq + Debug, const DEPTH: u8> Debug for BridgeTree<H, DEPTH> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> Result<(), std::fmt::Error> {
         write!(
             f,
@@ -663,7 +662,7 @@ pub enum BridgeTreeError {
     CheckpointMismatch,
 }
 
-impl<H: Hash + Eq, const DEPTH: u8> BridgeTree<H, DEPTH> {
+impl<H: Ord + Eq, const DEPTH: u8> BridgeTree<H, DEPTH> {
     /// Removes the oldest checkpoint. Returns true if successful and false if
     /// there are no checkpoints.
     fn drop_oldest_checkpoint(&mut self) -> bool {
@@ -681,7 +680,7 @@ impl<H: Hash + Eq, const DEPTH: u8> BridgeTree<H, DEPTH> {
     }
 
     /// Returns the map from witnessed leaf values to bridge indices.
-    pub fn witnessable_leaves(&self) -> &HashMap<H, usize> {
+    pub fn witnessable_leaves(&self) -> &BTreeMap<H, usize> {
         &self.saved
     }
 
@@ -702,11 +701,11 @@ impl<H: Hash + Eq, const DEPTH: u8> BridgeTree<H, DEPTH> {
     }
 }
 
-impl<H: Hashable + Hash + Eq + Clone, const DEPTH: u8> BridgeTree<H, DEPTH> {
+impl<H: Hashable + Ord + Eq + Clone, const DEPTH: u8> BridgeTree<H, DEPTH> {
     pub fn new(max_checkpoints: usize) -> Self {
         BridgeTree {
             bridges: vec![],
-            saved: HashMap::new(),
+            saved: BTreeMap::new(),
             checkpoints: vec![],
             max_checkpoints,
         }
@@ -714,7 +713,7 @@ impl<H: Hashable + Hash + Eq + Clone, const DEPTH: u8> BridgeTree<H, DEPTH> {
 
     pub fn from_parts(
         bridges: Vec<MerkleBridge<H>>,
-        saved: HashMap<H, usize>,
+        saved: BTreeMap<H, usize>,
         checkpoints: Vec<Checkpoint>,
         max_checkpoints: usize,
     ) -> Result<Self, BridgeTreeError> {
@@ -792,7 +791,7 @@ impl<H: Hashable + Hash + Eq + Clone, const DEPTH: u8> BridgeTree<H, DEPTH> {
     }
 }
 
-impl<H: Hashable + Hash + Eq + Clone, const DEPTH: u8> crate::Frontier<H> for BridgeTree<H, DEPTH> {
+impl<H: Hashable + Ord + Eq + Clone, const DEPTH: u8> crate::Frontier<H> for BridgeTree<H, DEPTH> {
     fn append(&mut self, value: &H) -> bool {
         if let Some(bridge) = self.bridges.last_mut() {
             if bridge.frontier.position().is_complete(Altitude(DEPTH)) {
@@ -823,7 +822,7 @@ impl<H: Hashable + Hash + Eq + Clone, const DEPTH: u8> crate::Frontier<H> for Br
     }
 }
 
-impl<H: Hashable + Hash + Eq + Clone, const DEPTH: u8> Tree<H> for BridgeTree<H, DEPTH> {
+impl<H: Hashable + Ord + Eq + Clone, const DEPTH: u8> Tree<H> for BridgeTree<H, DEPTH> {
     type Recording = BridgeRecording<H, DEPTH>;
 
     /// Returns the most recently appended leaf value.
