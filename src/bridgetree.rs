@@ -4,7 +4,7 @@
 //! the sibling of a parent node in a binary tree.
 use serde::{Deserialize, Serialize};
 
-use std::collections::{BTreeMap, HashMap};
+use std::collections::BTreeMap;
 use std::convert::TryFrom;
 use std::fmt::Debug;
 use std::mem::size_of;
@@ -452,7 +452,7 @@ pub struct MerkleBridge<H> {
     prior_position: Option<Position>,
     /// Fragments of authorization path data for prior bridges,
     /// keyed by bridge index.
-    auth_fragments: HashMap<usize, AuthFragment<H>>,
+    auth_fragments: BTreeMap<Position, AuthFragment<H>>,
     frontier: NonEmptyFrontier<H>,
 }
 
@@ -462,7 +462,7 @@ impl<H> MerkleBridge<H> {
     pub fn new(value: H) -> Self {
         MerkleBridge {
             prior_position: None,
-            auth_fragments: HashMap::new(),
+            auth_fragments: BTreeMap::new(),
             frontier: NonEmptyFrontier::new(value),
         }
     }
@@ -470,7 +470,7 @@ impl<H> MerkleBridge<H> {
     /// Construct a new Merkle bridge from its constituent parts.
     pub fn from_parts(
         prior_position: Option<Position>,
-        auth_fragments: HashMap<usize, AuthFragment<H>>,
+        auth_fragments: BTreeMap<Position, AuthFragment<H>>,
         frontier: NonEmptyFrontier<H>,
     ) -> Self {
         MerkleBridge {
@@ -489,7 +489,7 @@ impl<H> MerkleBridge<H> {
 
     /// Returns the fragments of authorization path data for prior bridges,
     /// keyed by bridge index.
-    pub fn auth_fragments(&self) -> &HashMap<usize, AuthFragment<H>> {
+    pub fn auth_fragments(&self) -> &BTreeMap<Position, AuthFragment<H>> {
         &self.auth_fragments
     }
 
@@ -517,14 +517,17 @@ impl<H: Hashable + Clone + PartialEq> MerkleBridge<H> {
     /// successor will track the information necessary to create an
     /// authentication path for the leaf most recently appended to
     /// this bridge's frontier.
-    pub fn successor(&self, cur_idx: usize) -> Self {
+    pub fn successor(&self) -> Self {
         let result = MerkleBridge {
             prior_position: Some(self.frontier.position()),
             auth_fragments: self
                 .auth_fragments
                 .iter()
                 .map(|(k, v)| (*k, v.successor())) //TODO: filter_map and discard what we can
-                .chain(Some((cur_idx, AuthFragment::new(self.frontier.position()))))
+                .chain(Some((
+                    self.frontier.position(),
+                    AuthFragment::new(self.frontier.position()),
+                )))
                 .collect(),
             frontier: self.frontier.clone(),
         };
@@ -620,7 +623,8 @@ pub struct BridgeTree<H: Ord + Eq, const DEPTH: u8> {
     /// of the tree. There will be one bridge for each saved leaf, plus
     /// the current bridge to the tip of the tree.
     bridges: Vec<MerkleBridge<H>>,
-    /// An index from leaf digests to indices within the `bridges` vector.
+    /// A map from hashes for which we wish to be able to compute an
+    /// authentication path to index in the bridges vector.
     saved: BTreeMap<H, usize>,
     /// A stack of bridge indices to which it's possible to rewind directly.
     checkpoints: Vec<Checkpoint>,
@@ -679,8 +683,7 @@ impl<H: Ord + Eq, const DEPTH: u8> BridgeTree<H, DEPTH> {
         &self.bridges
     }
 
-    /// Returns the map from witnessed leaf values to bridge indices.
-    pub fn witnessable_leaves(&self) -> &BTreeMap<H, usize> {
+    pub fn witnessed_indices(&self) -> &BTreeMap<H, usize> {
         &self.saved
     }
 
@@ -766,7 +769,7 @@ impl<H: Hashable + Ord + Eq + Clone, const DEPTH: u8> BridgeTree<H, DEPTH> {
         let (leaf, succ) = self
             .bridges
             .last()
-            .map(|current| (current.leaf_value().clone(), current.successor(blen - 1)))?;
+            .map(|current| (current.leaf_value().clone(), current.successor()))?;
 
         // a duplicate frontier might occur when we observe a previously witnessed
         // value where that value was subsequently removed.
@@ -856,7 +859,7 @@ impl<H: Hashable + Ord + Eq + Clone, const DEPTH: u8> Tree<H> for BridgeTree<H, 
             MerkleBridge::fuse_all(&self.bridges[(idx + 1)..]).map(|fused| {
                 // construct a complete trailing edge that includes the data from
                 // the following frontier not yet included in the trailing edge.
-                let auth_fragment = fused.auth_fragments.get(idx);
+                let auth_fragment = fused.auth_fragments.get(&frontier.position());
                 let rest_frontier = fused.frontier;
 
                 let mut auth_values = auth_fragment.iter().flat_map(|auth_fragment| {
