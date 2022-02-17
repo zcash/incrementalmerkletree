@@ -312,4 +312,26 @@ mod tests {
             );
         }
     }
+
+    #[test]
+    fn rewind_remove_witness() {
+        const DEPTH: usize = 3;
+        let mut tree = CompleteTree::<String>::new(DEPTH, 100);
+        tree.append(&"e".to_string());
+        tree.witness();
+        tree.checkpoint();
+        tree.remove_witness(&"e".to_string());
+        tree.rewind();
+        tree.append(&"g".to_string());
+        assert_eq!(tree.remove_witness(&"e".to_string()), true);
+
+        let mut tree = CompleteTree::<String>::new(DEPTH, 100);
+        tree.append(&"e".to_string());
+        tree.witness();
+        tree.remove_witness(&"e".to_string());
+        tree.checkpoint();
+        tree.rewind();
+        tree.append(&"g".to_string());
+        assert_eq!(tree.remove_witness(&"e".to_string()), false);
+    }
 }
