@@ -2,44 +2,27 @@
 use super::{Altitude, Frontier, Hashable, Position, Recording, Tree};
 
 #[derive(Clone)]
-pub struct CompleteTree<H: Hashable> {
+pub struct TreeState<H: Hashable> {
     leaves: Vec<H>,
     current_position: usize,
     witnesses: Vec<(usize, H)>,
-    checkpoints: Vec<usize>,
     depth: usize,
-    max_checkpoints: usize,
 }
 
-impl<H: Hashable + Clone> CompleteTree<H> {
+impl<H: Hashable + Clone> TreeState<H> {
     /// Creates a new, empty binary tree of specified depth.
     #[cfg(test)]
-    pub fn new(depth: usize, max_checkpoints: usize) -> Self {
-        CompleteTree {
+    pub fn new(depth: usize) -> Self {
+        TreeState {
             leaves: vec![H::empty_leaf(); 1 << depth],
             current_position: 0,
             witnesses: vec![],
-            checkpoints: vec![],
             depth,
-            max_checkpoints,
         }
     }
 }
 
-impl<H: Hashable + PartialEq + Clone> CompleteTree<H> {
-    /// Removes the oldest checkpoint. Returns true if successful and false if
-    /// there are no checkpoints.
-    fn drop_oldest_checkpoint(&mut self) -> bool {
-        if self.checkpoints.is_empty() {
-            false
-        } else {
-            self.checkpoints.remove(0);
-            true
-        }
-    }
-}
-
-impl<H: Hashable + Clone> Frontier<H> for CompleteTree<H> {
+impl<H: Hashable + Clone> Frontier<H> for TreeState<H> {
     /// Appends a new value to the tree at the next available slot. Returns true
     /// if successful and false if the tree is full.
     fn append(&mut self, value: &H) -> bool {
@@ -58,9 +41,7 @@ impl<H: Hashable + Clone> Frontier<H> for CompleteTree<H> {
     }
 }
 
-impl<H: Hashable + PartialEq + Clone> Tree<H> for CompleteTree<H> {
-    type Recording = CompleteRecording<H>;
-
+impl<H: Hashable + PartialEq + Clone> TreeState<H> {
     /// Marks the current tree state leaf as a value that we're interested in
     /// witnessing. Returns true if successful and false if the tree is empty.
     fn witness(&mut self) -> bool {
@@ -114,36 +95,6 @@ impl<H: Hashable + PartialEq + Clone> Tree<H> for CompleteTree<H> {
         }
     }
 
-    /// Marks the current tree state as a checkpoint if it is not already a
-    /// checkpoint.
-    fn checkpoint(&mut self) {
-        self.checkpoints.push(self.current_position);
-        if self.checkpoints.len() > self.max_checkpoints {
-            self.drop_oldest_checkpoint();
-        }
-    }
-
-    /// Rewinds the tree state to the previous checkpoint. This function will
-    /// fail and return false if there is no previous checkpoint or in the event
-    /// witness data would be destroyed in the process.
-    fn rewind(&mut self) -> bool {
-        if let Some(checkpoint) = self.checkpoints.pop() {
-            if self.witnesses.iter().any(|&(pos, _)| pos >= checkpoint) {
-                self.checkpoints.push(checkpoint);
-                return false;
-            }
-
-            self.current_position = checkpoint;
-            if checkpoint != (1 << self.depth) {
-                self.leaves[checkpoint..].fill(H::empty_leaf());
-            }
-
-            true
-        } else {
-            false
-        }
-    }
-
     /// Start a recording of append operations performed on a tree.
     fn recording(&self) -> CompleteRecording<H> {
         CompleteRecording {
@@ -166,6 +117,118 @@ impl<H: Hashable + PartialEq + Clone> Tree<H> for CompleteTree<H> {
         } else {
             false
         }
+    }
+}
+
+#[derive(Clone)]
+pub struct CompleteTree<H: Hashable> {
+    tree_state: TreeState<H>,
+    checkpoints: Vec<TreeState<H>>,
+    max_checkpoints: usize,
+}
+
+impl<H: Hashable + Clone> CompleteTree<H> {
+    /// Creates a new, empty binary tree of specified depth.
+    #[cfg(test)]
+    pub fn new(depth: usize, max_checkpoints: usize) -> Self {
+        CompleteTree {
+            tree_state: TreeState::new(depth),
+            checkpoints: vec![],
+            max_checkpoints,
+        }
+    }
+}
+
+impl<H: Hashable + Clone> Frontier<H> for CompleteTree<H> {
+    /// Appends a new value to the tree at the next available slot. Returns true
+    /// if successful and false if the tree is full.
+    fn append(&mut self, value: &H) -> bool {
+        self.tree_state.append(value)
+    }
+
+    /// Obtains the current root of this Merkle tree.
+    fn root(&self) -> H {
+        self.tree_state.root()
+    }
+}
+
+impl<H: Hashable + PartialEq + Clone> CompleteTree<H> {
+    /// Removes the oldest checkpoint. Returns true if successful and false if
+    /// there are no checkpoints.
+    fn drop_oldest_checkpoint(&mut self) -> bool {
+        if self.checkpoints.is_empty() {
+            false
+        } else {
+            self.checkpoints.remove(0);
+            true
+        }
+    }
+}
+
+impl<H: Hashable + PartialEq + Clone> Tree<H> for CompleteTree<H> {
+    type Recording = CompleteRecording<H>;
+
+    /// Marks the current tree state leaf as a value that we're interested in
+    /// witnessing. Returns true if successful and false if the tree is empty.
+    fn witness(&mut self) -> bool {
+        self.tree_state.witness()
+    }
+
+    /// Obtains an authentication path to the value specified in the tree.
+    /// Returns `None` if there is no available authentication path to the
+    /// specified value.
+    fn authentication_path(&self, value: &H) -> Option<(Position, Vec<H>)> {
+        self.tree_state.authentication_path(value)
+    }
+
+    /// Marks the specified tree state value as a value we're no longer
+    /// interested in maintaining a witness for. Returns true if successful and
+    /// false if the value is not a known witness.
+    fn remove_witness(&mut self, value: &H) -> bool {
+        self.tree_state.remove_witness(value)
+    }
+
+    /// Marks the current tree state as a checkpoint if it is not already a
+    /// checkpoint.
+    fn checkpoint(&mut self) {
+        self.checkpoints.push(self.tree_state.clone());
+        if self.checkpoints.len() > self.max_checkpoints {
+            self.drop_oldest_checkpoint();
+        }
+    }
+
+    /// Rewinds the tree state to the previous checkpoint. This function will
+    /// fail and return false if there is no previous checkpoint or in the event
+    /// witness data would be destroyed in the process.
+    fn rewind(&mut self) -> bool {
+        if let Some(checkpoint) = self.checkpoints.pop() {
+            // if there are any witnessed leaves that would be removed, we don't rewind
+            if self
+                .tree_state
+                .witnesses
+                .iter()
+                .any(|&(pos, _)| pos >= checkpoint.current_position)
+            {
+                self.checkpoints.push(checkpoint);
+                false
+            } else {
+                self.tree_state = checkpoint;
+                true
+            }
+        } else {
+            false
+        }
+    }
+
+    /// Start a recording of append operations performed on a tree.
+    fn recording(&self) -> CompleteRecording<H> {
+        self.tree_state.recording()
+    }
+
+    /// Plays a recording of append operations back. Returns true if successful
+    /// and false if the recording is incompatible with the current tree state.
+    fn play(&mut self, recording: &CompleteRecording<H>) -> bool {
+        self.tree_state.play(recording)
     }
 }
 
