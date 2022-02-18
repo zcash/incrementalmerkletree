@@ -826,6 +826,17 @@ impl<H: Hashable + Hash + Eq + Clone, const DEPTH: u8> crate::Frontier<H> for Br
 impl<H: Hashable + Hash + Eq + Clone, const DEPTH: u8> Tree<H> for BridgeTree<H, DEPTH> {
     type Recording = BridgeRecording<H, DEPTH>;
 
+    /// Returns the most recently appended leaf value.
+    fn current_leaf(&self) -> Option<&H> {
+        self.bridges.last().map(|b| b.leaf_value())
+    }
+
+    /// Returns `true` if the tree can produce an authentication path for
+    /// the specified leaf value.
+    fn is_witnessed(&self, value: &H) -> bool {
+        self.saved.contains_key(value)
+    }
+
     /// Marks the current tree state leaf as a value that we're interested in
     /// witnessing. Returns true if successful and false if the tree is empty.
     fn witness(&mut self) -> bool {

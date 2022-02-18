@@ -221,8 +221,16 @@ pub trait Tree<H>: Frontier<H> {
     /// The type of recordings that can be made of the operations of this tree.
     type Recording: Recording<H>;
 
-    /// Marks the current tree state leaf as a value that we're interested in
-    /// witnessing. Returns true if successful and false if the tree is empty.
+    /// Returns the most recently appended leaf value.
+    fn current_leaf(&self) -> Option<&H>;
+
+    /// Returns `true` if the tree can produce an authentication path for
+    /// the specified leaf value.
+    fn is_witnessed(&self, value: &H) -> bool;
+
+    /// Marks the current leaf as one for which we're interested in producing
+    /// an authentication path. Returns true if successful or if the current
+    /// value was already marked, or false if the tree is empty.
     fn witness(&mut self) -> bool;
 
     /// Obtains an authentication path to the value specified in the tree.
@@ -325,6 +333,23 @@ pub(crate) mod tests {
         for CombinedTree<H, DEPTH>
     {
         type Recording = CombinedRecording<H, DEPTH>;
+
+        /// Returns the most recently appended leaf value.
+        fn current_leaf(&self) -> Option<&H> {
+            let a = self.inefficient.current_leaf();
+            let b = self.efficient.current_leaf();
+            assert_eq!(a, b);
+            a
+        }
+
+        /// Returns `true` if the tree can produce an authentication path for
+        /// the specified leaf value.
+        fn is_witnessed(&self, value: &H) -> bool {
+            let a = self.inefficient.is_witnessed(value);
+            let b = self.efficient.is_witnessed(value);
+            assert_eq!(a, b);
+            a
+        }
 
         /// Marks the current tree state leaf as a value that we're interested in
         /// witnessing. Returns true if successful and false if the tree is empty.

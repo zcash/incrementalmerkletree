@@ -4,7 +4,7 @@ use super::{Altitude, Frontier, Hashable, Position, Recording, Tree};
 #[derive(Clone)]
 pub struct TreeState<H: Hashable> {
     leaves: Vec<H>,
-    current_position: usize,
+    current_offset: usize,
     witnesses: Vec<(usize, H)>,
     depth: usize,
 }
@@ -15,7 +15,7 @@ impl<H: Hashable + Clone> TreeState<H> {
     pub fn new(depth: usize) -> Self {
         TreeState {
             leaves: vec![H::empty_leaf(); 1 << depth],
-            current_position: 0,
+            current_offset: 0,
             witnesses: vec![],
             depth,
         }
@@ -26,11 +26,11 @@ impl<H: Hashable + Clone> Frontier<H> for TreeState<H> {
     /// Appends a new value to the tree at the next available slot. Returns true
     /// if successful and false if the tree is full.
     fn append(&mut self, value: &H) -> bool {
-        if self.current_position == (1 << self.depth) {
+        if self.current_offset == (1 << self.depth) {
             false
         } else {
-            self.leaves[self.current_position] = value.clone();
-            self.current_position += 1;
+            self.leaves[self.current_offset] = value.clone();
+            self.current_offset += 1;
             true
         }
     }
@@ -44,10 +44,10 @@ impl<H: Hashable + Clone> Frontier<H> for TreeState<H> {
 impl<H: Hashable + PartialEq + Clone> TreeState<H> {
     /// Returns the leaf most recently appended to the tree
     fn current_leaf(&self) -> Option<&H> {
-        if self.current_position == 0 {
+        if self.current_offset == 0 {
             None
         } else {
-            Some(&self.leaves[self.current_position - 1])
+            Some(&self.leaves[self.current_offset - 1])
         }
     }
 
@@ -62,7 +62,7 @@ impl<H: Hashable + PartialEq + Clone> TreeState<H> {
         if let Some(value) = self.current_leaf() {
             if !self.is_witnessed(value) {
                 let value = value.clone();
-                self.witnesses.push((self.current_position - 1, value));
+                self.witnesses.push((self.current_offset - 1, value));
             }
             true
         } else {
@@ -112,8 +112,8 @@ impl<H: Hashable + PartialEq + Clone> TreeState<H> {
     /// Start a recording of append operations performed on a tree.
     fn recording(&self) -> CompleteRecording<H> {
         CompleteRecording {
-            start_position: self.current_position,
-            current_position: self.current_position,
+            start_position: self.current_offset,
+            current_offset: self.current_offset,
             depth: self.depth,
             appends: vec![],
         }
@@ -123,7 +123,7 @@ impl<H: Hashable + PartialEq + Clone> TreeState<H> {
     /// and false if the recording is incompatible with the current tree state.
     fn play(&mut self, recording: &CompleteRecording<H>) -> bool {
         #[allow(clippy::suspicious_operation_groupings)]
-        if recording.start_position == self.current_position && self.depth == recording.depth {
+        if recording.start_position == self.current_offset && self.depth == recording.depth {
             for val in recording.appends.iter() {
                 self.append(val);
             }
@@ -182,6 +182,16 @@ impl<H: Hashable + PartialEq + Clone> CompleteTree<H> {
 impl<H: Hashable + PartialEq + Clone> Tree<H> for CompleteTree<H> {
     type Recording = CompleteRecording<H>;
 
+    /// Returns the leaf most recently appended to the tree
+    fn current_leaf(&self) -> Option<&H> {
+        self.tree_state.current_leaf()
+    }
+
+    /// Returns whether a leaf with the specified value has been witnessed
+    fn is_witnessed(&self, value: &H) -> bool {
+        self.tree_state.is_witnessed(value)
+    }
+
     /// Marks the current tree state leaf as a value that we're interested in
     /// witnessing. Returns true if successful and false if the tree is empty.
     fn witness(&mut self) -> bool {
@@ -225,8 +235,8 @@ impl<H: Hashable + PartialEq + Clone> Tree<H> for CompleteTree<H> {
             // if there are any witnessed leaves in the current tree state
             // that would be removed, we don't rewind
             if self.tree_state.witnesses.iter().any(|&(idx, _)| {
-                idx + 1 > checkpointed_state.current_position
-                    || (idx + 1 == checkpointed_state.current_position && !is_witnessed)
+                idx + 1 > checkpointed_state.current_offset
+                    || (idx + 1 == checkpointed_state.current_offset && !is_witnessed)
             }) {
                 self.checkpoints.push((checkpointed_state, is_witnessed));
                 false
@@ -254,7 +264,7 @@ impl<H: Hashable + PartialEq + Clone> Tree<H> for CompleteTree<H> {
 #[derive(Clone)]
 pub struct CompleteRecording<H: Hashable> {
     start_position: usize,
-    current_position: usize,
+    current_offset: usize,
     depth: usize,
     appends: Vec<H>,
 }
@@ -263,11 +273,11 @@ impl<H: Hashable + Clone> Recording<H> for CompleteRecording<H> {
     /// Appends a new value to the tree at the next available slot. Returns true
     /// if successful and false if the tree is full.
     fn append(&mut self, value: &H) -> bool {
-        if self.current_position == (1 << self.depth) {
+        if self.current_offset == (1 << self.depth) {
             false
         } else {
             self.appends.push(value.clone());
-            self.current_position += 1;
+            self.current_offset += 1;
 
             true
         }
@@ -277,9 +287,9 @@ impl<H: Hashable + Clone> Recording<H> for CompleteRecording<H> {
     /// and false if the provided recording is incompatible with `Self`.
     fn play(&mut self, recording: &Self) -> bool {
         #[allow(clippy::suspicious_operation_groupings)]
-        if self.current_position == recording.start_position && self.depth == recording.depth {
+        if self.current_offset == recording.start_position && self.depth == recording.depth {
             self.appends.extend_from_slice(&recording.appends);
-            self.current_position = recording.current_position;
+            self.current_offset = recording.current_offset;
             true
         } else {
             false
