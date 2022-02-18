@@ -42,17 +42,31 @@ impl<H: Hashable + Clone> Frontier<H> for TreeState<H> {
 }
 
 impl<H: Hashable + PartialEq + Clone> TreeState<H> {
+    /// Returns the leaf most recently appended to the tree
+    fn current_leaf(&self) -> Option<&H> {
+        if self.current_position == 0 {
+            None
+        } else {
+            Some(&self.leaves[self.current_position - 1])
+        }
+    }
+
+    /// Returns whether a leaf with the specified value has been witnessed
+    fn is_witnessed(&self, value: &H) -> bool {
+        self.witnesses.iter().any(|(_, v)| v == value)
+    }
+
     /// Marks the current tree state leaf as a value that we're interested in
     /// witnessing. Returns true if successful and false if the tree is empty.
     fn witness(&mut self) -> bool {
-        if self.current_position == 0 {
-            false
-        } else {
-            let value = self.leaves[self.current_position - 1].clone();
-            if !self.witnesses.iter().any(|(_, v)| v == &value) {
+        if let Some(value) = self.current_leaf() {
+            if !self.is_witnessed(value) {
+                let value = value.clone();
                 self.witnesses.push((self.current_position - 1, value));
             }
             true
+        } else {
+            false
         }
     }
 
@@ -123,7 +137,7 @@ impl<H: Hashable + PartialEq + Clone> TreeState<H> {
 #[derive(Clone)]
 pub struct CompleteTree<H: Hashable> {
     tree_state: TreeState<H>,
-    checkpoints: Vec<TreeState<H>>,
+    checkpoints: Vec<(TreeState<H>, bool)>,
     max_checkpoints: usize,
 }
 
@@ -191,7 +205,13 @@ impl<H: Hashable + PartialEq + Clone> Tree<H> for CompleteTree<H> {
     /// Marks the current tree state as a checkpoint if it is not already a
     /// checkpoint.
     fn checkpoint(&mut self) {
-        self.checkpoints.push(self.tree_state.clone());
+        let is_witnessed = self
+            .tree_state
+            .current_leaf()
+            .iter()
+            .any(|l| self.tree_state.is_witnessed(l));
+        self.checkpoints
+            .push((self.tree_state.clone(), is_witnessed));
         if self.checkpoints.len() > self.max_checkpoints {
             self.drop_oldest_checkpoint();
         }
@@ -201,18 +221,17 @@ impl<H: Hashable + PartialEq + Clone> Tree<H> for CompleteTree<H> {
     /// fail and return false if there is no previous checkpoint or in the event
     /// witness data would be destroyed in the process.
     fn rewind(&mut self) -> bool {
-        if let Some(checkpoint) = self.checkpoints.pop() {
-            // if there are any witnessed leaves that would be removed, we don't rewind
-            if self
-                .tree_state
-                .witnesses
-                .iter()
-                .any(|&(pos, _)| pos >= checkpoint.current_position)
-            {
-                self.checkpoints.push(checkpoint);
+        if let Some((checkpointed_state, is_witnessed)) = self.checkpoints.pop() {
+            // if there are any witnessed leaves in the current tree state
+            // that would be removed, we don't rewind
+            if self.tree_state.witnesses.iter().any(|&(idx, _)| {
+                idx + 1 > checkpointed_state.current_position
+                    || (idx + 1 == checkpointed_state.current_position && !is_witnessed)
+            }) {
+                self.checkpoints.push((checkpointed_state, is_witnessed));
                 false
             } else {
-                self.tree_state = checkpoint;
+                self.tree_state = checkpointed_state;
                 true
             }
         } else {
@@ -396,5 +415,17 @@ mod tests {
         tree.rewind();
         tree.append(&"g".to_string());
         assert_eq!(tree.remove_witness(&"e".to_string()), false);
+
+        let mut tree = CompleteTree::<String>::new(DEPTH, 100);
+        tree.append(&"a".to_string());
+        tree.checkpoint();
+        tree.witness();
+        assert_eq!(tree.rewind(), false);
+
+        let mut tree = CompleteTree::<String>::new(DEPTH, 100);
+        tree.append(&"a".to_string());
+        tree.witness();
+        tree.checkpoint();
+        assert_eq!(tree.rewind(), true);
     }
 }
