@@ -1385,30 +1385,27 @@ mod tests {
         t.witness();
         t.append(&"b".to_string());
         t.append(&"c".to_string());
-        assert!(!t.rewind());
-        assert!(t.drop_oldest_checkpoint());
+        assert_eq!(t.rewind(), false);
+        assert_eq!(t.drop_oldest_checkpoint(), true);
     }
 
     #[test]
     fn checkpoint_rewind_0() {
         let mut t = BridgeTree::<String, 6>::new(100);
         t.append(&"a".to_string());
-        t.append(&"b".to_string());
         t.checkpoint();
-        t.append(&"c".to_string());
+        t.append(&"b".to_string());
         t.witness();
-        assert!(!t.rewind());
+        assert_eq!(t.rewind(), false);
     }
 
     #[test]
     fn checkpoint_rewind_1() {
         let mut t = BridgeTree::<String, 6>::new(100);
         t.append(&"a".to_string());
-        t.append(&"b".to_string());
         t.checkpoint();
         t.witness();
-        t.witness();
-        assert!(t.rewind());
+        assert_eq!(t.rewind(), false);
     }
 
     #[test]
