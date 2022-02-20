@@ -19,7 +19,7 @@ pub enum Leaf<A> {
 }
 
 impl<A> Leaf<A> {
-    pub fn into_value(self) -> A {
+    pub fn value(&self) -> &A {
         match self {
             Leaf::Left(a) => a,
             Leaf::Right(_, a) => a,
@@ -487,6 +487,16 @@ impl<H> MerkleBridge<H> {
         self.prior_position
     }
 
+    /// Returns the position of the most recently appended leaf.
+    pub fn position(&self) -> Position {
+        self.frontier.position()
+    }
+
+    /// Returns the most recently appended leaf.
+    pub fn current_leaf(&self) -> &H {
+        self.frontier.leaf().value()
+    }
+
     /// Returns the fragments of authorization path data for prior bridges,
     /// keyed by bridge index.
     pub fn auth_fragments(&self) -> &BTreeMap<Position, AuthFragment<H>> {
@@ -512,7 +522,7 @@ impl<H> MerkleBridge<H> {
     }
 }
 
-impl<H: Hashable + Clone + PartialEq> MerkleBridge<H> {
+impl<H: Hashable> MerkleBridge<H> {
     /// Constructs a new bridge to follow this one. The
     /// successor will track the information necessary to create an
     /// authentication path for the leaf most recently appended to
@@ -608,7 +618,10 @@ pub enum Checkpoint {
     Empty,
     /// Checkpoint of a particular bridge state to which it is
     /// possible to rewind.
-    AtIndex(usize),
+    AtIndex {
+        bridge_idx: usize,
+        is_witnessed: bool,
+    },
 }
 
 impl Checkpoint {
@@ -618,7 +631,7 @@ impl Checkpoint {
 }
 
 #[derive(Clone, Serialize, Deserialize)]
-pub struct BridgeTree<H: Ord + Eq, const DEPTH: u8> {
+pub struct BridgeTree<H: Ord, const DEPTH: u8> {
     /// The ordered list of Merkle bridges representing the history
     /// of the tree. There will be one bridge for each saved leaf, plus
     /// the current bridge to the tip of the tree.
@@ -634,7 +647,7 @@ pub struct BridgeTree<H: Ord + Eq, const DEPTH: u8> {
     max_checkpoints: usize,
 }
 
-impl<H: Hashable + Ord + Eq + Debug, const DEPTH: u8> Debug for BridgeTree<H, DEPTH> {
+impl<H: Hashable + Debug, const DEPTH: u8> Debug for BridgeTree<H, DEPTH> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> Result<(), std::fmt::Error> {
         write!(
             f,
@@ -666,7 +679,7 @@ pub enum BridgeTreeError {
     CheckpointMismatch,
 }
 
-impl<H: Ord + Eq, const DEPTH: u8> BridgeTree<H, DEPTH> {
+impl<H: Ord, const DEPTH: u8> BridgeTree<H, DEPTH> {
     /// Removes the oldest checkpoint. Returns true if successful and false if
     /// there are no checkpoints.
     fn drop_oldest_checkpoint(&mut self) -> bool {
@@ -704,7 +717,7 @@ impl<H: Ord + Eq, const DEPTH: u8> BridgeTree<H, DEPTH> {
     }
 }
 
-impl<H: Hashable + Ord + Eq + Clone, const DEPTH: u8> BridgeTree<H, DEPTH> {
+impl<H: Hashable, const DEPTH: u8> BridgeTree<H, DEPTH> {
     pub fn new(max_checkpoints: usize) -> Self {
         BridgeTree {
             bridges: vec![],
@@ -749,8 +762,15 @@ impl<H: Hashable + Ord + Eq + Clone, const DEPTH: u8> BridgeTree<H, DEPTH> {
         // verify checkpoints to ensure continuity from bridge locations
         } else if checkpoints.len() > max_checkpoints
             || checkpoints.iter().any(|c| match c {
-                Checkpoint::Empty => false,
-                Checkpoint::AtIndex(i) => i >= &bridges.len(),
+                Checkpoint::Empty => false, // empty checkpoint is always ok
+                Checkpoint::AtIndex {
+                    bridge_idx,
+                    is_witnessed,
+                } => {
+                    bridge_idx >= &bridges.len()
+                        || (*is_witnessed
+                            && !saved.contains_key(bridges[*bridge_idx].current_leaf()))
+                }
             })
         {
             Err(BridgeTreeError::CheckpointMismatch)
@@ -774,7 +794,7 @@ impl<H: Hashable + Ord + Eq + Clone, const DEPTH: u8> BridgeTree<H, DEPTH> {
         // a duplicate frontier might occur when we observe a previously witnessed
         // value where that value was subsequently removed.
         let is_duplicate_frontier =
-            blen > 1 && self.bridges[blen - 1].frontier == self.bridges[blen - 2].frontier;
+            blen > 1 && self.bridges[blen - 1].position() == self.bridges[blen - 2].position();
 
         let save_idx = if is_duplicate_frontier {
             // By saving at `blen - 2` we effectively restore the original witness.
@@ -787,6 +807,7 @@ impl<H: Hashable + Ord + Eq + Clone, const DEPTH: u8> BridgeTree<H, DEPTH> {
         };
 
         if btype == BoundaryType::Witness {
+            // if we already have an entry for the leaf hash, don't update it
             self.saved.entry(leaf).or_insert(save_idx);
         }
 
@@ -794,7 +815,7 @@ impl<H: Hashable + Ord + Eq + Clone, const DEPTH: u8> BridgeTree<H, DEPTH> {
     }
 }
 
-impl<H: Hashable + Ord + Eq + Clone, const DEPTH: u8> crate::Frontier<H> for BridgeTree<H, DEPTH> {
+impl<H: Hashable, const DEPTH: u8> crate::Frontier<H> for BridgeTree<H, DEPTH> {
     fn append(&mut self, value: &H) -> bool {
         if let Some(bridge) = self.bridges.last_mut() {
             if bridge.frontier.position().is_complete(Altitude(DEPTH)) {
@@ -825,7 +846,7 @@ impl<H: Hashable + Ord + Eq + Clone, const DEPTH: u8> crate::Frontier<H> for Bri
     }
 }
 
-impl<H: Hashable + Ord + Eq + Clone, const DEPTH: u8> Tree<H> for BridgeTree<H, DEPTH> {
+impl<H: Hashable, const DEPTH: u8> Tree<H> for BridgeTree<H, DEPTH> {
     type Recording = BridgeRecording<H, DEPTH>;
 
     /// Returns the most recently appended leaf value.
@@ -919,9 +940,14 @@ impl<H: Hashable + Ord + Eq + Clone, const DEPTH: u8> Tree<H> for BridgeTree<H, 
     /// Marks the current tree state as a checkpoint if it is not already a
     /// checkpoint.
     fn checkpoint(&mut self) {
-        let new_checkpoint = self
-            .witness_internal(BoundaryType::Checkpoint)
-            .map_or(Checkpoint::Empty, Checkpoint::AtIndex);
+        let is_witnessed = self.current_leaf().map_or(false, |v| self.is_witnessed(v));
+        let new_checkpoint = self.witness_internal(BoundaryType::Checkpoint).map_or(
+            Checkpoint::Empty,
+            |bridge_idx| Checkpoint::AtIndex {
+                bridge_idx,
+                is_witnessed,
+            },
+        );
         self.checkpoints.push(new_checkpoint);
 
         if self.checkpoints.len() > self.max_checkpoints {
@@ -934,51 +960,54 @@ impl<H: Hashable + Ord + Eq + Clone, const DEPTH: u8> Tree<H> for BridgeTree<H, 
     /// witness data would be destroyed in the process.
     fn rewind(&mut self) -> bool {
         match self.checkpoints.pop() {
-            Some(Checkpoint::Empty) => {
+            Some(c @ Checkpoint::Empty) => {
                 if self.saved.is_empty() {
                     self.bridges.truncate(0);
                     true
                 } else {
-                    self.checkpoints.push(Checkpoint::Empty);
+                    self.checkpoints.push(c);
                     false
                 }
             }
-            Some(Checkpoint::AtIndex(i)) => {
+            Some(
+                c @ Checkpoint::AtIndex {
+                    bridge_idx,
+                    is_witnessed,
+                },
+            ) => {
                 // Do not rewind if doing so would remove a witness.
                 // However, if the index to which we are rewinding is
                 // a witnessed index, we can rewind and re-witness.
                 match self
                     .saved
                     .values()
-                    .filter(|saved_idx| *saved_idx >= &i)
+                    .filter(|saved_idx| *saved_idx >= &bridge_idx)
                     .max()
                 {
-                    Some(saved_idx) if *saved_idx > i => {
+                    Some(saved_idx)
+                        if *saved_idx > bridge_idx
+                            || (*saved_idx == bridge_idx && !is_witnessed) =>
+                    {
                         // there is a witnessed value at a later position, so
                         // we restore the removed checkpoint and return failure
-                        self.checkpoints.push(Checkpoint::AtIndex(i));
+                        self.checkpoints.push(c);
                         false
                     }
-                    Some(saved_idx) if *saved_idx == i => {
+                    Some(saved_idx) if *saved_idx == bridge_idx => {
                         // the position to which we are rewinding was previously
                         // witnessed, so we re-witness after truncation
-                        self.bridges.truncate(i + 1);
+                        self.bridges.truncate(bridge_idx + 1);
                         self.witness();
                         true
                     }
                     _ => {
                         // no witnesses at positions later than the checkpoint,
                         // so we can just truncate.
-                        self.bridges.truncate(i + 1);
+                        self.bridges.truncate(bridge_idx + 1);
                         // if the checkpoint removed was a duplicate, we need to
                         // restore the successor bridge so that future appends correctly
                         // affect the successor bridge
-                        if self
-                            .checkpoints
-                            .last()
-                            .iter()
-                            .any(|c| **c == Checkpoint::AtIndex(i))
-                        {
+                        if self.checkpoints.last().iter().any(|c0| **c0 == c) {
                             self.witness_internal(BoundaryType::Checkpoint);
                         }
                         true
@@ -1025,7 +1054,7 @@ impl<H: Hashable + Ord + Eq + Clone, const DEPTH: u8> Tree<H> for BridgeTree<H, 
 }
 
 #[derive(Clone)]
-pub struct BridgeRecording<H, const DEPTH: u8> {
+pub struct BridgeRecording<H: Ord, const DEPTH: u8> {
     bridge: Option<MerkleBridge<H>>,
 }
 
@@ -1062,20 +1091,7 @@ impl<H: Hashable + Clone + PartialEq, const DEPTH: u8> Recording<H> for BridgeRe
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::tests::Operation;
-    use crate::tests::Operation::*;
     use crate::{Frontier, Tree};
-
-    #[test]
-    fn position_altitudes() {
-        assert_eq!(Position(0).max_altitude(), Altitude(0));
-        assert_eq!(Position(1).max_altitude(), Altitude(0));
-        assert_eq!(Position(2).max_altitude(), Altitude(1));
-        assert_eq!(Position(3).max_altitude(), Altitude(1));
-        assert_eq!(Position(4).max_altitude(), Altitude(2));
-        assert_eq!(Position(7).max_altitude(), Altitude(2));
-        assert_eq!(Position(8).max_altitude(), Altitude(3));
-    }
 
     #[test]
     fn tree_depth() {
@@ -1087,7 +1103,7 @@ mod tests {
     }
 
     #[test]
-    fn root_hashes() {
+    fn bridge_root_hashes() {
         let mut bridge = MerkleBridge::<String>::new("a".to_string());
         assert_eq!(bridge.root(), "a_");
 
@@ -1096,285 +1112,6 @@ mod tests {
 
         bridge.append("c".to_string());
         assert_eq!(bridge.root(), "abc_");
-
-        let mut tree = BridgeTree::<String, 4>::new(100);
-        assert_eq!(tree.root(), "________________");
-
-        tree.append(&"a".to_string());
-        assert_eq!(tree.root().len(), 16);
-        assert_eq!(tree.root(), "a_______________");
-
-        tree.append(&"b".to_string());
-        assert_eq!(tree.root(), "ab______________");
-
-        tree.append(&"c".to_string());
-        assert_eq!(tree.root(), "abc_____________");
-    }
-
-    #[test]
-    fn auth_paths() {
-        let mut tree = BridgeTree::<String, 4>::new(100);
-        tree.append(&"a".to_string());
-        tree.witness();
-        assert_eq!(
-            tree.authentication_path(&"a".to_string()),
-            Some((
-                Position::zero(),
-                vec![
-                    "_".to_string(),
-                    "__".to_string(),
-                    "____".to_string(),
-                    "________".to_string()
-                ]
-            ))
-        );
-
-        tree.append(&"b".to_string());
-        assert_eq!(
-            tree.authentication_path(&"a".to_string()),
-            Some((
-                Position::zero(),
-                vec![
-                    "b".to_string(),
-                    "__".to_string(),
-                    "____".to_string(),
-                    "________".to_string()
-                ]
-            ))
-        );
-
-        tree.append(&"c".to_string());
-        tree.witness();
-        assert_eq!(
-            tree.authentication_path(&"c".to_string()),
-            Some((
-                Position::from(2),
-                vec![
-                    "_".to_string(),
-                    "ab".to_string(),
-                    "____".to_string(),
-                    "________".to_string()
-                ]
-            ))
-        );
-
-        tree.append(&"d".to_string());
-        assert_eq!(
-            tree.authentication_path(&"c".to_string()),
-            Some((
-                Position::from(2),
-                vec![
-                    "d".to_string(),
-                    "ab".to_string(),
-                    "____".to_string(),
-                    "________".to_string()
-                ]
-            ))
-        );
-
-        tree.append(&"e".to_string());
-        assert_eq!(
-            tree.authentication_path(&"c".to_string()),
-            Some((
-                Position::from(2),
-                vec![
-                    "d".to_string(),
-                    "ab".to_string(),
-                    "e___".to_string(),
-                    "________".to_string()
-                ]
-            ))
-        );
-
-        let mut tree = BridgeTree::<String, 4>::new(100);
-        tree.append(&"a".to_string());
-        tree.witness();
-        for c in 'b'..'h' {
-            tree.append(&c.to_string());
-        }
-        tree.witness();
-        tree.append(&"h".to_string());
-
-        assert_eq!(
-            tree.authentication_path(&"a".to_string()),
-            Some((
-                Position::zero(),
-                vec![
-                    "b".to_string(),
-                    "cd".to_string(),
-                    "efgh".to_string(),
-                    "________".to_string()
-                ]
-            ))
-        );
-
-        let mut tree = BridgeTree::<String, 4>::new(100);
-        tree.append(&"a".to_string());
-        tree.witness();
-        tree.append(&"b".to_string());
-        tree.append(&"c".to_string());
-        tree.append(&"d".to_string());
-        tree.witness();
-        tree.append(&"e".to_string());
-        tree.witness();
-        tree.append(&"f".to_string());
-        tree.witness();
-        tree.append(&"g".to_string());
-
-        assert_eq!(
-            tree.authentication_path(&"f".to_string()),
-            Some((
-                Position::from(5),
-                vec![
-                    "e".to_string(),
-                    "g_".to_string(),
-                    "abcd".to_string(),
-                    "________".to_string()
-                ]
-            ))
-        );
-
-        let mut tree = BridgeTree::<String, 4>::new(100);
-        for c in 'a'..'l' {
-            tree.append(&c.to_string());
-        }
-        tree.witness();
-        tree.append(&'l'.to_string());
-
-        assert_eq!(
-            tree.authentication_path(&"k".to_string()),
-            Some((
-                Position::from(10),
-                vec![
-                    "l".to_string(),
-                    "ij".to_string(),
-                    "____".to_string(),
-                    "abcdefgh".to_string()
-                ]
-            ))
-        );
-
-        let mut tree = BridgeTree::<String, 4>::new(100);
-        tree.append(&'a'.to_string());
-        tree.witness();
-        tree.checkpoint();
-        tree.rewind();
-        for c in 'b'..'f' {
-            tree.append(&c.to_string());
-        }
-        tree.witness();
-        for c in 'f'..'i' {
-            tree.append(&c.to_string());
-        }
-
-        assert_eq!(
-            tree.authentication_path(&"a".to_string()),
-            Some((
-                Position::zero(),
-                vec![
-                    "b".to_string(),
-                    "cd".to_string(),
-                    "efgh".to_string(),
-                    "________".to_string()
-                ]
-            ))
-        );
-
-        let mut tree = BridgeTree::<String, 4>::new(100);
-        tree.append(&'a'.to_string());
-        tree.witness();
-        tree.remove_witness(&'a'.to_string());
-        tree.checkpoint();
-        tree.witness();
-        tree.rewind();
-        tree.checkpoint();
-        tree.append(&'a'.to_string());
-
-        assert_eq!(
-            tree.authentication_path(&"a".to_string()),
-            Some((
-                Position::zero(),
-                vec![
-                    "a".to_string(),
-                    "__".to_string(),
-                    "____".to_string(),
-                    "________".to_string()
-                ]
-            ))
-        );
-
-        let mut tree = BridgeTree::<String, 4>::new(100);
-        tree.append(&'a'.to_string());
-        tree.append(&'b'.to_string());
-        tree.append(&'c'.to_string());
-        tree.witness();
-        tree.append(&'d'.to_string());
-        tree.append(&'e'.to_string());
-        tree.append(&'f'.to_string());
-        tree.append(&'g'.to_string());
-        tree.witness();
-        tree.checkpoint();
-        tree.append(&'h'.to_string());
-        tree.rewind();
-
-        assert_eq!(
-            tree.authentication_path(&"c".to_string()),
-            Some((
-                Position::from(2),
-                vec![
-                    "d".to_string(),
-                    "ab".to_string(),
-                    "efg_".to_string(),
-                    "________".to_string()
-                ]
-            ))
-        );
-
-        let mut tree = BridgeTree::<String, 4>::new(100);
-        for c in 'a'..'n' {
-            tree.append(&c.to_string());
-        }
-        tree.witness();
-        tree.append(&'n'.to_string());
-        tree.witness();
-        tree.append(&'o'.to_string());
-        tree.append(&'p'.to_string());
-
-        assert_eq!(
-            tree.authentication_path(&"m".to_string()),
-            Some((
-                Position::from(12),
-                vec![
-                    "n".to_string(),
-                    "op".to_string(),
-                    "ijkl".to_string(),
-                    "abcdefgh".to_string()
-                ]
-            ))
-        );
-
-        let ops = ('a'..='l')
-            .into_iter()
-            .map(|c| Append(c.to_string()))
-            .chain(Some(Witness))
-            .chain(Some(Append('m'.to_string())))
-            .chain(Some(Append('n'.to_string())))
-            .chain(Some(Authpath('l'.to_string())))
-            .collect::<Vec<_>>();
-
-        let mut tree = BridgeTree::<String, 4>::new(100);
-        assert_eq!(
-            Operation::apply_all(&ops, &mut tree),
-            Some((
-                Position::from(11),
-                vec![
-                    "k".to_string(),
-                    "ij".to_string(),
-                    "mn__".to_string(),
-                    "abcdefgh".to_string()
-                ]
-            ))
-        );
     }
 
     #[test]
@@ -1387,25 +1124,6 @@ mod tests {
         t.append(&"c".to_string());
         assert_eq!(t.rewind(), false);
         assert_eq!(t.drop_oldest_checkpoint(), true);
-    }
-
-    #[test]
-    fn checkpoint_rewind_0() {
-        let mut t = BridgeTree::<String, 6>::new(100);
-        t.append(&"a".to_string());
-        t.checkpoint();
-        t.append(&"b".to_string());
-        t.witness();
-        assert_eq!(t.rewind(), false);
-    }
-
-    #[test]
-    fn checkpoint_rewind_1() {
-        let mut t = BridgeTree::<String, 6>::new(100);
-        t.append(&"a".to_string());
-        t.checkpoint();
-        t.witness();
-        assert_eq!(t.rewind(), false);
     }
 
     #[test]
@@ -1423,5 +1141,25 @@ mod tests {
             super::Frontier::<(), 0>::from_parts(Position::zero(), Leaf::Left(()), vec![()])
                 .is_err()
         );
+    }
+
+    #[test]
+    fn root_hashes() {
+        crate::tests::check_root_hashes(BridgeTree::<String, 4>::new);
+    }
+
+    #[test]
+    fn auth_paths() {
+        crate::tests::check_auth_paths(BridgeTree::<String, 4>::new);
+    }
+
+    #[test]
+    fn checkpoint_rewind() {
+        crate::tests::check_checkpoint_rewind(BridgeTree::<String, 4>::new);
+    }
+
+    #[test]
+    fn rewind_remove_witness() {
+        crate::tests::check_rewind_remove_witness(BridgeTree::<String, 4>::new);
     }
 }

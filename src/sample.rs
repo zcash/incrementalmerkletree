@@ -369,6 +369,16 @@ mod tests {
     }
 
     #[test]
+    fn root_hashes() {
+        crate::tests::check_root_hashes(|max_c| CompleteTree::<String>::new(4, max_c));
+    }
+
+    #[test]
+    fn auth_paths() {
+        crate::tests::check_auth_paths(|max_c| CompleteTree::<String>::new(4, max_c));
+    }
+
+    #[test]
     fn correct_auth_path() {
         const DEPTH: usize = 3;
         let values = (0..(1 << DEPTH)).into_iter().map(SipHashable);
@@ -406,36 +416,12 @@ mod tests {
     }
 
     #[test]
+    fn checkpoint_rewind() {
+        crate::tests::check_checkpoint_rewind(|max_c| CompleteTree::<String>::new(4, max_c));
+    }
+
+    #[test]
     fn rewind_remove_witness() {
-        const DEPTH: usize = 3;
-        let mut tree = CompleteTree::<String>::new(DEPTH, 100);
-        tree.append(&"e".to_string());
-        tree.witness();
-        tree.checkpoint();
-        tree.remove_witness(&"e".to_string());
-        tree.rewind();
-        tree.append(&"g".to_string());
-        assert_eq!(tree.remove_witness(&"e".to_string()), true);
-
-        let mut tree = CompleteTree::<String>::new(DEPTH, 100);
-        tree.append(&"e".to_string());
-        tree.witness();
-        tree.remove_witness(&"e".to_string());
-        tree.checkpoint();
-        tree.rewind();
-        tree.append(&"g".to_string());
-        assert_eq!(tree.remove_witness(&"e".to_string()), false);
-
-        let mut tree = CompleteTree::<String>::new(DEPTH, 100);
-        tree.append(&"a".to_string());
-        tree.checkpoint();
-        tree.witness();
-        assert_eq!(tree.rewind(), false);
-
-        let mut tree = CompleteTree::<String>::new(DEPTH, 100);
-        tree.append(&"a".to_string());
-        tree.witness();
-        tree.checkpoint();
-        assert_eq!(tree.rewind(), true);
+        crate::tests::check_rewind_remove_witness(|max_c| CompleteTree::<String>::new(4, max_c));
     }
 }

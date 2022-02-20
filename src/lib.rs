@@ -190,7 +190,7 @@ impl From<usize> for Position {
 
 /// A trait describing the operations that make a value  suitable for inclusion in
 /// an incremental merkle tree.
-pub trait Hashable: Sized {
+pub trait Hashable: Sized + Ord + Clone {
     fn empty_leaf() -> Self;
 
     fn combine(level: Altitude, a: &Self, b: &Self) -> Self;
@@ -293,6 +293,351 @@ pub(crate) mod tests {
     use super::bridgetree::{BridgeRecording, BridgeTree};
     use super::sample::{lazy_root, CompleteRecording, CompleteTree};
     use super::{Altitude, Frontier, Hashable, Position, Recording, Tree};
+
+    #[test]
+    fn position_altitudes() {
+        assert_eq!(Position(0).max_altitude(), Altitude(0));
+        assert_eq!(Position(1).max_altitude(), Altitude(0));
+        assert_eq!(Position(2).max_altitude(), Altitude(1));
+        assert_eq!(Position(3).max_altitude(), Altitude(1));
+        assert_eq!(Position(4).max_altitude(), Altitude(2));
+        assert_eq!(Position(7).max_altitude(), Altitude(2));
+        assert_eq!(Position(8).max_altitude(), Altitude(3));
+    }
+
+    //
+    // Types and utilities for shared example tests.
+    //
+
+    #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
+    pub(crate) struct SipHashable(pub(crate) u64);
+
+    impl Hashable for SipHashable {
+        fn empty_leaf() -> Self {
+            SipHashable(0)
+        }
+
+        fn combine(_level: Altitude, a: &Self, b: &Self) -> Self {
+            let mut hasher = SipHasher::new();
+            hasher.write_u64(a.0);
+            hasher.write_u64(b.0);
+            SipHashable(hasher.finish())
+        }
+    }
+
+    impl Hashable for String {
+        fn empty_leaf() -> Self {
+            "_".to_string()
+        }
+
+        fn combine(_: Altitude, a: &Self, b: &Self) -> Self {
+            a.to_string() + b
+        }
+    }
+
+    //
+    // Shared example tests
+    //
+
+    pub(crate) fn check_root_hashes<T: Tree<String>, F: Fn(usize) -> T>(new_tree: F) {
+        let mut tree = new_tree(100);
+        assert_eq!(tree.root(), "________________");
+
+        tree.append(&"a".to_string());
+        assert_eq!(tree.root().len(), 16);
+        assert_eq!(tree.root(), "a_______________");
+
+        tree.append(&"b".to_string());
+        assert_eq!(tree.root(), "ab______________");
+
+        tree.append(&"c".to_string());
+        assert_eq!(tree.root(), "abc_____________");
+    }
+
+    pub(crate) fn check_auth_paths<T: Tree<String>, F: Fn(usize) -> T>(new_tree: F) {
+        let mut tree = new_tree(100);
+        tree.append(&"a".to_string());
+        tree.witness();
+        assert_eq!(
+            tree.authentication_path(&"a".to_string()),
+            Some((
+                Position::zero(),
+                vec![
+                    "_".to_string(),
+                    "__".to_string(),
+                    "____".to_string(),
+                    "________".to_string()
+                ]
+            ))
+        );
+
+        tree.append(&"b".to_string());
+        assert_eq!(
+            tree.authentication_path(&"a".to_string()),
+            Some((
+                Position::zero(),
+                vec![
+                    "b".to_string(),
+                    "__".to_string(),
+                    "____".to_string(),
+                    "________".to_string()
+                ]
+            ))
+        );
+
+        tree.append(&"c".to_string());
+        tree.witness();
+        assert_eq!(
+            tree.authentication_path(&"c".to_string()),
+            Some((
+                Position::from(2),
+                vec![
+                    "_".to_string(),
+                    "ab".to_string(),
+                    "____".to_string(),
+                    "________".to_string()
+                ]
+            ))
+        );
+
+        tree.append(&"d".to_string());
+        assert_eq!(
+            tree.authentication_path(&"c".to_string()),
+            Some((
+                Position::from(2),
+                vec![
+                    "d".to_string(),
+                    "ab".to_string(),
+                    "____".to_string(),
+                    "________".to_string()
+                ]
+            ))
+        );
+
+        tree.append(&"e".to_string());
+        assert_eq!(
+            tree.authentication_path(&"c".to_string()),
+            Some((
+                Position::from(2),
+                vec![
+                    "d".to_string(),
+                    "ab".to_string(),
+                    "e___".to_string(),
+                    "________".to_string()
+                ]
+            ))
+        );
+
+        let mut tree = new_tree(100);
+        tree.append(&"a".to_string());
+        tree.witness();
+        for c in 'b'..'h' {
+            tree.append(&c.to_string());
+        }
+        tree.witness();
+        tree.append(&"h".to_string());
+
+        assert_eq!(
+            tree.authentication_path(&"a".to_string()),
+            Some((
+                Position::zero(),
+                vec![
+                    "b".to_string(),
+                    "cd".to_string(),
+                    "efgh".to_string(),
+                    "________".to_string()
+                ]
+            ))
+        );
+
+        let mut tree = new_tree(100);
+        tree.append(&"a".to_string());
+        tree.witness();
+        tree.append(&"b".to_string());
+        tree.append(&"c".to_string());
+        tree.append(&"d".to_string());
+        tree.witness();
+        tree.append(&"e".to_string());
+        tree.witness();
+        tree.append(&"f".to_string());
+        tree.witness();
+        tree.append(&"g".to_string());
+
+        assert_eq!(
+            tree.authentication_path(&"f".to_string()),
+            Some((
+                Position::from(5),
+                vec![
+                    "e".to_string(),
+                    "g_".to_string(),
+                    "abcd".to_string(),
+                    "________".to_string()
+                ]
+            ))
+        );
+
+        let mut tree = new_tree(100);
+        for c in 'a'..'l' {
+            tree.append(&c.to_string());
+        }
+        tree.witness();
+        tree.append(&'l'.to_string());
+
+        assert_eq!(
+            tree.authentication_path(&"k".to_string()),
+            Some((
+                Position::from(10),
+                vec![
+                    "l".to_string(),
+                    "ij".to_string(),
+                    "____".to_string(),
+                    "abcdefgh".to_string()
+                ]
+            ))
+        );
+
+        let mut tree = new_tree(100);
+        tree.append(&'a'.to_string());
+        tree.witness();
+        tree.checkpoint();
+        assert_eq!(tree.rewind(), true);
+        for c in 'b'..'f' {
+            tree.append(&c.to_string());
+        }
+        tree.witness();
+        for c in 'f'..'i' {
+            tree.append(&c.to_string());
+        }
+
+        assert_eq!(
+            tree.authentication_path(&"a".to_string()),
+            Some((
+                Position::zero(),
+                vec![
+                    "b".to_string(),
+                    "cd".to_string(),
+                    "efgh".to_string(),
+                    "________".to_string()
+                ]
+            ))
+        );
+
+        let mut tree = new_tree(100);
+        tree.append(&'a'.to_string());
+        tree.append(&'b'.to_string());
+        tree.append(&'c'.to_string());
+        tree.witness();
+        tree.append(&'d'.to_string());
+        tree.append(&'e'.to_string());
+        tree.append(&'f'.to_string());
+        tree.append(&'g'.to_string());
+        tree.witness();
+        tree.checkpoint();
+        tree.append(&'h'.to_string());
+        assert_eq!(tree.rewind(), true);
+
+        assert_eq!(
+            tree.authentication_path(&"c".to_string()),
+            Some((
+                Position::from(2),
+                vec![
+                    "d".to_string(),
+                    "ab".to_string(),
+                    "efg_".to_string(),
+                    "________".to_string()
+                ]
+            ))
+        );
+
+        let mut tree = new_tree(100);
+        for c in 'a'..'n' {
+            tree.append(&c.to_string());
+        }
+        tree.witness();
+        tree.append(&'n'.to_string());
+        tree.witness();
+        tree.append(&'o'.to_string());
+        tree.append(&'p'.to_string());
+
+        assert_eq!(
+            tree.authentication_path(&"m".to_string()),
+            Some((
+                Position::from(12),
+                vec![
+                    "n".to_string(),
+                    "op".to_string(),
+                    "ijkl".to_string(),
+                    "abcdefgh".to_string()
+                ]
+            ))
+        );
+
+        let ops = ('a'..='l')
+            .into_iter()
+            .map(|c| Append(c.to_string()))
+            .chain(Some(Witness))
+            .chain(Some(Append('m'.to_string())))
+            .chain(Some(Append('n'.to_string())))
+            .chain(Some(Authpath('l'.to_string())))
+            .collect::<Vec<_>>();
+
+        let mut tree = new_tree(100);
+        assert_eq!(
+            Operation::apply_all(&ops, &mut tree),
+            Some((
+                Position::from(11),
+                vec![
+                    "k".to_string(),
+                    "ij".to_string(),
+                    "mn__".to_string(),
+                    "abcdefgh".to_string()
+                ]
+            ))
+        );
+    }
+
+    pub(crate) fn check_checkpoint_rewind<T: Tree<String>, F: Fn(usize) -> T>(new_tree: F) {
+        let mut t = new_tree(100);
+        t.append(&"a".to_string());
+        t.checkpoint();
+        t.append(&"b".to_string());
+        t.witness();
+        assert_eq!(t.rewind(), false);
+
+        let mut t = new_tree(100);
+        t.append(&"a".to_string());
+        t.checkpoint();
+        t.witness();
+        assert_eq!(t.rewind(), false);
+
+        let mut t = new_tree(100);
+        t.append(&"a".to_string());
+        t.witness();
+        t.checkpoint();
+        assert_eq!(t.rewind(), true);
+    }
+
+    pub(crate) fn check_rewind_remove_witness<T: Tree<String>, F: Fn(usize) -> T>(new_tree: F) {
+        let mut tree = new_tree(100);
+        tree.append(&"e".to_string());
+        tree.witness();
+        tree.checkpoint();
+        assert_eq!(tree.remove_witness(&"e".to_string()), true);
+        assert_eq!(tree.rewind(), true);
+        assert_eq!(tree.remove_witness(&"e".to_string()), true);
+
+        let mut tree = new_tree(100);
+        tree.append(&"e".to_string());
+        tree.witness();
+        assert_eq!(tree.remove_witness(&"e".to_string()), true);
+        tree.checkpoint();
+        assert_eq!(tree.rewind(), true);
+        assert_eq!(tree.remove_witness(&"e".to_string()), false);
+    }
+
+    //
+    // Types and utilities for cross-verification property tests
+    //
 
     #[derive(Clone)]
     pub struct CombinedTree<H: Hashable + Ord + Eq, const DEPTH: u8> {
@@ -435,32 +780,6 @@ pub(crate) mod tests {
             let b = self.efficient.play(&recording.efficient);
             assert_eq!(a, b);
             a
-        }
-    }
-
-    #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
-    pub(crate) struct SipHashable(pub(crate) u64);
-
-    impl Hashable for SipHashable {
-        fn empty_leaf() -> Self {
-            SipHashable(0)
-        }
-
-        fn combine(_level: Altitude, a: &Self, b: &Self) -> Self {
-            let mut hasher = SipHasher::new();
-            hasher.write_u64(a.0);
-            hasher.write_u64(b.0);
-            SipHashable(hasher.finish())
-        }
-    }
-
-    impl Hashable for String {
-        fn empty_leaf() -> Self {
-            "_".to_string()
-        }
-
-        fn combine(_: Altitude, a: &Self, b: &Self) -> Self {
-            a.to_string() + b
         }
     }
 
@@ -607,30 +926,6 @@ pub(crate) mod tests {
         })
     }
 
-    proptest! {
-        #![proptest_config(ProptestConfig::with_cases(100000))]
-
-        #[test]
-        fn check_randomized_u64_ops(
-            ops in proptest::collection::vec(
-                arb_operation((0..32u64).prop_map(SipHashable)),
-                1..100
-            )
-        ) {
-            check_operations(ops)?;
-        }
-
-        #[test]
-        fn check_randomized_str_ops(
-            ops in proptest::collection::vec(
-                arb_operation((97u8..123).prop_map(|c| char::from(c).to_string())),
-                1..100
-            )
-        ) {
-            check_operations::<String>(ops)?;
-        }
-    }
-
     fn check_operations<H: Hashable + Clone + std::fmt::Debug + Eq + Ord>(
         ops: Vec<Operation<H>>,
     ) -> Result<(), TestCaseError> {
@@ -747,5 +1042,29 @@ pub(crate) mod tests {
         }
 
         Ok(())
+    }
+
+    proptest! {
+        #![proptest_config(ProptestConfig::with_cases(100000))]
+
+        #[test]
+        fn check_randomized_u64_ops(
+            ops in proptest::collection::vec(
+                arb_operation((0..32u64).prop_map(SipHashable)),
+                1..100
+            )
+        ) {
+            check_operations(ops)?;
+        }
+
+        #[test]
+        fn check_randomized_str_ops(
+            ops in proptest::collection::vec(
+                arb_operation((97u8..123).prop_map(|c| char::from(c).to_string())),
+                1..100
+            )
+        ) {
+            check_operations::<String>(ops)?;
+        }
     }
 }
