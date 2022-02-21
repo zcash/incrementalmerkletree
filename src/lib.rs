@@ -243,11 +243,6 @@ pub trait Tree<H>: Frontier<H> {
     /// false if the value is not a known witness.
     fn remove_witness(&mut self, value: &H) -> bool;
 
-    // Future work: add fn remove_witness_deferred(&mut self, value: &H) -> bool;
-    // This will be used to mark witnesses as spent, so that once the point
-    // at which their being spent is is max_checkpoints blocks is the past,
-    // the witness can be discarded.
-
     /// Creates a new checkpoint for the current tree state. It is valid to
     /// have multiple checkpoints for the same tree state, and each `rewind`
     /// call will remove a single checkpoint.
@@ -352,9 +347,21 @@ pub(crate) mod tests {
 
         tree.append(&"c".to_string());
         assert_eq!(tree.root(), "abc_____________");
+
+        let mut t = new_tree(100);
+        t.append(&"a".to_string());
+        t.checkpoint();
+        t.witness();
+        t.append(&"a".to_string());
+        assert_eq!(t.rewind(), false);
+        t.append(&"a".to_string());
+        t.append(&"a".to_string());
+        assert_eq!(t.root(), "aaaa____________");
     }
 
-    pub(crate) fn check_auth_paths<T: Tree<String>, F: Fn(usize) -> T>(new_tree: F) {
+    pub(crate) fn check_auth_paths<T: Tree<String> + std::fmt::Debug, F: Fn(usize) -> T>(
+        new_tree: F,
+    ) {
         let mut tree = new_tree(100);
         tree.append(&"a".to_string());
         tree.witness();
@@ -615,6 +622,23 @@ pub(crate) mod tests {
         t.witness();
         t.checkpoint();
         assert_eq!(t.rewind(), true);
+
+        let mut t = new_tree(100);
+        t.append(&"a".to_string());
+        t.checkpoint();
+        t.witness();
+        t.append(&"a".to_string());
+        assert_eq!(t.rewind(), false);
+
+        let mut t = new_tree(100);
+        t.append(&"a".to_string());
+        t.checkpoint();
+        t.checkpoint();
+        assert_eq!(t.rewind(), true);
+        t.append(&"b".to_string());
+        assert_eq!(t.rewind(), true);
+        t.append(&"b".to_string());
+        assert_eq!(t.root(), "ab______________");
     }
 
     pub(crate) fn check_rewind_remove_witness<T: Tree<String>, F: Fn(usize) -> T>(new_tree: F) {
@@ -633,6 +657,70 @@ pub(crate) mod tests {
         tree.checkpoint();
         assert_eq!(tree.rewind(), true);
         assert_eq!(tree.remove_witness(&"e".to_string()), false);
+
+        let mut tree = new_tree(100);
+        tree.append(&"a".to_string());
+        assert_eq!(tree.remove_witness(&"a".to_string()), false);
+        tree.checkpoint();
+        assert_eq!(tree.witness(), true);
+        assert_eq!(tree.rewind(), false);
+
+        let mut tree = new_tree(100);
+        tree.append(&"a".to_string());
+        tree.checkpoint();
+        assert_eq!(tree.witness(), true);
+        assert_eq!(tree.remove_witness(&"a".to_string()), true);
+        assert_eq!(tree.rewind(), true);
+        assert_eq!(tree.remove_witness(&"a".to_string()), false);
+
+        // The following check_operations tests cover errors where the
+        // test framework itself previously did not correctly handle
+        // chain state restoration.
+
+        let ops = vec![
+            Append("a".to_string()),
+            Unwitness("a".to_string()),
+            Checkpoint,
+            Witness,
+            Rewind,
+        ];
+        let result = check_operations(ops);
+        assert!(matches!(result, Ok(())), "Test failed: {:?}", result);
+
+        let ops = vec![
+            Append("s".to_string()),
+            Witness,
+            Append("m".to_string()),
+            Checkpoint,
+            Unwitness("s".to_string()),
+            Rewind,
+            Unwitness("s".to_string()),
+        ];
+        let result = check_operations(ops);
+        assert!(matches!(result, Ok(())), "Test failed: {:?}", result);
+
+        let ops = vec![
+            Append("d".to_string()),
+            Checkpoint,
+            Witness,
+            Unwitness("d".to_string()),
+            Rewind,
+            Unwitness("d".to_string()),
+        ];
+        let result = check_operations(ops);
+        assert!(matches!(result, Ok(())), "Test failed: {:?}", result);
+
+        let ops = vec![
+            Append("o".to_string()),
+            Checkpoint,
+            Witness,
+            Checkpoint,
+            Unwitness("o".to_string()),
+            Rewind,
+            Rewind,
+        ];
+        let result = check_operations(ops);
+        assert!(matches!(result, Ok(())), "Test failed: {:?}", result);
     }
 
     //
@@ -936,8 +1024,8 @@ pub(crate) mod tests {
 
         let mut tree_size = 0;
         let mut tree_values = vec![];
-        let mut tree_checkpoints = vec![];
-        let mut tree_witnesses: Vec<(usize, H)> = vec![];
+        // the number of leaves in the tree at the time that a checkpoint is made
+        let mut tree_checkpoints: Vec<usize> = vec![];
 
         for op in ops {
             prop_assert_eq!(tree_size, tree_values.len());
@@ -959,29 +1047,12 @@ pub(crate) mod tests {
                 Witness => {
                     if tree.witness() {
                         prop_assert!(tree_size != 0);
-                        if !tree_witnesses
-                            .iter()
-                            .any(|v| &v.1 == tree_values.last().unwrap())
-                        {
-                            tree_witnesses
-                                .push((tree_size - 1, tree_values.last().unwrap().clone()));
-                        }
                     } else {
                         prop_assert_eq!(tree_size, 0);
                     }
                 }
                 Unwitness(value) => {
-                    if tree.remove_witness(&value) {
-                        if let Some((i, _)) =
-                            tree_witnesses.iter().enumerate().find(|v| (v.1).1 == value)
-                        {
-                            tree_witnesses.remove(i);
-                        } else {
-                            panic!("witness should not have been removed");
-                        }
-                    } else if tree_witnesses.iter().any(|v| v.1 == value) {
-                        panic!("witness should have been removed");
-                    }
+                    tree.remove_witness(&value);
                 }
                 Checkpoint => {
                     tree_checkpoints.push(tree_size);
@@ -992,29 +1063,13 @@ pub(crate) mod tests {
 
                     if tree.rewind() {
                         prop_assert!(!tree_checkpoints.is_empty());
-                        let checkpoint_location = tree_checkpoints.pop().unwrap();
-                        //for &(index, _) in tree_witnesses.iter() {
-                        //    // index is the index in tree_values
-                        //    // checkpoint_location is the size of the tree
-                        //    // at the time of the checkpoint
-                        //    // index should always be strictly smaller or
-                        //    // else a witness would be erased!
-                        //    prop_assert!(index < checkpoint_location);
-                        //}
-                        tree_values.truncate(checkpoint_location);
-                        tree_size = checkpoint_location;
-                    } else if !tree_checkpoints.is_empty() {
-                        let checkpoint_location = *tree_checkpoints.last().unwrap();
-                        prop_assert!(tree_witnesses
-                            .iter()
-                            .any(|&(index, _)| index >= checkpoint_location));
+                        let checkpointed_tree_size = tree_checkpoints.pop().unwrap();
+                        tree_values.truncate(checkpointed_tree_size);
+                        tree_size = checkpointed_tree_size;
                     }
                 }
                 Authpath(value) => {
                     if let Some((position, path)) = tree.authentication_path(&value) {
-                        // must be the case that value was a witness
-                        assert!(tree_witnesses.iter().any(|(_, witness)| witness == &value));
-
                         let mut extended_tree_values = tree_values.clone();
                         extended_tree_values.resize(1 << DEPTH, H::empty_leaf());
                         let expected_root = lazy_root::<H>(extended_tree_values);
@@ -1026,11 +1081,6 @@ pub(crate) mod tests {
                             &compute_root_from_auth_path(value, position, &path),
                             &expected_root
                         );
-                    } else {
-                        // must be the case that value wasn't a witness
-                        for (_, witness) in tree_witnesses.iter() {
-                            prop_assert!(witness != &value);
-                        }
                     }
                 }
             }

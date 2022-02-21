@@ -1,7 +1,7 @@
 /// Sample implementation of the Tree interface.
 use super::{Altitude, Frontier, Hashable, Position, Recording, Tree};
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct TreeState<H: Hashable> {
     leaves: Vec<H>,
     current_offset: usize,
@@ -134,7 +134,7 @@ impl<H: Hashable + PartialEq + Clone> TreeState<H> {
     }
 }
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct CompleteTree<H: Hashable> {
     tree_state: TreeState<H>,
     checkpoints: Vec<(TreeState<H>, bool)>,

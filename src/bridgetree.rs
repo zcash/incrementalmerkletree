@@ -389,10 +389,6 @@ impl<A> AuthFragment<A> {
         }
     }
 
-    pub fn position(&self) -> Position {
-        self.position
-    }
-
     pub fn altitudes_observed(&self) -> usize {
         self.altitudes_observed
     }
@@ -445,7 +441,7 @@ impl<H: Hashable + Clone + PartialEq> AuthFragment<H> {
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
-pub struct MerkleBridge<H> {
+pub struct MerkleBridge<H: Ord> {
     /// The position of the final leaf in the frontier of the
     /// bridge that this bridge is the successor of, or None
     /// if this is the first bridge in a tree.
@@ -453,10 +449,11 @@ pub struct MerkleBridge<H> {
     /// Fragments of authorization path data for prior bridges,
     /// keyed by bridge index.
     auth_fragments: BTreeMap<Position, AuthFragment<H>>,
+    /// The leading edge of the bridge.
     frontier: NonEmptyFrontier<H>,
 }
 
-impl<H> MerkleBridge<H> {
+impl<H: Ord> MerkleBridge<H> {
     /// Construct a new Merkle bridge containing only the specified
     /// leaf.
     pub fn new(value: H) -> Self {
@@ -523,21 +520,24 @@ impl<H> MerkleBridge<H> {
 }
 
 impl<H: Hashable> MerkleBridge<H> {
-    /// Constructs a new bridge to follow this one. The
-    /// successor will track the information necessary to create an
-    /// authentication path for the leaf most recently appended to
-    /// this bridge's frontier.
-    pub fn successor(&self) -> Self {
+    /// Constructs a new bridge to follow this one. If witness_current_leaf is true, the successor
+    /// will track the information necessary to create an authentication path for the leaf most
+    /// recently appended to this bridge's frontier.
+    pub fn successor(&self, witness_current_leaf: bool) -> Self {
         let result = MerkleBridge {
             prior_position: Some(self.frontier.position()),
             auth_fragments: self
                 .auth_fragments
                 .iter()
                 .map(|(k, v)| (*k, v.successor())) //TODO: filter_map and discard what we can
-                .chain(Some((
-                    self.frontier.position(),
-                    AuthFragment::new(self.frontier.position()),
-                )))
+                .chain(if witness_current_leaf {
+                    Some((
+                        self.frontier.position(),
+                        AuthFragment::new(self.frontier.position()),
+                    ))
+                } else {
+                    None
+                })
                 .collect(),
             frontier: self.frontier.clone(),
         };
@@ -612,21 +612,31 @@ impl<H: Hashable> MerkleBridge<H> {
     }
 }
 
-#[derive(Copy, Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub enum Checkpoint {
-    /// Checkpoint of the empty bridge
-    Empty,
-    /// Checkpoint of a particular bridge state to which it is
-    /// possible to rewind.
-    AtIndex {
-        bridge_idx: usize,
-        is_witnessed: bool,
-    },
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Checkpoint<H: Ord> {
+    /// The number of bridges that will be retained in a rewind.
+    bridges_len: usize,
+    /// A flag indicating whether or not the current state of the tree
+    /// had been witnessed at the time the checkpoint was created.
+    is_witnessed: bool,
+    /// The number of checkpoints at this position at the time this checkpoint was created.
+    is_checkpointed: bool,
+    /// When a witness is forgotten, if the index of the forgotten witness is <= bridge_idx we
+    /// record it in the current checkpoint so that on rollback, we restore the forgotten
+    /// witnesses to the BridgeTree's "saved" list. If the witness was newly created since the
+    /// checkpoint, we don't need to remember when we forget it because both the witness
+    /// creation and removal will be reverted in the rollback.
+    forgotten: BTreeMap<H, usize>,
 }
 
-impl Checkpoint {
-    pub fn is_empty(&self) -> bool {
-        matches!(&self, Checkpoint::Empty)
+impl<H: Ord> Checkpoint<H> {
+    pub fn at_length(bridges_len: usize, is_witnessed: bool, is_checkpointed: bool) -> Self {
+        Checkpoint {
+            bridges_len,
+            is_witnessed,
+            is_checkpointed,
+            forgotten: BTreeMap::new(),
+        }
     }
 }
 
@@ -640,7 +650,7 @@ pub struct BridgeTree<H: Ord, const DEPTH: u8> {
     /// authentication path to index in the bridges vector.
     saved: BTreeMap<H, usize>,
     /// A stack of bridge indices to which it's possible to rewind directly.
-    checkpoints: Vec<Checkpoint>,
+    checkpoints: Vec<Checkpoint<H>>,
     /// The maximum number of checkpoints to retain. If this number is
     /// exceeded, the oldest checkpoint will be dropped when creating
     /// a new checkpoint.
@@ -655,17 +665,6 @@ impl<H: Hashable + Debug, const DEPTH: u8> Debug for BridgeTree<H, DEPTH> {
             DEPTH, self.bridges, self.saved, self.checkpoints, self.max_checkpoints
         )
     }
-}
-
-/// An internal-only enum used to indicate whether the `witness_internal`
-/// method is being called in the context of marking a leaf as one for
-/// which it needs to be able to construct a witness, or whether that
-/// leaf is merely being marked as a checkpoint to which it is possible
-/// to rewind.
-#[derive(Debug, Copy, Clone, PartialEq, Eq)]
-enum BoundaryType {
-    Witness,
-    Checkpoint,
 }
 
 /// Errors that can appear when validating the internal consistency of a `[MerkleBridge]`
@@ -701,7 +700,7 @@ impl<H: Ord, const DEPTH: u8> BridgeTree<H, DEPTH> {
     }
 
     /// Returns the checkpoints to which this tree may be rewound.
-    pub fn checkpoints(&self) -> &[Checkpoint] {
+    pub fn checkpoints(&self) -> &[Checkpoint<H>] {
         &self.checkpoints
     }
 
@@ -730,7 +729,7 @@ impl<H: Hashable, const DEPTH: u8> BridgeTree<H, DEPTH> {
     pub fn from_parts(
         bridges: Vec<MerkleBridge<H>>,
         saved: BTreeMap<H, usize>,
-        checkpoints: Vec<Checkpoint>,
+        checkpoints: Vec<Checkpoint<H>>,
         max_checkpoints: usize,
     ) -> Result<Self, BridgeTreeError> {
         // check that saved values correspond to bridges
@@ -738,80 +737,29 @@ impl<H: Hashable, const DEPTH: u8> BridgeTree<H, DEPTH> {
             .iter()
             .any(|(a, i)| i >= &bridges.len() || bridges[*i].frontier().leaf_value() != a)
         {
-            Err(BridgeTreeError::InvalidWitnessIndex)
-        } else if bridges.is_empty() {
-            // it's okay to return the empty bridge, but only if there are no saved points
-            // and no non-empty checkpoints
-            if saved.is_empty() && checkpoints.iter().all(|c| c.is_empty()) {
-                let mut result = Self::new(max_checkpoints);
-                for _ in checkpoints.iter() {
-                    // restore the correct number of empty checkpoints.
-                    result.checkpoint()
-                }
-                Ok(result)
-            } else {
-                Err(BridgeTreeError::InvalidSavePoints)
-            }
-        // check continuity of bridge order
-        } else if bridges
+            return Err(BridgeTreeError::InvalidWitnessIndex);
+        }
+
+        if checkpoints.len() > max_checkpoints
+            || checkpoints.iter().any(|c| c.bridges_len > bridges.len())
+        {
+            return Err(BridgeTreeError::CheckpointMismatch);
+        }
+
+        if bridges
             .iter()
             .zip(bridges.iter().skip(1))
             .any(|(prev, next)| !next.can_follow(prev))
         {
-            Err(BridgeTreeError::ContinuityError)
-        // verify checkpoints to ensure continuity from bridge locations
-        } else if checkpoints.len() > max_checkpoints
-            || checkpoints.iter().any(|c| match c {
-                Checkpoint::Empty => false, // empty checkpoint is always ok
-                Checkpoint::AtIndex {
-                    bridge_idx,
-                    is_witnessed,
-                } => {
-                    bridge_idx >= &bridges.len()
-                        || (*is_witnessed
-                            && !saved.contains_key(bridges[*bridge_idx].current_leaf()))
-                }
-            })
-        {
-            Err(BridgeTreeError::CheckpointMismatch)
-        } else {
-            Ok(BridgeTree {
-                bridges,
-                saved,
-                checkpoints,
-                max_checkpoints,
-            })
-        }
-    }
-
-    fn witness_internal(&mut self, btype: BoundaryType) -> Option<usize> {
-        let blen = self.bridges.len();
-        let (leaf, succ) = self
-            .bridges
-            .last()
-            .map(|current| (current.leaf_value().clone(), current.successor()))?;
-
-        // a duplicate frontier might occur when we observe a previously witnessed
-        // value where that value was subsequently removed.
-        let is_duplicate_frontier =
-            blen > 1 && self.bridges[blen - 1].position() == self.bridges[blen - 2].position();
-
-        let save_idx = if is_duplicate_frontier {
-            // By saving at `blen - 2` we effectively restore the original witness.
-            // We do not push new duplicate frontiers.
-            blen - 2
-        } else {
-            // only push the successor if its frontier is not a duplicate
-            self.bridges.push(succ);
-            blen - 1
-        };
-
-        if btype == BoundaryType::Witness {
-            // if we already have an entry for the leaf hash, don't update it
-            self.saved.entry(leaf).or_insert(save_idx);
+            return Err(BridgeTreeError::ContinuityError);
         }
 
-        Some(save_idx)
+        Ok(BridgeTree {
+            bridges,
+            saved,
+            checkpoints,
+            max_checkpoints,
+        })
     }
 }
 
@@ -846,7 +794,7 @@ impl<H: Hashable, const DEPTH: u8> crate::Frontier<H> for BridgeTree<H, DEPTH> {
     }
 }
 
-impl<H: Hashable, const DEPTH: u8> Tree<H> for BridgeTree<H, DEPTH> {
+impl<H: Hashable + Debug, const DEPTH: u8> Tree<H> for BridgeTree<H, DEPTH> {
     type Recording = BridgeRecording<H, DEPTH>;
 
     /// Returns the most recently appended leaf value.
@@ -863,7 +811,29 @@ impl<H: Hashable, const DEPTH: u8> Tree<H> for BridgeTree<H, DEPTH> {
     /// Marks the current tree state leaf as a value that we're interested in
     /// witnessing. Returns true if successful and false if the tree is empty.
     fn witness(&mut self) -> bool {
-        self.witness_internal(BoundaryType::Witness).is_some()
+        if let Some(current_leaf) = self.current_leaf().cloned() {
+            // If the latest bridge is a newly created checkpoint, the last two
+            // bridges will have the same position and all we need to do is mark
+            // the checkpointed leaf as being saved.
+            let idx = self.bridges.len() - 1;
+            let position = self.bridges[idx].position();
+            if idx > 0 && position == self.bridges[idx - 1].position() {
+                // the current bridge has not been advanced, so we just need to make
+                // sure that we have an auth fragment tracking the witnessed leaf
+                self.bridges[idx]
+                    .auth_fragments
+                    .entry(position)
+                    .or_insert(AuthFragment::new(position));
+                self.saved.entry(current_leaf).or_insert(idx - 1);
+            } else {
+                self.bridges.push(self.bridges[idx].successor(true));
+                self.saved.entry(current_leaf).or_insert(idx);
+            }
+
+            true
+        } else {
+            false
+        }
     }
 
     /// Obtains an authentication path to the value specified in the tree.
@@ -931,24 +901,53 @@ impl<H: Hashable, const DEPTH: u8> Tree<H> for BridgeTree<H, DEPTH> {
     }
 
     /// Marks the specified tree state value as a value we're no longer
-    /// interested in maintaining a witness for. Returns true if successful and
-    /// false if the value is not a known witness.
+    /// interested in maintaining a witness for. Use the `garbage_collect`
+    /// method to fully remove witness information.
+    ///
+    /// Returns true if successful and false if the value is not a known witness.
     fn remove_witness(&mut self, value: &H) -> bool {
-        self.saved.remove(value).is_some()
+        if let Some(idx) = self.saved.remove(value) {
+            // If the index of the saved value is one that could have been known
+            // at the last checkpoint, then add it to the set of those forgotten
+            // during the current checkpoint span so that it can be restored
+            // on rollback.
+            if let Some(c) = self.checkpoints.last_mut() {
+                if c.bridges_len > 0 && idx < c.bridges_len - 1 {
+                    c.forgotten.insert(value.clone(), idx);
+                }
+            }
+            true
+        } else {
+            false
+        }
     }
 
     /// Marks the current tree state as a checkpoint if it is not already a
     /// checkpoint.
     fn checkpoint(&mut self) {
-        let is_witnessed = self.current_leaf().map_or(false, |v| self.is_witnessed(v));
-        let new_checkpoint = self.witness_internal(BoundaryType::Checkpoint).map_or(
-            Checkpoint::Empty,
-            |bridge_idx| Checkpoint::AtIndex {
-                bridge_idx,
+        let len = self.bridges.len();
+        let is_witnessed = self.current_leaf().map_or(false, |l| self.is_witnessed(l));
+        if len < 2 || self.bridges[len - 1].position() != self.bridges[len - 2].position() {
+            if len > 0 {
+                self.bridges.push(self.bridges[len - 1].successor(false));
+            }
+            let is_checkpointed = self.checkpoints.last().iter().any(|c| c.bridges_len == len);
+            self.checkpoints
+                .push(Checkpoint::at_length(len, is_witnessed, is_checkpointed));
+        } else {
+            // the leading bridge and the previous bridge both point at the same state,
+            // so we checkpoint the former and record whether or not it was witnessed.
+            let is_checkpointed = self
+                .checkpoints
+                .last()
+                .iter()
+                .any(|c| c.bridges_len == len - 1);
+            self.checkpoints.push(Checkpoint::at_length(
+                len - 1,
                 is_witnessed,
-            },
-        );
-        self.checkpoints.push(new_checkpoint);
+                is_checkpointed,
+            ));
+        }
 
         if self.checkpoints.len() > self.max_checkpoints {
             self.drop_oldest_checkpoint();
@@ -960,58 +959,28 @@ impl<H: Hashable, const DEPTH: u8> Tree<H> for BridgeTree<H, DEPTH> {
     /// witness data would be destroyed in the process.
     fn rewind(&mut self) -> bool {
         match self.checkpoints.pop() {
-            Some(c @ Checkpoint::Empty) => {
-                if self.saved.is_empty() {
-                    self.bridges.truncate(0);
-                    true
-                } else {
+            Some(mut c) => {
+                if self.saved.values().any(|saved_idx| {
+                    c.bridges_len == 0
+                        || (!c.is_witnessed && *saved_idx >= c.bridges_len - 1)
+                        || (c.is_witnessed && *saved_idx >= c.bridges_len)
+                }) {
+                    // there is a witnessed value at a later position, or the
+                    // current position was witnessed since the checkpoint was
+                    // created, so we restore the removed checkpoint and return
+                    // failure
                     self.checkpoints.push(c);
                     false
-                }
-            }
-            Some(
-                c @ Checkpoint::AtIndex {
-                    bridge_idx,
-                    is_witnessed,
-                },
-            ) => {
-                // Do not rewind if doing so would remove a witness.
-                // However, if the index to which we are rewinding is
-                // a witnessed index, we can rewind and re-witness.
-                match self
-                    .saved
-                    .values()
-                    .filter(|saved_idx| *saved_idx >= &bridge_idx)
-                    .max()
-                {
-                    Some(saved_idx)
-                        if *saved_idx > bridge_idx
-                            || (*saved_idx == bridge_idx && !is_witnessed) =>
-                    {
-                        // there is a witnessed value at a later position, so
-                        // we restore the removed checkpoint and return failure
-                        self.checkpoints.push(c);
-                        false
-                    }
-                    Some(saved_idx) if *saved_idx == bridge_idx => {
-                        // the position to which we are rewinding was previously
-                        // witnessed, so we re-witness after truncation
-                        self.bridges.truncate(bridge_idx + 1);
+                } else {
+                    self.bridges.truncate(c.bridges_len);
+                    self.saved.append(&mut c.forgotten);
+                    let len = self.bridges.len();
+                    if c.is_witnessed {
                         self.witness();
-                        true
+                    } else if len > 0 && c.is_checkpointed {
+                        self.bridges.push(self.bridges[len - 1].successor(false));
                     }
-                    _ => {
-                        // no witnesses at positions later than the checkpoint,
-                        // so we can just truncate.
-                        self.bridges.truncate(bridge_idx + 1);
-                        // if the checkpoint removed was a duplicate, we need to
-                        // restore the successor bridge so that future appends correctly
-                        // affect the successor bridge
-                        if self.checkpoints.last().iter().any(|c0| **c0 == c) {
-                            self.witness_internal(BoundaryType::Checkpoint);
-                        }
-                        true
-                    }
+                    true
                 }
             }
             None => false,

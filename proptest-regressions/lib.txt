@@ -4,14 +4,9 @@
 #
 # It is recommended to check this file in to source control so that
 # everyone who runs the test benefits from these saved cases.
-cc 03d2e6d3f1b4481ff13703db7ae68090186d46f53b32b120ea7c8fd074d989bf # shrinks to ops = [Append(0)]
-cc a5db6c7b12d4e62269748d5de35ec6c1d9ecad60d40648e4b13e70e62fb9d4c6 # shrinks to ops = [Checkpoint, Rewind, Append(0)]
-cc 7db76fac780991d1809e66ea8313881b40942655d8acecd70a3764741aef061b # shrinks to ops = [Append(25), Witness, Authpath(25)]
-cc 25abc8160aaeb3e31332e11b939fee7fc8df15e84c75c115b2b9b0e301a01c35 # shrinks to ops = [Append("a"), Append("a"), Checkpoint, Append("a"), Witness, Rewind]
-cc 3aeb3f6da0d628f572f2c8eb0a96880f19ab6eabda0f755a2b7aa488857c5d05 # shrinks to ops = [Append("n"), Witness, Checkpoint, Append("n"), Witness, Rewind]
-cc 05d84777b24be0fec28e8863e270a8394c1c1ada96d09653fe863e6f1fe22cd5 # shrinks to ops = [Append("a"), Append("a"), Append("a"), Append("a"), Append("a"), Append("a"), Append("a"), Append("a"), Append("a"), Append("a"), Append("l"), Witness, Append("a"), Authpath("l")]
-cc 630bea6389a30231ca8a7bfbd52ff855ccb313e966683ad15e0e27c97fdb5812 # shrinks to ops = [Append("i"), Witness, Witness, Unwitness("i"), Unwitness("i")]
-cc e235eeed24a308c7bd63636148fba5f70b2b764147d97f7ad742ae0aab246f3e # shrinks to ops = [Append("k"), Witness, Checkpoint, Rewind, Append("a"), Append("a"), Append("a"), Append("a"), Witness, Append("a"), Append("a"), Append("a"), Authpath("k")]
-cc b2e8571f71e494c3a8f3eda094360ef35945b9761d2ec43eb1661abbc959b2d4 # shrinks to ops = [Append("a"), Checkpoint, Witness, Rewind]
-cc f363fe92d0b7071b8e1a72098c169b5a2ae62ebb99ff8d8b7d1fffd6907901d1 # shrinks to ops = [Append("a"), Append("a"), Append("a"), Append("a"), Append("a"), Append("a"), Append("a"), Append("a"), Append("a"), Append("a"), Append("a"), Append("a"), Append("p"), Witness, Append("u"), Witness, Append("x"), Append("h"), Authpath("p")]
-cc fb05ac58c73f1a96fa2a7699f5bd22ecf2c9958de64e4de31adc9ba806f82611 # shrinks to ops = [Append(SipHashable(0)), Checkpoint, Append(SipHashable(26)), Checkpoint, Witness, Unwitness(SipHashable(26)), Rewind, Append(SipHashable(10)), Rewind]
+cc 6a5f61f970da957baf3be8b5383d71a1510b42e9457cc00509163fde8430f198 # shrinks to ops = [Append(SipHashable(0)), Checkpoint, Witness, Rewind]
+cc ed57a2e3d91f2da644f695b8698822f9eaa2b3fd1f5bd039a5753e7027623ed9 # shrinks to ops = [Append("a"), Unwitness("a"), Checkpoint, Witness, Rewind]
+cc aa498d80d63c58720a913f2edcc6ba19da462f7a824f5be906e63c7ca1566076 # shrinks to ops = [Append(SipHashable(0)), Checkpoint, Checkpoint, Rewind, Append(SipHashable(0)), Rewind, Append(SipHashable(1))]
+cc 7cebce1664b804d55e259c466ebcc140c4a3708f4ec49ed865d6009736b0a568 # shrinks to ops = [Append("d"), Checkpoint, Witness, Unwitness("d"), Rewind, Unwitness("d")]
+cc 9078a200bceb14aa2f78743f545dab9719db29ddbbb5f1f67fae01805da90f4b # shrinks to ops = [Append("a"), Unwitness("a"), Checkpoint, Checkpoint, Rewind, Append("a"), Rewind, Append("a")]
+cc 20e43678bbf38f4c40fdd9e6f5bbc2b8eebcb1756b599f443f3268d6cf8e9d22 # shrinks to ops = [Append("o"), Checkpoint, Witness, Checkpoint, Unwitness("o"), Rewind, Rewind]
