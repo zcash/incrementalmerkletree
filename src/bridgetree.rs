@@ -619,8 +619,6 @@ pub struct Checkpoint<H: Ord> {
     /// A flag indicating whether or not the current state of the tree
     /// had been witnessed at the time the checkpoint was created.
     is_witnessed: bool,
-    /// The number of checkpoints at this position at the time this checkpoint was created.
-    is_checkpointed: bool,
     /// When a witness is forgotten, if the index of the forgotten witness is <= bridge_idx we
     /// record it in the current checkpoint so that on rollback, we restore the forgotten
     /// witnesses to the BridgeTree's "saved" list. If the witness was newly created since the
@@ -630,11 +628,10 @@ pub struct Checkpoint<H: Ord> {
 }
 
 impl<H: Ord> Checkpoint<H> {
-    pub fn at_length(bridges_len: usize, is_witnessed: bool, is_checkpointed: bool) -> Self {
+    pub fn at_length(bridges_len: usize, is_witnessed: bool) -> Self {
         Checkpoint {
             bridges_len,
             is_witnessed,
-            is_checkpointed,
             forgotten: BTreeMap::new(),
         }
     }
@@ -931,22 +928,13 @@ impl<H: Hashable + Debug, const DEPTH: u8> Tree<H> for BridgeTree<H, DEPTH> {
             if len > 0 {
                 self.bridges.push(self.bridges[len - 1].successor(false));
             }
-            let is_checkpointed = self.checkpoints.last().iter().any(|c| c.bridges_len == len);
             self.checkpoints
-                .push(Checkpoint::at_length(len, is_witnessed, is_checkpointed));
+                .push(Checkpoint::at_length(len, is_witnessed));
         } else {
             // the leading bridge and the previous bridge both point at the same state,
             // so we checkpoint the former and record whether or not it was witnessed.
-            let is_checkpointed = self
-                .checkpoints
-                .last()
-                .iter()
-                .any(|c| c.bridges_len == len - 1);
-            self.checkpoints.push(Checkpoint::at_length(
-                len - 1,
-                is_witnessed,
-                is_checkpointed,
-            ));
+            self.checkpoints
+                .push(Checkpoint::at_length(len - 1, is_witnessed));
         }
 
         if self.checkpoints.len() > self.max_checkpoints {
@@ -974,10 +962,22 @@ impl<H: Hashable + Debug, const DEPTH: u8> Tree<H> for BridgeTree<H, DEPTH> {
                 } else {
                     self.bridges.truncate(c.bridges_len);
                     self.saved.append(&mut c.forgotten);
+
+                    let was_duplicate_checkpoint = self
+                        .checkpoints
+                        .last()
+                        .iter()
+                        .any(|c0| c0.bridges_len == c.bridges_len);
                     let len = self.bridges.len();
                     if c.is_witnessed {
+                        // if the checkpointed state was witnessed, we need to
+                        // restore the witness, as the successor bridge will have
+                        // been removed by truncation.
                         self.witness();
-                    } else if len > 0 && c.is_checkpointed {
+                    } else if len > 0 && was_duplicate_checkpoint {
+                        // if the checkpoint was a duplicate, we need to create
+                        // a successor so that future appends do not mutate the
+                        // state at the tip.
                         self.bridges.push(self.bridges[len - 1].successor(false));
                     }
                     true
