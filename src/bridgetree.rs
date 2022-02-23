@@ -4,7 +4,7 @@
 //! the sibling of a parent node in a binary tree.
 use serde::{Deserialize, Serialize};
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::convert::TryFrom;
 use std::fmt::Debug;
 use std::mem::size_of;
@@ -610,6 +610,10 @@ impl<H: Hashable> MerkleBridge<H> {
         let first = iter.next();
         iter.fold(first.cloned(), |acc, b| acc?.fuse(b))
     }
+
+    fn prune_auth_fragments(&mut self, to_remove: &BTreeSet<Position>) {
+        self.auth_fragments.retain(|k, _| !to_remove.contains(k));
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -633,6 +637,13 @@ impl<H: Ord> Checkpoint<H> {
             bridges_len,
             is_witnessed,
             forgotten: BTreeMap::new(),
+        }
+    }
+
+    pub fn rewrite_indices<F: Fn(usize) -> usize>(&mut self, f: F) {
+        self.bridges_len = f(self.bridges_len);
+        for v in self.forgotten.values_mut() {
+            *v = f(*v)
         }
     }
 }
@@ -758,6 +769,67 @@ impl<H: Hashable, const DEPTH: u8> BridgeTree<H, DEPTH> {
             max_checkpoints,
         })
     }
+
+    pub fn garbage_collect(&mut self) {
+        // Only garbage collect once we have more bridges than the maximum number of
+        // checkpoints; we cannot remove information that we might need to restore in
+        // a rewind.
+        if self.checkpoints.len() == self.max_checkpoints {
+            let gc_len = self.checkpoints.first().unwrap().bridges_len;
+            // Get a list of the leaf positions that we need to retain. This consists of
+            // all the saved leaves, plus all the leaves that have been forgotten since
+            // the most distant checkpoint to which we could rewind.
+            let remember: BTreeSet<H> = self
+                .saved
+                .keys()
+                .chain(self.checkpoints.iter().flat_map(|c| c.forgotten.keys()))
+                .cloned()
+                .collect();
+
+            let mut new_bridges: Vec<MerkleBridge<H>> = vec![];
+            let mut cur: Option<MerkleBridge<H>> = None;
+            let mut merged = 0;
+            let mut to_prune: BTreeSet<Position> = BTreeSet::new();
+            // TODO: I really want to use `into_iter` here, but can't because self.bridges is
+            // behind a mut reference?
+            for (i, next_bridge) in self.bridges.iter().enumerate() {
+                if let Some(cur_bridge) = cur {
+                    let mut new_cur =
+                        if remember.contains(cur_bridge.frontier.leaf_value()) || i > gc_len {
+                            // We need to remember cur_bridge; update its save index & put next_bridge
+                            // on the chopping block
+                            if let Some(idx) = self.saved.get_mut(cur_bridge.current_leaf()) {
+                                *idx = *idx - merged;
+                            }
+
+                            new_bridges.push(cur_bridge);
+                            next_bridge.clone()
+                        } else {
+                            // We can fuse these bridges together because we don't need to
+                            // remember next_bridge.
+                            merged += 1;
+                            to_prune.insert(cur_bridge.frontier.position());
+                            cur_bridge.fuse(&next_bridge).unwrap()
+                        };
+
+                    new_cur.prune_auth_fragments(&to_prune);
+                    cur = Some(new_cur);
+                } else {
+                    // this case will only occur for the first bridge
+                    cur = Some(next_bridge.clone());
+                }
+            }
+
+            if let Some(last_bridge) = cur {
+                new_bridges.push(last_bridge);
+            }
+
+            self.bridges = new_bridges;
+            for c in self.checkpoints.iter_mut() {
+                c.rewrite_indices(|idx| idx - merged);
+            }
+        }
+    }
 }
 
 impl<H: Hashable, const DEPTH: u8> crate::Frontier<H> for BridgeTree<H, DEPTH> {
@@ -791,7 +863,7 @@ impl<H: Hashable, const DEPTH: u8> crate::Frontier<H> for BridgeTree<H, DEPTH> {
     }
 }
 
-impl<H: Hashable + Debug, const DEPTH: u8> Tree<H> for BridgeTree<H, DEPTH> {
+impl<H: Hashable, const DEPTH: u8> Tree<H> for BridgeTree<H, DEPTH> {
     type Recording = BridgeRecording<H, DEPTH>;
 
     /// Returns the most recently appended leaf value.
@@ -1130,5 +1202,50 @@ mod tests {
     #[test]
     fn rewind_remove_witness() {
         crate::tests::check_rewind_remove_witness(BridgeTree::<String, 4>::new);
+    }
+
+    #[test]
+    fn garbage_collect() {
+        let mut t = BridgeTree::<String, 7>::new(10);
+        let mut to_unwitness = vec![];
+        let mut has_auth_path = vec![];
+        for i in 0u32..100 {
+            let elem: String = format!("{},", i);
+            assert_eq!(t.append(&elem), true);
+            if i % 5 == 0 {
+                t.checkpoint();
+            }
+            if i % 7 == 0 {
+                t.witness();
+                if i > 0 && i % 2 == 0 {
+                    to_unwitness.push(elem);
+                } else {
+                    has_auth_path.push(elem);
+                }
+            }
+            if i % 11 == 0 && !to_unwitness.is_empty() {
+                t.remove_witness(&to_unwitness.remove(0));
+            }
+        }
+        // 33 = 1 (root) + 20 (checkpointed) + 14 (witnessed) - 2 (witnessed & checkpointed)
+        assert_eq!(t.bridges().len(), 1 + 20 + 14 - 2);
+        let auth_paths = has_auth_path
+            .iter()
+            .map(|elem| {
+                t.authentication_path(elem)
+                    .expect("Must be able to get auth path")
+            })
+            .collect::<Vec<_>>();
+        t.garbage_collect();
+        // 21 = 33 - 10 (removed checkpoints) + 1 (not removed due to witness) - 3 (removed witnesses)
+        assert_eq!(t.bridges().len(), 33 - 10 + 1 - 3);
+        let retained_auth_paths = has_auth_path
+            .iter()
+            .map(|elem| {
+                t.authentication_path(elem)
+                    .expect("Must be able to get auth path")
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(auth_paths, retained_auth_paths);
     }
 }

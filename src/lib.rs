@@ -282,6 +282,7 @@ pub trait Recording<H> {
 pub(crate) mod tests {
     #![allow(deprecated)]
     use std::convert::TryFrom;
+    use std::fmt::Debug;
     use std::hash::Hasher;
     use std::hash::SipHasher;
 
@@ -728,12 +729,12 @@ pub(crate) mod tests {
     //
 
     #[derive(Clone)]
-    pub struct CombinedTree<H: Hashable + Ord + Eq, const DEPTH: u8> {
+    pub struct CombinedTree<H: Hashable, const DEPTH: u8> {
         inefficient: CompleteTree<H>,
         efficient: BridgeTree<H, DEPTH>,
     }
 
-    impl<H: Hashable + Ord + Eq + Clone, const DEPTH: u8> CombinedTree<H, DEPTH> {
+    impl<H: Hashable, const DEPTH: u8> CombinedTree<H, DEPTH> {
         pub fn new() -> Self {
             CombinedTree {
                 inefficient: CompleteTree::new(DEPTH.into(), 100),
@@ -742,9 +743,7 @@ pub(crate) mod tests {
         }
     }
 
-    impl<H: Hashable + Ord + Eq + Clone + std::fmt::Debug, const DEPTH: u8> Frontier<H>
-        for CombinedTree<H, DEPTH>
-    {
+    impl<H: Hashable + Debug, const DEPTH: u8> Frontier<H> for CombinedTree<H, DEPTH> {
         fn append(&mut self, value: &H) -> bool {
             let a = self.inefficient.append(value);
             let b = self.efficient.append(value);
@@ -761,9 +760,7 @@ pub(crate) mod tests {
         }
     }
 
-    impl<H: Hashable + Ord + Eq + Clone + std::fmt::Debug, const DEPTH: u8> Tree<H>
-        for CombinedTree<H, DEPTH>
-    {
+    impl<H: Hashable + Debug, const DEPTH: u8> Tree<H> for CombinedTree<H, DEPTH> {
         type Recording = CombinedRecording<H, DEPTH>;
 
         /// Returns the most recently appended leaf value.
@@ -853,9 +850,7 @@ pub(crate) mod tests {
         efficient: BridgeRecording<H, DEPTH>,
     }
 
-    impl<H: Hashable + Clone + PartialEq, const DEPTH: u8> Recording<H>
-        for CombinedRecording<H, DEPTH>
-    {
+    impl<H: Hashable, const DEPTH: u8> Recording<H> for CombinedRecording<H, DEPTH> {
         fn append(&mut self, value: &H) -> bool {
             let a = self.inefficient.append(value);
             let b = self.efficient.append(value);
@@ -883,7 +878,7 @@ pub(crate) mod tests {
 
     use Operation::*;
 
-    impl<H: Hashable + Ord + Eq> Operation<H> {
+    impl<H: Hashable> Operation<H> {
         pub fn apply<T: Tree<H>>(&self, tree: &mut T) -> Option<(Position, Vec<H>)> {
             match self {
                 Append(a) => {
@@ -1014,7 +1009,7 @@ pub(crate) mod tests {
         })
     }
 
-    fn check_operations<H: Hashable + Clone + std::fmt::Debug + Eq + Ord>(
+    fn check_operations<H: Hashable + std::fmt::Debug + Eq + Ord>(
         ops: Vec<Operation<H>>,
     ) -> Result<(), TestCaseError> {
         const DEPTH: u8 = 4;
