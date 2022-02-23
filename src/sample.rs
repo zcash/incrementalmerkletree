@@ -13,7 +13,7 @@ impl<H: Hashable + Clone> TreeState<H> {
     /// Creates a new, empty binary tree of specified depth.
     #[cfg(test)]
     pub fn new(depth: usize) -> Self {
-        TreeState {
+        Self {
             leaves: vec![H::empty_leaf(); 1 << depth],
             current_offset: 0,
             witnesses: vec![],

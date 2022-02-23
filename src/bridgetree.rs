@@ -46,7 +46,7 @@ pub struct NonEmptyFrontier<H> {
 impl<H> NonEmptyFrontier<H> {
     /// Constructs a new frontier with the specified value at position 0.
     pub fn new(value: H) -> Self {
-        NonEmptyFrontier {
+        Self {
             position: Position::zero(),
             leaf: Leaf::Left(value),
             ommers: vec![],
@@ -60,7 +60,7 @@ impl<H> NonEmptyFrontier<H> {
     ) -> Result<Self, FrontierError> {
         let expected_ommers = position.ommer_altitudes().count();
         if expected_ommers == ommers.len() {
-            Ok(NonEmptyFrontier {
+            Ok(Self {
                 position,
                 leaf,
                 ommers,
@@ -269,7 +269,7 @@ impl<H, const DEPTH: u8> TryFrom<NonEmptyFrontier<H>> for Frontier<H, DEPTH> {
 impl<H, const DEPTH: u8> Frontier<H, DEPTH> {
     /// Constructs a new empty frontier.
     pub fn empty() -> Self {
-        Frontier { frontier: None }
+        Self { frontier: None }
     }
 
     /// Constructs a new non-empty frontier from its constituent parts.
@@ -360,7 +360,7 @@ pub struct AuthFragment<A> {
 impl<A> AuthFragment<A> {
     /// Construct the new empty authentication path fragment for the specified position.
     pub fn new(position: Position) -> Self {
-        AuthFragment {
+        Self {
             position,
             altitudes_observed: 0,
             values: vec![],
@@ -372,7 +372,7 @@ impl<A> AuthFragment<A> {
     /// are valid.
     pub fn from_parts(position: Position, altitudes_observed: usize, values: Vec<A>) -> Self {
         assert!(altitudes_observed <= values.len());
-        AuthFragment {
+        Self {
             position,
             altitudes_observed,
             values,
@@ -382,7 +382,7 @@ impl<A> AuthFragment<A> {
     /// Construct the successor fragment for this fragment to produce a new empty fragment
     /// for the specified position.
     pub fn successor(&self) -> Self {
-        AuthFragment {
+        Self {
             position: self.position,
             altitudes_observed: self.altitudes_observed,
             values: vec![],
@@ -413,7 +413,7 @@ impl<A: Clone> AuthFragment<A> {
         if self.position == other.position
             && self.altitudes_observed + other.values.len() == other.altitudes_observed
         {
-            Some(AuthFragment {
+            Some(Self {
                 position: self.position,
                 altitudes_observed: other.altitudes_observed,
                 values: self
@@ -457,7 +457,7 @@ impl<H: Ord> MerkleBridge<H> {
     /// Construct a new Merkle bridge containing only the specified
     /// leaf.
     pub fn new(value: H) -> Self {
-        MerkleBridge {
+        Self {
             prior_position: None,
             auth_fragments: BTreeMap::new(),
             frontier: NonEmptyFrontier::new(value),
@@ -470,7 +470,7 @@ impl<H: Ord> MerkleBridge<H> {
         auth_fragments: BTreeMap<Position, AuthFragment<H>>,
         frontier: NonEmptyFrontier<H>,
     ) -> Self {
-        MerkleBridge {
+        Self {
             prior_position,
             auth_fragments,
             frontier,
@@ -524,7 +524,7 @@ impl<H: Hashable> MerkleBridge<H> {
     /// will track the information necessary to create an authentication path for the leaf most
     /// recently appended to this bridge's frontier.
     pub fn successor(&self, witness_current_leaf: bool) -> Self {
-        let result = MerkleBridge {
+        let result = Self {
             prior_position: Some(self.frontier.position()),
             auth_fragments: self
                 .auth_fragments
@@ -573,7 +573,7 @@ impl<H: Hashable> MerkleBridge<H> {
     /// directly.
     fn fuse(&self, next: &Self) -> Option<MerkleBridge<H>> {
         if next.can_follow(self) {
-            let fused = MerkleBridge {
+            let fused = Self {
                 prior_position: self.prior_position,
                 auth_fragments: self
                     .auth_fragments
@@ -715,7 +715,7 @@ impl<H: Ord, const DEPTH: u8> BridgeTree<H, DEPTH> {
 
 impl<H: Hashable, const DEPTH: u8> BridgeTree<H, DEPTH> {
     pub fn new(max_checkpoints: usize) -> Self {
-        BridgeTree {
+        Self {
             bridges: vec![],
             saved: BTreeMap::new(),
             checkpoints: vec![],
