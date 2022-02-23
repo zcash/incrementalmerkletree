@@ -28,9 +28,7 @@ pub mod bridgetree;
 mod sample;
 
 use serde::{Deserialize, Serialize};
-use std::convert::TryFrom;
-use std::ops::Add;
-use std::ops::Sub;
+use std::ops::{Add, AddAssign, Sub};
 
 /// A type-safe wrapper for indexing into "levels" of a binary tree, such that
 /// nodes at altitude `0` are leaves, nodes at altitude `1` are parents
@@ -90,17 +88,12 @@ impl From<Altitude> for usize {
 /// A type representing the position of a leaf in a Merkle tree.
 #[derive(Copy, Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 #[repr(transparent)]
-pub struct Position(u64);
+pub struct Position(usize);
 
 impl Position {
     /// Returns the position of the first leaf in the tree.
     pub fn zero() -> Self {
         Self(0)
-    }
-
-    /// Mutably increment the position value.
-    pub fn increment(&mut self) {
-        self.0 += 1
     }
 
     /// Returns the altitude of the top of a binary tree containing
@@ -169,22 +162,34 @@ impl Position {
     }
 }
 
-impl TryFrom<Position> for usize {
-    type Error = std::num::TryFromIntError;
-    fn try_from(p: Position) -> Result<usize, Self::Error> {
-        <usize>::try_from(p.0)
+impl From<Position> for usize {
+    fn from(p: Position) -> usize {
+        p.0
     }
 }
 
 impl From<Position> for u64 {
     fn from(p: Position) -> Self {
-        p.0
+        p.0 as u64
+    }
+}
+
+impl Add<usize> for Position {
+    type Output = Position;
+    fn add(self, other: usize) -> Self {
+        Position(self.0 + other)
+    }
+}
+
+impl AddAssign<usize> for Position {
+    fn add_assign(&mut self, other: usize) {
+        self.0 += other
     }
 }
 
 impl From<usize> for Position {
     fn from(sz: usize) -> Self {
-        Self(sz as u64)
+        Self(sz)
     }
 }
 
@@ -222,26 +227,30 @@ pub trait Tree<H>: Frontier<H> {
     type Recording: Recording<H>;
 
     /// Returns the most recently appended leaf value.
-    fn current_leaf(&self) -> Option<&H>;
+    fn current_position(&self) -> Option<Position>;
+
+    /// Returns the most recently appended leaf value.
+    fn current_leaf(&self) -> Option<(Position, H)>;
 
     /// Returns `true` if the tree can produce an authentication path for
-    /// the specified leaf value.
-    fn is_witnessed(&self, value: &H) -> bool;
+    /// the specified leaf value from the specified position in the tree.
+    fn is_witnessed(&self, position: Position, value: &H) -> bool;
 
     /// Marks the current leaf as one for which we're interested in producing
-    /// an authentication path. Returns true if successful or if the current
-    /// value was already marked, or false if the tree is empty.
+    /// an authentication path. Returns an optional value containing the current
+    /// position if successful or if the current value was already marked,
+    /// or None if the tree is empty.
     fn witness(&mut self) -> bool;
 
     /// Obtains an authentication path to the value specified in the tree.
     /// Returns `None` if there is no available authentication path to the
     /// specified value.
-    fn authentication_path(&self, value: &H) -> Option<(Position, Vec<H>)>;
+    fn authentication_path(&self, position: Position, value: &H) -> Option<Vec<H>>;
 
     /// Marks the specified tree state value as a value we're no longer
     /// interested in maintaining a witness for. Returns true if successful and
     /// false if the value is not a known witness.
-    fn remove_witness(&mut self, value: &H) -> bool;
+    fn remove_witness(&mut self, position: Position, value: &H) -> bool;
 
     /// Creates a new checkpoint for the current tree state. It is valid to
     /// have multiple checkpoints for the same tree state, and each `rewind`
