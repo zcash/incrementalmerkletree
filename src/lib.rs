@@ -43,35 +43,35 @@ pub struct Altitude(u8);
 impl Altitude {
     /// Convenience method for returning the zero altitude.
     pub fn zero() -> Self {
-        Altitude(0)
+        Self(0)
     }
 
     pub fn one() -> Self {
-        Altitude(1)
+        Self(1)
     }
 
-    pub fn iter_to(self, other: Altitude) -> impl Iterator<Item = Altitude> {
+    pub fn iter_to(self, other: Altitude) -> impl Iterator<Item = Self> {
         (self.0..other.0).into_iter().map(Altitude)
     }
 }
 
 impl Add<u8> for Altitude {
-    type Output = Altitude;
+    type Output = Self;
     fn add(self, value: u8) -> Self {
-        Altitude(self.0 + value)
+        Self(self.0 + value)
     }
 }
 
 impl Sub<u8> for Altitude {
-    type Output = Altitude;
+    type Output = Self;
     fn sub(self, value: u8) -> Self {
-        Altitude(self.0 - value)
+        Self(self.0 - value)
     }
 }
 
 impl From<u8> for Altitude {
     fn from(value: u8) -> Self {
-        Altitude(value)
+        Self(value)
     }
 }
 
@@ -95,7 +95,7 @@ pub struct Position(u64);
 impl Position {
     /// Returns the position of the first leaf in the tree.
     pub fn zero() -> Self {
-        Position(0)
+        Self(0)
     }
 
     /// Mutably increment the position value.
@@ -184,7 +184,7 @@ impl From<Position> for u64 {
 
 impl From<usize> for Position {
     fn from(sz: usize) -> Self {
-        Position(sz as u64)
+        Self(sz as u64)
     }
 }
 

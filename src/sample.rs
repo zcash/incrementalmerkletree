@@ -15,7 +15,7 @@ impl<H: Hashable + Clone> CompleteTree<H> {
     /// Creates a new, empty binary tree of specified depth.
     #[cfg(test)]
     pub fn new(depth: usize, max_checkpoints: usize) -> Self {
-        CompleteTree {
+        Self {
             leaves: vec![H::empty_leaf(); 1 << depth],
             current_position: 0,
             witnesses: vec![],
