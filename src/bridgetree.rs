@@ -1212,7 +1212,7 @@ mod tests {
         let mut t = BridgeTree::<String, 7>::new(10);
         let mut to_unwitness = vec![];
         let mut has_auth_path = vec![];
-        for i in 0u32..100 {
+        for i in 0usize..100 {
             let elem: String = format!("{},", i);
             assert_eq!(t.append(&elem), true);
             if i % 5 == 0 {
@@ -1221,21 +1221,22 @@ mod tests {
             if i % 7 == 0 {
                 t.witness();
                 if i > 0 && i % 2 == 0 {
-                    to_unwitness.push(elem);
+                    to_unwitness.push((Position::from(i), elem));
                 } else {
-                    has_auth_path.push(elem);
+                    has_auth_path.push((Position::from(i), elem));
                 }
             }
             if i % 11 == 0 && !to_unwitness.is_empty() {
-                t.remove_witness(&to_unwitness.remove(0));
+                let (pos, elem) = to_unwitness.remove(0);
+                t.remove_witness(pos, &elem);
             }
         }
         // 33 = 1 (root) + 20 (checkpointed) + 14 (witnessed) - 2 (witnessed & checkpointed)
         assert_eq!(t.bridges().len(), 1 + 20 + 14 - 2);
         let auth_paths = has_auth_path
             .iter()
-            .map(|elem| {
-                t.authentication_path(elem)
+            .map(|(pos, elem)| {
+                t.authentication_path(*pos, &elem)
                     .expect("Must be able to get auth path")
             })
             .collect::<Vec<_>>();
@@ -1244,8 +1245,8 @@ mod tests {
         assert_eq!(t.bridges().len(), 33 - 10 + 1 - 3);
         let retained_auth_paths = has_auth_path
             .iter()
-            .map(|elem| {
-                t.authentication_path(elem)
+            .map(|(pos, elem)| {
+                t.authentication_path(*pos, &elem)
                     .expect("Must be able to get auth path")
             })
             .collect::<Vec<_>>();

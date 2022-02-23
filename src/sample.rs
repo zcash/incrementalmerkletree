@@ -339,7 +339,8 @@ pub(crate) fn lazy_root<H: Hashable + Clone>(mut leaves: Vec<H>) -> H {
 #[cfg(test)]
 mod tests {
     use crate::tests::{compute_root_from_auth_path, SipHashable};
-    use crate::{Altitude, Frontier, Hashable, Tree};
+    use crate::{Altitude, Frontier, Hashable, Position, Tree};
+    use std::convert::TryFrom;
 
     use super::CompleteTree;
 
@@ -421,8 +422,9 @@ mod tests {
 
         assert_eq!(tree.root(), expected);
 
-        for i in 0..(1 << DEPTH) {
-            let (position, path) = tree.authentication_path(&SipHashable(i)).unwrap();
+        for i in 0u64..(1 << DEPTH) {
+            let position = Position::try_from(i).unwrap();
+            let path = tree.authentication_path(position, &SipHashable(i)).unwrap();
             assert_eq!(
                 compute_root_from_auth_path(SipHashable(i), position, &path),
                 expected
