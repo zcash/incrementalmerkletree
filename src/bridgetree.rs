@@ -340,25 +340,28 @@ impl<H: Hashable + Clone, const DEPTH: u8> crate::Frontier<H> for Frontier<H, DE
     }
 }
 
-/// Each AuthFragment stores part of the authentication path for the leaf at a particular position.
-/// Successive fragments may be concatenated to produce the authentication path up to one less than
-/// the maximum altitude of the Merkle frontier corresponding to the leaf at the specified
-/// position. Then, the authentication path may be completed by hashing with empty roots.
+/// Each AuthFragment stores part of the authentication path for the leaf at a 
+/// particular position.  Successive fragments may be concatenated to produce 
+/// the authentication path up to one less than the maximum altitude of the 
+/// Merkle frontier corresponding to the leaf at the specified position. Then, 
+/// the authentication path may be completed by hashing with empty roots.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AuthFragment<A> {
     /// The position of the leaf for which this path fragment is being constructed.
     position: Position,
-    /// We track the total number of altitudes collected across all fragments constructed for
-    /// the specified position separately from the length of the values vector because the values
-    /// will usually be split across multiple fragments.
+    /// We track the total number of altitudes collected across all fragments 
+    /// constructed for the specified position separately from the length of 
+    /// the values vector because the values will usually be split across multiple 
+    /// fragments.
     altitudes_observed: usize,
-    /// The subtree roots at altitudes required for the position that have not been included in
-    /// preceding fragments.
+    /// The subtree roots at altitudes required for the position that have not 
+    /// been included in preceding fragments.
     values: Vec<A>,
 }
 
 impl<A> AuthFragment<A> {
-    /// Construct the new empty authentication path fragment for the specified position.
+    /// Construct the new empty authentication path fragment for the specified 
+    /// position.
     pub fn new(position: Position) -> Self {
         Self {
             position,
@@ -629,12 +632,36 @@ pub struct Checkpoint<H: Ord> {
 }
 
 impl<H: Ord> Checkpoint<H> {
+    pub fn from_parts(
+        bridges_len: usize,
+        is_witnessed: bool,
+        forgotten: BTreeMap<(Position, H), usize>,
+    ) -> Self {
+        Self {
+            bridges_len,
+            is_witnessed,
+            forgotten,
+        }
+    }
+
     pub fn at_length(bridges_len: usize, is_witnessed: bool) -> Self {
         Checkpoint {
             bridges_len,
             is_witnessed,
             forgotten: BTreeMap::new(),
         }
+    }
+
+    pub fn bridges_len(&self) -> usize {
+        self.bridges_len
+    }
+
+    pub fn is_witnessed(&self) -> bool {
+        self.is_witnessed
+    }
+
+    pub fn forgotten(&self) -> &BTreeMap<(Position, H), usize> {
+        &self.forgotten
     }
 
     pub fn rewrite_indices<F: Fn(usize) -> usize>(&mut self, f: F) {
