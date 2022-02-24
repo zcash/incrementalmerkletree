@@ -879,9 +879,10 @@ impl<H: Hashable, const DEPTH: u8> Tree<H> for BridgeTree<H, DEPTH> {
     }
 
     /// Marks the current tree state leaf as a value that we're interested in
-    /// witnessing. Returns true if successful and false if the tree is empty.
-    fn witness(&mut self) -> bool {
-        if let Some(key @ (position, _)) = self.current_leaf() {
+    /// witnessing. Returns the current position and leaf value if the tree
+    /// is non-empty.
+    fn witness(&mut self) -> Option<(Position, H)> {
+        self.current_leaf().map(|key @ (position, _)| {
             // If the latest bridge is a newly created checkpoint, the last two
             // bridges will have the same position and all we need to do is mark
             // the checkpointed leaf as being saved.
@@ -893,16 +894,14 @@ impl<H: Hashable, const DEPTH: u8> Tree<H> for BridgeTree<H, DEPTH> {
                     .auth_fragments
                     .entry(position)
                     .or_insert(AuthFragment::new(position));
-                self.saved.entry(key).or_insert(idx - 1);
+                self.saved.entry(key.clone()).or_insert(idx - 1);
             } else {
                 self.bridges.push(self.bridges[idx].successor(true));
-                self.saved.entry(key).or_insert(idx);
+                self.saved.entry(key.clone()).or_insert(idx);
             }
 
-            true
-        } else {
-            false
-        }
+            key
+        })
     }
 
     /// Obtains an authentication path to the value specified in the tree.

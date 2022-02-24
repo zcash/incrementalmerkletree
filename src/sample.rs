@@ -65,17 +65,15 @@ impl<H: Hashable + PartialEq + Clone> TreeState<H> {
     }
 
     /// Marks the current tree state leaf as a value that we're interested in
-    /// witnessing. Returns true if successful and false if the tree is empty.
-    fn witness(&mut self) -> bool {
-        if let Some((pos, value)) = self.current_leaf() {
+    /// witnessing. Returns the current position and leaf value if the tree
+    /// is non-empty.
+    fn witness(&mut self) -> Option<(Position, H)> {
+        self.current_leaf().map(|(pos, value)| {
             if !self.is_witnessed(pos, &value) {
-                let value = value.clone();
-                self.witnesses.push((pos, value));
+                self.witnesses.push((pos, value.clone()));
             }
-            true
-        } else {
-            false
-        }
+            (pos, value)
+        })
     }
 
     /// Obtains an authentication path to the value specified in the tree.
@@ -207,8 +205,9 @@ impl<H: Hashable + PartialEq + Clone> Tree<H> for CompleteTree<H> {
     }
 
     /// Marks the current tree state leaf as a value that we're interested in
-    /// witnessing. Returns true if successful and false if the tree is empty.
-    fn witness(&mut self) -> bool {
+    /// witnessing. Returns the current position and leaf value if the tree
+    /// is non-empty.
+    fn witness(&mut self) -> Option<(Position, H)> {
         self.tree_state.witness()
     }
 

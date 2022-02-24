@@ -246,10 +246,10 @@ pub trait Tree<H>: Frontier<H> {
     fn is_witnessed(&self, position: Position, value: &H) -> bool;
 
     /// Marks the current leaf as one for which we're interested in producing
-    /// an authentication path. Returns an optional value containing the current
-    /// position if successful or if the current value was already marked,
-    /// or None if the tree is empty.
-    fn witness(&mut self) -> bool;
+    /// an authentication path. Returns an optional value containing the 
+    /// current position and leaf value if successful or if the current 
+    /// value was already marked, or None if the tree is empty.
+    fn witness(&mut self) -> Option<(Position, H)>;
 
     /// Obtains an authentication path to the value specified in the tree.
     /// Returns `None` if there is no available authentication path to the
@@ -656,13 +656,13 @@ pub(crate) mod tests {
         tree.append(&"a".to_string());
         assert_eq!(tree.remove_witness(0usize.into(), &"a".to_string()), false);
         tree.checkpoint();
-        assert_eq!(tree.witness(), true);
+        assert_eq!(tree.witness().is_some(), true);
         assert_eq!(tree.rewind(), false);
 
         let mut tree = new_tree(100);
         tree.append(&"a".to_string());
         tree.checkpoint();
-        assert_eq!(tree.witness(), true);
+        assert_eq!(tree.witness().is_some(), true);
         assert_eq!(tree.remove_witness(0usize.into(), &"a".to_string()), true);
         assert_eq!(tree.rewind(), true);
         assert_eq!(tree.remove_witness(0usize.into(), &"a".to_string()), false);
@@ -782,8 +782,9 @@ pub(crate) mod tests {
         }
 
         /// Marks the current tree state leaf as a value that we're interested in
-        /// witnessing. Returns true if successful and false if the tree is empty.
-        fn witness(&mut self) -> bool {
+        /// witnessing. Returns the current position and leaf value if the tree
+        /// is non-empty.
+        fn witness(&mut self) -> Option<(Position, H)> {
             let a = self.inefficient.witness();
             let b = self.efficient.witness();
             assert_eq!(a, b);
@@ -887,7 +888,7 @@ pub(crate) mod tests {
                     None
                 }
                 Witness => {
-                    assert!(tree.witness(), "witness failed");
+                    assert!(tree.witness().is_some(), "witness failed");
                     None
                 }
                 Unwitness(p, a) => {
@@ -1106,7 +1107,7 @@ pub(crate) mod tests {
                     }
                 }
                 Witness => {
-                    if tree.witness() {
+                    if tree.witness().is_some() {
                         prop_assert!(tree_size != 0);
                     } else {
                         prop_assert_eq!(tree_size, 0);
