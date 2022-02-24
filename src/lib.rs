@@ -371,7 +371,7 @@ pub(crate) mod tests {
         t.checkpoint();
         t.witness();
         t.append(&"a".to_string());
-        assert_eq!(t.rewind(), false);
+        assert!(!t.rewind());
         t.append(&"a".to_string());
         t.append(&"a".to_string());
         assert_eq!(t.root(), "aaaa____________");
@@ -501,7 +501,7 @@ pub(crate) mod tests {
         tree.append(&'a'.to_string());
         tree.witness();
         tree.checkpoint();
-        assert_eq!(tree.rewind(), true);
+        assert!(tree.rewind());
         for c in 'b'..'f' {
             tree.append(&c.to_string());
         }
@@ -532,7 +532,7 @@ pub(crate) mod tests {
         tree.witness();
         tree.checkpoint();
         tree.append(&'h'.to_string());
-        assert_eq!(tree.rewind(), true);
+        assert!(tree.rewind());
 
         assert_eq!(
             tree.authentication_path(Position::from(2), &"c".to_string()),
@@ -603,34 +603,34 @@ pub(crate) mod tests {
         t.checkpoint();
         t.append(&"b".to_string());
         t.witness();
-        assert_eq!(t.rewind(), false);
+        assert!(!t.rewind());
 
         let mut t = new_tree(100);
         t.append(&"a".to_string());
         t.checkpoint();
         t.witness();
-        assert_eq!(t.rewind(), false);
+        assert!(!t.rewind());
 
         let mut t = new_tree(100);
         t.append(&"a".to_string());
         t.witness();
         t.checkpoint();
-        assert_eq!(t.rewind(), true);
+        assert!(t.rewind());
 
         let mut t = new_tree(100);
         t.append(&"a".to_string());
         t.checkpoint();
         t.witness();
         t.append(&"a".to_string());
-        assert_eq!(t.rewind(), false);
+        assert!(!t.rewind());
 
         let mut t = new_tree(100);
         t.append(&"a".to_string());
         t.checkpoint();
         t.checkpoint();
-        assert_eq!(t.rewind(), true);
+        assert!(t.rewind());
         t.append(&"b".to_string());
-        assert_eq!(t.rewind(), true);
+        assert!(t.rewind());
         t.append(&"b".to_string());
         assert_eq!(t.root(), "ab______________");
     }
@@ -640,32 +640,32 @@ pub(crate) mod tests {
         tree.append(&"e".to_string());
         tree.witness();
         tree.checkpoint();
-        assert_eq!(tree.remove_witness(0usize.into(), &"e".to_string()), true);
-        assert_eq!(tree.rewind(), true);
-        assert_eq!(tree.remove_witness(0usize.into(), &"e".to_string()), true);
+        assert!(tree.remove_witness(0usize.into(), &"e".to_string()));
+        assert!(tree.rewind());
+        assert!(tree.remove_witness(0usize.into(), &"e".to_string()));
 
         let mut tree = new_tree(100);
         tree.append(&"e".to_string());
         tree.witness();
-        assert_eq!(tree.remove_witness(0usize.into(), &"e".to_string()), true);
+        assert!(tree.remove_witness(0usize.into(), &"e".to_string()));
         tree.checkpoint();
-        assert_eq!(tree.rewind(), true);
-        assert_eq!(tree.remove_witness(0usize.into(), &"e".to_string()), false);
+        assert!(tree.rewind());
+        assert!(!tree.remove_witness(0usize.into(), &"e".to_string()));
 
         let mut tree = new_tree(100);
         tree.append(&"a".to_string());
-        assert_eq!(tree.remove_witness(0usize.into(), &"a".to_string()), false);
+        assert!(!tree.remove_witness(0usize.into(), &"a".to_string()));
         tree.checkpoint();
-        assert_eq!(tree.witness().is_some(), true);
-        assert_eq!(tree.rewind(), false);
+        assert!(tree.witness().is_some());
+        assert!(!tree.rewind());
 
         let mut tree = new_tree(100);
         tree.append(&"a".to_string());
         tree.checkpoint();
-        assert_eq!(tree.witness().is_some(), true);
-        assert_eq!(tree.remove_witness(0usize.into(), &"a".to_string()), true);
-        assert_eq!(tree.rewind(), true);
-        assert_eq!(tree.remove_witness(0usize.into(), &"a".to_string()), false);
+        assert!(tree.witness().is_some());
+        assert!(tree.remove_witness(0usize.into(), &"a".to_string()));
+        assert!(tree.rewind());
+        assert!(!tree.remove_witness(0usize.into(), &"a".to_string()));
 
         // The following check_operations tests cover errors where the
         // test framework itself previously did not correctly handle
