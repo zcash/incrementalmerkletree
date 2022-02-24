@@ -393,6 +393,10 @@ impl<A> AuthFragment<A> {
         }
     }
 
+    pub fn position(&self) -> Position {
+        self.position
+    }
+
     pub fn altitudes_observed(&self) -> usize {
         self.altitudes_observed
     }
