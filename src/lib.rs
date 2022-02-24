@@ -204,7 +204,7 @@ impl TryFrom<u64> for Position {
 
 /// A trait describing the operations that make a value  suitable for inclusion in
 /// an incremental merkle tree.
-pub trait Hashable: Sized + Ord + Clone {
+pub trait Hashable: Sized {
     fn empty_leaf() -> Self;
 
     fn combine(level: Altitude, a: &Self, b: &Self) -> Self;
@@ -722,12 +722,12 @@ pub(crate) mod tests {
     //
 
     #[derive(Clone)]
-    pub struct CombinedTree<H: Hashable, const DEPTH: u8> {
+    pub struct CombinedTree<H: Hashable + Ord, const DEPTH: u8> {
         inefficient: CompleteTree<H>,
         efficient: BridgeTree<H, DEPTH>,
     }
 
-    impl<H: Hashable, const DEPTH: u8> CombinedTree<H, DEPTH> {
+    impl<H: Hashable + Ord + Clone, const DEPTH: u8> CombinedTree<H, DEPTH> {
         pub fn new() -> Self {
             CombinedTree {
                 inefficient: CompleteTree::new(DEPTH.into(), 100),
@@ -736,7 +736,7 @@ pub(crate) mod tests {
         }
     }
 
-    impl<H: Hashable + Debug, const DEPTH: u8> Frontier<H> for CombinedTree<H, DEPTH> {
+    impl<H: Hashable + Ord + Clone + Debug, const DEPTH: u8> Frontier<H> for CombinedTree<H, DEPTH> {
         fn append(&mut self, value: &H) -> bool {
             let a = self.inefficient.append(value);
             let b = self.efficient.append(value);
@@ -753,7 +753,7 @@ pub(crate) mod tests {
         }
     }
 
-    impl<H: Hashable + Debug, const DEPTH: u8> Tree<H> for CombinedTree<H, DEPTH> {
+    impl<H: Hashable + Ord + Clone + Debug, const DEPTH: u8> Tree<H> for CombinedTree<H, DEPTH> {
         type Recording = CombinedRecording<H, DEPTH>;
 
         /// Returns the most recently appended leaf value.
@@ -847,12 +847,14 @@ pub(crate) mod tests {
     }
 
     #[derive(Clone)]
-    pub struct CombinedRecording<H: Hashable, const DEPTH: u8> {
+    pub struct CombinedRecording<H: Hashable + Ord, const DEPTH: u8> {
         inefficient: CompleteRecording<H>,
         efficient: BridgeRecording<H, DEPTH>,
     }
 
-    impl<H: Hashable, const DEPTH: u8> Recording<H> for CombinedRecording<H, DEPTH> {
+    impl<H: Hashable + Ord + Clone + Debug, const DEPTH: u8> Recording<H>
+        for CombinedRecording<H, DEPTH>
+    {
         fn append(&mut self, value: &H) -> bool {
             let a = self.inefficient.append(value);
             let b = self.efficient.append(value);
@@ -1076,7 +1078,7 @@ pub(crate) mod tests {
         .prop_flat_map(move |optypes: Vec<OpType>| arb_operations_1(item_gen.clone(), optypes))
     }
 
-    fn check_operations<H: Hashable + std::fmt::Debug>(
+    fn check_operations<H: Hashable + Ord + Clone + Debug>(
         ops: Vec<Operation<H>>,
     ) -> Result<(), TestCaseError> {
         const DEPTH: u8 = 4;

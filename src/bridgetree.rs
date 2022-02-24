@@ -340,27 +340,27 @@ impl<H: Hashable + Clone, const DEPTH: u8> crate::Frontier<H> for Frontier<H, DE
     }
 }
 
-/// Each AuthFragment stores part of the authentication path for the leaf at a 
-/// particular position.  Successive fragments may be concatenated to produce 
-/// the authentication path up to one less than the maximum altitude of the 
-/// Merkle frontier corresponding to the leaf at the specified position. Then, 
+/// Each AuthFragment stores part of the authentication path for the leaf at a
+/// particular position.  Successive fragments may be concatenated to produce
+/// the authentication path up to one less than the maximum altitude of the
+/// Merkle frontier corresponding to the leaf at the specified position. Then,
 /// the authentication path may be completed by hashing with empty roots.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AuthFragment<A> {
     /// The position of the leaf for which this path fragment is being constructed.
     position: Position,
-    /// We track the total number of altitudes collected across all fragments 
-    /// constructed for the specified position separately from the length of 
-    /// the values vector because the values will usually be split across multiple 
+    /// We track the total number of altitudes collected across all fragments
+    /// constructed for the specified position separately from the length of
+    /// the values vector because the values will usually be split across multiple
     /// fragments.
     altitudes_observed: usize,
-    /// The subtree roots at altitudes required for the position that have not 
+    /// The subtree roots at altitudes required for the position that have not
     /// been included in preceding fragments.
     values: Vec<A>,
 }
 
 impl<A> AuthFragment<A> {
-    /// Construct the new empty authentication path fragment for the specified 
+    /// Construct the new empty authentication path fragment for the specified
     /// position.
     pub fn new(position: Position) -> Self {
         Self {
@@ -391,6 +391,10 @@ impl<A> AuthFragment<A> {
             altitudes_observed: self.altitudes_observed,
             values: vec![],
         }
+    }
+
+    pub fn position(&self) -> Position {
+        self.position
     }
 
     pub fn altitudes_observed(&self) -> usize {
@@ -523,7 +527,7 @@ impl<H: Ord> MerkleBridge<H> {
     }
 }
 
-impl<H: Hashable> MerkleBridge<H> {
+impl<H: Hashable + Ord + Clone> MerkleBridge<H> {
     /// Constructs a new bridge to follow this one. If witness_current_leaf is true, the successor
     /// will track the information necessary to create an authentication path for the leaf most
     /// recently appended to this bridge's frontier.
@@ -571,7 +575,7 @@ impl<H: Hashable> MerkleBridge<H> {
     /// to this bridge. The resulting Bridge will have the same state as though
     /// `self` had had every leaf used to construct `next` appended to it
     /// directly.
-    fn fuse(&self, next: &Self) -> Option<MerkleBridge<H>> {
+    fn fuse(&self, next: &Self) -> Option<Self> {
         if next.can_follow(self) {
             let fused = Self {
                 prior_position: self.prior_position,
@@ -605,7 +609,7 @@ impl<H: Hashable> MerkleBridge<H> {
     /// Returns a single MerkleBridge that contains the aggregate information
     /// of all the provided bridges (discarding internal frontiers) or None
     /// if any of the bridges are not valid successors to one another.
-    fn fuse_all(bridges: &[MerkleBridge<H>]) -> Option<MerkleBridge<H>> {
+    fn fuse_all(bridges: &[Self]) -> Option<Self> {
         let mut iter = bridges.iter();
         let first = iter.next();
         iter.fold(first.cloned(), |acc, b| acc?.fuse(b))
@@ -689,7 +693,7 @@ pub struct BridgeTree<H: Ord, const DEPTH: u8> {
     max_checkpoints: usize,
 }
 
-impl<H: Hashable + Debug, const DEPTH: u8> Debug for BridgeTree<H, DEPTH> {
+impl<H: Hashable + Ord + Debug, const DEPTH: u8> Debug for BridgeTree<H, DEPTH> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> Result<(), std::fmt::Error> {
         write!(
             f,
@@ -748,7 +752,7 @@ impl<H: Ord, const DEPTH: u8> BridgeTree<H, DEPTH> {
     }
 }
 
-impl<H: Hashable, const DEPTH: u8> BridgeTree<H, DEPTH> {
+impl<H: Hashable + Ord + Clone, const DEPTH: u8> BridgeTree<H, DEPTH> {
     pub fn new(max_checkpoints: usize) -> Self {
         Self {
             bridges: vec![],
@@ -856,7 +860,7 @@ impl<H: Hashable, const DEPTH: u8> BridgeTree<H, DEPTH> {
     }
 }
 
-impl<H: Hashable, const DEPTH: u8> crate::Frontier<H> for BridgeTree<H, DEPTH> {
+impl<H: Hashable + Ord + Clone, const DEPTH: u8> crate::Frontier<H> for BridgeTree<H, DEPTH> {
     fn append(&mut self, value: &H) -> bool {
         if let Some(bridge) = self.bridges.last_mut() {
             if bridge.frontier.position().is_complete(Altitude(DEPTH)) {
@@ -887,7 +891,7 @@ impl<H: Hashable, const DEPTH: u8> crate::Frontier<H> for BridgeTree<H, DEPTH> {
     }
 }
 
-impl<H: Hashable, const DEPTH: u8> Tree<H> for BridgeTree<H, DEPTH> {
+impl<H: Hashable + Ord + Clone, const DEPTH: u8> Tree<H> for BridgeTree<H, DEPTH> {
     type Recording = BridgeRecording<H, DEPTH>;
 
     fn current_position(&self) -> Option<Position> {
@@ -1130,7 +1134,7 @@ pub struct BridgeRecording<H: Ord, const DEPTH: u8> {
     bridge: Option<MerkleBridge<H>>,
 }
 
-impl<H: Hashable + Clone + PartialEq, const DEPTH: u8> Recording<H> for BridgeRecording<H, DEPTH> {
+impl<H: Hashable + Clone + Ord, const DEPTH: u8> Recording<H> for BridgeRecording<H, DEPTH> {
     fn append(&mut self, value: &H) -> bool {
         if let Some(bridge) = self.bridge.as_mut() {
             if bridge.frontier.position.is_complete(Altitude(DEPTH)) {
