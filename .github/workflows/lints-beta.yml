@@ -1,11 +1,10 @@
-name: Nightly lints
+name: Beta lints
 
-# These lints are only informative, so we only run them directly on branches
-# and not trial-merges of PRs, to reduce noise.
-on: push
+# We only run these lints on trial-merges of PRs to reduce noise.
+on: pull_request
 
 jobs:
-  clippy-nightly:
+  clippy-beta:
     name: Clippy (beta)
     timeout-minutes: 30
     runs-on: ubuntu-latest

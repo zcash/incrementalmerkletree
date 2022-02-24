@@ -381,6 +381,7 @@ impl<A> AuthFragment<A> {
 
     /// Construct the successor fragment for this fragment to produce a new empty fragment
     /// for the specified position.
+    #[must_use]
     pub fn successor(&self) -> Self {
         Self {
             position: self.position,
@@ -523,6 +524,7 @@ impl<H: Hashable> MerkleBridge<H> {
     /// Constructs a new bridge to follow this one. If witness_current_leaf is true, the successor
     /// will track the information necessary to create an authentication path for the leaf most
     /// recently appended to this bridge's frontier.
+    #[must_use]
     pub fn successor(&self, witness_current_leaf: bool) -> Self {
         let result = Self {
             prior_position: Some(self.frontier.position()),
@@ -794,7 +796,7 @@ impl<H: Hashable, const DEPTH: u8> BridgeTree<H, DEPTH> {
                         // We need to remember cur_bridge; update its save index & put next_bridge
                         // on the chopping block
                         if let Some(idx) = self.saved.get_mut(&witness_key) {
-                            *idx = *idx - merged;
+                            *idx -= merged;
                         }
 
                         new_bridges.push(cur_bridge);
@@ -804,7 +806,7 @@ impl<H: Hashable, const DEPTH: u8> BridgeTree<H, DEPTH> {
                         // remember next_bridge.
                         merged += 1;
                         to_prune.insert(cur_bridge.frontier.position());
-                        cur_bridge.fuse(&next_bridge).unwrap()
+                        cur_bridge.fuse(next_bridge).unwrap()
                     };
 
                     new_cur.prune_auth_fragments(&to_prune);
@@ -893,7 +895,7 @@ impl<H: Hashable, const DEPTH: u8> Tree<H> for BridgeTree<H, DEPTH> {
                 self.bridges[idx]
                     .auth_fragments
                     .entry(position)
-                    .or_insert(AuthFragment::new(position));
+                    .or_insert_with(|| AuthFragment::new(position));
                 self.saved.entry(key.clone()).or_insert(idx - 1);
             } else {
                 self.bridges.push(self.bridges[idx].successor(true));
@@ -1165,8 +1167,11 @@ mod tests {
         t.witness();
         t.append(&"b".to_string());
         t.append(&"c".to_string());
-        assert_eq!(t.rewind(), false);
-        assert_eq!(t.drop_oldest_checkpoint(), true);
+        assert!(!t.rewind(), "Rewind is expected to fail.");
+        assert!(
+            t.drop_oldest_checkpoint(),
+            "Checkpoint drop is expected to succeed"
+        );
     }
 
     #[test]
@@ -1213,7 +1218,7 @@ mod tests {
         let mut has_auth_path = vec![];
         for i in 0usize..100 {
             let elem: String = format!("{},", i);
-            assert_eq!(t.append(&elem), true);
+            assert!(t.append(&elem), "Append should succeed.");
             if i % 5 == 0 {
                 t.checkpoint();
             }
@@ -1235,7 +1240,7 @@ mod tests {
         let auth_paths = has_auth_path
             .iter()
             .map(|(pos, elem)| {
-                t.authentication_path(*pos, &elem)
+                t.authentication_path(*pos, elem)
                     .expect("Must be able to get auth path")
             })
             .collect::<Vec<_>>();
@@ -1245,7 +1250,7 @@ mod tests {
         let retained_auth_paths = has_auth_path
             .iter()
             .map(|(pos, elem)| {
-                t.authentication_path(*pos, &elem)
+                t.authentication_path(*pos, elem)
                     .expect("Must be able to get auth path")
             })
             .collect::<Vec<_>>();
