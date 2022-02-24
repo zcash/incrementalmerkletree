@@ -246,8 +246,8 @@ pub trait Tree<H>: Frontier<H> {
     fn is_witnessed(&self, position: Position, value: &H) -> bool;
 
     /// Marks the current leaf as one for which we're interested in producing
-    /// an authentication path. Returns an optional value containing the 
-    /// current position and leaf value if successful or if the current 
+    /// an authentication path. Returns an optional value containing the
+    /// current position and leaf value if successful or if the current
     /// value was already marked, or None if the tree is empty.
     fn witness(&mut self) -> Option<(Position, H)>;
 
