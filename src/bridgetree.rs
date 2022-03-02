@@ -1050,45 +1050,35 @@ impl<H: Hashable + Ord + Clone, const DEPTH: u8> Tree<H> for BridgeTree<H, DEPTH
     }
 
     /// Rewinds the tree state to the previous checkpoint. This function will
-    /// fail and return false if there is no previous checkpoint or in the event
-    /// witness data would be destroyed in the process.
+    /// return false and leave the tree unmodified if no checkpoints exist.
     fn rewind(&mut self) -> bool {
         match self.checkpoints.pop() {
             Some(mut c) => {
-                if self.saved.values().any(|saved_idx| {
-                    c.bridges_len == 0
-                        || (!c.is_witnessed && *saved_idx >= c.bridges_len - 1)
-                        || (c.is_witnessed && *saved_idx >= c.bridges_len)
-                }) {
-                    // there is a witnessed value at a later position, or the
-                    // current position was witnessed since the checkpoint was
-                    // created, so we restore the removed checkpoint and return
-                    // failure
-                    self.checkpoints.push(c);
-                    false
-                } else {
-                    self.bridges.truncate(c.bridges_len);
-                    self.saved.append(&mut c.forgotten);
+                // drop witnessed values at and above the checkpoint height;
+                // we will re-witness if necessary.
+                self.saved
+                    .retain(|_, saved_idx| *saved_idx + 1 < c.bridges_len);
+                self.bridges.truncate(c.bridges_len);
+                self.saved.append(&mut c.forgotten);
 
-                    let was_duplicate_checkpoint = self
-                        .checkpoints
-                        .last()
-                        .iter()
-                        .any(|c0| c0.bridges_len == c.bridges_len);
-                    let len = self.bridges.len();
-                    if c.is_witnessed {
-                        // if the checkpointed state was witnessed, we need to
-                        // restore the witness, as the successor bridge will have
-                        // been removed by truncation.
-                        self.witness();
-                    } else if len > 0 && was_duplicate_checkpoint {
-                        // if the checkpoint was a duplicate, we need to create
-                        // a successor so that future appends do not mutate the
-                        // state at the tip.
-                        self.bridges.push(self.bridges[len - 1].successor(false));
-                    }
-                    true
+                let was_duplicate_checkpoint = self
+                    .checkpoints
+                    .last()
+                    .iter()
+                    .any(|c0| c0.bridges_len == c.bridges_len);
+                let len = self.bridges.len();
+                if c.is_witnessed {
+                    // if the checkpointed state was witnessed, we need to
+                    // restore the witness, as the successor bridge will have
+                    // been removed by truncation.
+                    self.witness();
+                } else if len > 0 && was_duplicate_checkpoint {
+                    // if the checkpoint was a duplicate, we need to create
+                    // a successor so that future appends do not mutate the
+                    // state at the tip.
+                    self.bridges.push(self.bridges[len - 1].successor(false));
                 }
+                true
             }
             None => false,
         }
@@ -1198,11 +1188,11 @@ mod tests {
         t.witness();
         t.append(&"b".to_string());
         t.append(&"c".to_string());
-        assert!(!t.rewind(), "Rewind is expected to fail.");
         assert!(
             t.drop_oldest_checkpoint(),
             "Checkpoint drop is expected to succeed"
         );
+        assert!(!t.rewind(), "Rewind is expected to fail.");
     }
 
     #[test]

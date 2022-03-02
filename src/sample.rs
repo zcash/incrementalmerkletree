@@ -1,6 +1,5 @@
+//! Sample implementation of the Tree interface.
 use super::{Altitude, Frontier, Hashable, Position, Recording, Tree};
-/// Sample implementation of the Tree interface.
-use std::convert::TryInto;
 
 #[derive(Clone, Debug)]
 pub struct TreeState<H: Hashable> {
@@ -144,7 +143,7 @@ impl<H: Hashable + PartialEq + Clone> TreeState<H> {
 #[derive(Clone, Debug)]
 pub struct CompleteTree<H: Hashable> {
     tree_state: TreeState<H>,
-    checkpoints: Vec<(TreeState<H>, bool)>,
+    checkpoints: Vec<TreeState<H>>,
     max_checkpoints: usize,
 }
 
@@ -228,36 +227,18 @@ impl<H: Hashable + PartialEq + Clone> Tree<H> for CompleteTree<H> {
     /// Marks the current tree state as a checkpoint if it is not already a
     /// checkpoint.
     fn checkpoint(&mut self) {
-        let is_witnessed = self
-            .tree_state
-            .current_leaf()
-            .into_iter()
-            .any(|(p, l)| self.tree_state.is_witnessed(p, &l));
-        self.checkpoints
-            .push((self.tree_state.clone(), is_witnessed));
+        self.checkpoints.push(self.tree_state.clone());
         if self.checkpoints.len() > self.max_checkpoints {
             self.drop_oldest_checkpoint();
         }
     }
 
     /// Rewinds the tree state to the previous checkpoint. This function will
-    /// fail and return false if there is no previous checkpoint or in the event
-    /// witness data would be destroyed in the process.
+    /// return false and leave the tree unmodified if no checkpoints exist.
     fn rewind(&mut self) -> bool {
-        if let Some((checkpointed_state, is_witnessed)) = self.checkpoints.pop() {
-            // if there are any witnessed leaves in the current tree state
-            // that would be removed, we don't rewind
-            if self.tree_state.witnesses.iter().any(|&(pos, _)| {
-                let offset: usize = (pos + 1).try_into().unwrap();
-                offset > checkpointed_state.current_offset
-                    || (offset == checkpointed_state.current_offset && !is_witnessed)
-            }) {
-                self.checkpoints.push((checkpointed_state, is_witnessed));
-                false
-            } else {
-                self.tree_state = checkpointed_state;
-                true
-            }
+        if let Some(checkpointed_state) = self.checkpoints.pop() {
+            self.tree_state = checkpointed_state;
+            true
         } else {
             false
         }
