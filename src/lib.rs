@@ -270,12 +270,7 @@ pub trait Tree<H>: Frontier<H> {
     /// that checkpoint record. If there are multiple checkpoints at a given
     /// tree state, the tree state will not be altered until all checkpoints
     /// at that tree state have been removed using `rewind`. This function
-    /// will fail and return false if there is no previous checkpoint or in
-    /// the event witness data would be destroyed in the process.
-    ///
-    /// In the case that this method returns `false`, the user should have
-    /// explicitly called `remove_witness` for each witnessed leaf marked
-    /// since the last checkpoint.
+    /// return false and leave the tree unmodified if no checkpoints exist.
     fn rewind(&mut self) -> bool;
 
     /// Start a recording of append operations performed on a tree.
@@ -371,7 +366,6 @@ pub(crate) mod tests {
         t.checkpoint();
         t.witness();
         t.append(&"a".to_string());
-        assert!(!t.rewind());
         t.append(&"a".to_string());
         t.append(&"a".to_string());
         assert_eq!(t.root(), "aaaa____________");
@@ -599,17 +593,19 @@ pub(crate) mod tests {
 
     pub(crate) fn check_checkpoint_rewind<T: Tree<String>, F: Fn(usize) -> T>(new_tree: F) {
         let mut t = new_tree(100);
-        t.append(&"a".to_string());
-        t.checkpoint();
-        t.append(&"b".to_string());
-        t.witness();
         assert!(!t.rewind());
+
+        let mut t = new_tree(100);
+        t.checkpoint();
+        assert!(t.rewind());
 
         let mut t = new_tree(100);
         t.append(&"a".to_string());
         t.checkpoint();
+        t.append(&"b".to_string());
         t.witness();
-        assert!(!t.rewind());
+        assert!(t.rewind());
+        assert_eq!(Some((Position::from(0), "a".to_string())), t.current_leaf());
 
         let mut t = new_tree(100);
         t.append(&"a".to_string());
@@ -622,7 +618,8 @@ pub(crate) mod tests {
         t.checkpoint();
         t.witness();
         t.append(&"a".to_string());
-        assert!(!t.rewind());
+        assert!(t.rewind());
+        assert_eq!(Some((Position::from(0), "a".to_string())), t.current_leaf());
 
         let mut t = new_tree(100);
         t.append(&"a".to_string());
@@ -636,6 +633,20 @@ pub(crate) mod tests {
     }
 
     pub(crate) fn check_rewind_remove_witness<T: Tree<String>, F: Fn(usize) -> T>(new_tree: F) {
+        let mut tree = new_tree(100);
+        tree.append(&"e".to_string());
+        tree.witness();
+        tree.checkpoint();
+        assert!(tree.rewind());
+        assert!(tree.remove_witness(0usize.into(), &"e".to_string()));
+
+        let mut tree = new_tree(100);
+        tree.append(&"e".to_string());
+        tree.checkpoint();
+        tree.witness();
+        assert!(tree.rewind());
+        assert!(!tree.remove_witness(0usize.into(), &"e".to_string()));
+
         let mut tree = new_tree(100);
         tree.append(&"e".to_string());
         tree.witness();
@@ -657,7 +668,7 @@ pub(crate) mod tests {
         assert!(!tree.remove_witness(0usize.into(), &"a".to_string()));
         tree.checkpoint();
         assert!(tree.witness().is_some());
-        assert!(!tree.rewind());
+        assert!(tree.rewind());
 
         let mut tree = new_tree(100);
         tree.append(&"a".to_string());
@@ -671,50 +682,69 @@ pub(crate) mod tests {
         // test framework itself previously did not correctly handle
         // chain state restoration.
 
-        let ops = vec![
-            Append("a".to_string()),
-            Unwitness(0usize.into(), "a".to_string()),
-            Checkpoint,
-            Witness,
-            Rewind,
-        ];
+        fn append(x: &str) -> Operation<String> {
+            Append(x.to_string())
+        }
+
+        fn unwitness(pos: usize, x: &str) -> Operation<String> {
+            Unwitness(Position::from(pos), x.to_string())
+        }
+
+        let ops = vec![append("x"), Checkpoint, Witness, Rewind, unwitness(0, "x")];
         let result = check_operations(ops);
-        assert!(matches!(result, Ok(())), "Test failed: {:?}", result);
+        assert!(
+            matches!(result, Ok(())),
+            "Reference/Test mismatch: {:?}",
+            result
+        );
 
         let ops = vec![
-            Append("s".to_string()),
-            Witness,
-            Append("m".to_string()),
+            append("d"),
             Checkpoint,
-            Unwitness(0usize.into(), "s".to_string()),
+            Witness,
+            unwitness(0, "d"),
             Rewind,
-            Unwitness(0usize.into(), "s".to_string()),
+            unwitness(0, "d"),
         ];
         let result = check_operations(ops);
-        assert!(matches!(result, Ok(())), "Test failed: {:?}", result);
+        assert!(
+            matches!(result, Ok(())),
+            "Reference/Test mismatch: {:?}",
+            result
+        );
 
         let ops = vec![
-            Append("d".to_string()),
+            append("o"),
             Checkpoint,
             Witness,
-            Unwitness(0usize.into(), "d".to_string()),
+            Checkpoint,
+            unwitness(0, "o"),
             Rewind,
-            Unwitness(0usize.into(), "d".to_string()),
+            Rewind,
         ];
         let result = check_operations(ops);
-        assert!(matches!(result, Ok(())), "Test failed: {:?}", result);
+        assert!(
+            matches!(result, Ok(())),
+            "Reference/Test mismatch: {:?}",
+            result
+        );
 
         let ops = vec![
-            Append("o".to_string()),
-            Checkpoint,
+            append("s"),
             Witness,
+            append("m"),
             Checkpoint,
-            Unwitness(0usize.into(), "o".to_string()),
+            unwitness(0, "s"),
             Rewind,
-            Rewind,
+            unwitness(0, "s"),
+            unwitness(0, "m"),
         ];
         let result = check_operations(ops);
-        assert!(matches!(result, Ok(())), "Test failed: {:?}", result);
+        assert!(
+            matches!(result, Ok(())),
+            "Reference/Test mismatch: {:?}",
+            result
+        );
     }
 
     //
