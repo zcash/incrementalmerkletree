@@ -374,7 +374,6 @@ impl<A> AuthFragment<A> {
     /// perform any meaningful validation that the provided values
     /// are valid.
     pub fn from_parts(position: Position, altitudes_observed: usize, values: Vec<A>) -> Self {
-        assert!(altitudes_observed <= values.len());
         Self {
             position,
             altitudes_observed,
