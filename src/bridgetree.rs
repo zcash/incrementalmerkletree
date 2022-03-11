@@ -345,7 +345,7 @@ impl<H: Hashable + Clone, const DEPTH: u8> crate::Frontier<H> for Frontier<H, DE
 /// the authentication path up to one less than the maximum altitude of the
 /// Merkle frontier corresponding to the leaf at the specified position. Then,
 /// the authentication path may be completed by hashing with empty roots.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct AuthFragment<A> {
     /// The position of the leaf for which this path fragment is being constructed.
     position: Position,
@@ -448,7 +448,7 @@ impl<H: Hashable + Clone + PartialEq> AuthFragment<H> {
     }
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct MerkleBridge<H: Ord> {
     /// The position of the final leaf in the frontier of the
     /// bridge that this bridge is the successor of, or None
@@ -676,7 +676,7 @@ impl<H: Ord> Checkpoint<H> {
     }
 }
 
-#[derive(Clone, Serialize, Deserialize)]
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct BridgeTree<H: Ord, const DEPTH: u8> {
     /// The ordered list of Merkle bridges representing the history
     /// of the tree. There will be one bridge for each saved leaf, plus
@@ -705,7 +705,7 @@ impl<H: Hashable + Ord + Debug, const DEPTH: u8> Debug for BridgeTree<H, DEPTH> 
 
 /// Errors that can appear when validating the internal consistency of a `[MerkleBridge]`
 /// value when constructing a bridge from its constituent parts.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum BridgeTreeError {
     IncorrectIncompleteIndex,
     InvalidWitnessIndex,
@@ -1156,7 +1156,11 @@ impl<H: Hashable + Clone + Ord, const DEPTH: u8> Recording<H> for BridgeRecordin
 
 #[cfg(test)]
 mod tests {
+    use proptest::prelude::*;
+    use proptest::sample::SizeRange;
+
     use super::*;
+    use crate::tests::{apply_operation, arb_operations};
     use crate::{Frontier, Tree};
 
     #[test]
@@ -1166,6 +1170,39 @@ mod tests {
             assert!(tree.append(&c.to_string()))
         }
         assert!(!tree.append(&'i'.to_string()));
+    }
+
+    fn arb_bridgetree<G: Strategy + Clone>(
+        item_gen: G,
+        count: impl Into<SizeRange>,
+    ) -> impl Strategy<Value = BridgeTree<G::Value, 8>>
+    where
+        G::Value: Hashable + Ord + Clone + Debug + 'static,
+    {
+        arb_operations(item_gen, count).prop_map(|ops| {
+            let mut tree: BridgeTree<G::Value, 8> = BridgeTree::new(10);
+            for op in ops {
+                apply_operation(&mut tree, op);
+            }
+            tree
+        })
+    }
+
+    proptest! {
+        #[test]
+        fn bridgetree_from_parts(
+            tree in arb_bridgetree((97u8..123).prop_map(|c| char::from(c).to_string()), 1..100)
+        ) {
+            assert_eq!(
+                BridgeTree::from_parts(
+                    tree.bridges.clone(),
+                    tree.saved.clone(),
+                    tree.checkpoints.clone(),
+                    tree.max_checkpoints
+                ),
+                Ok(tree),
+            );
+        }
     }
 
     #[test]
