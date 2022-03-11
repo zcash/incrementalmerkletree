@@ -771,7 +771,7 @@ impl<H: Hashable + Ord + Clone, const DEPTH: u8> BridgeTree<H, DEPTH> {
         // check that saved values correspond to bridges
         if saved.iter().any(|((pos, leaf), i)| {
             i >= &bridges.len()
-                || !(bridges[*i].position() == *pos && bridges[*i].current_leaf() != leaf)
+                || !(bridges[*i].position() == *pos && bridges[*i].current_leaf() == leaf)
         }) {
             return Err(BridgeTreeError::InvalidWitnessIndex);
         }
