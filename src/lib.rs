@@ -1087,7 +1087,7 @@ pub(crate) mod tests {
             .prop_flat_map(move |items: Vec<G::Value>| arb_operations_0(optypes.clone(), items))
     }
 
-    fn arb_operations<G: Strategy + Clone>(
+    pub fn arb_operations<G: Strategy + Clone>(
         item_gen: G,
         count: impl Into<SizeRange>,
     ) -> impl Strategy<Value = Vec<Operation<G::Value>>>
@@ -1106,6 +1106,27 @@ pub(crate) mod tests {
             count,
         )
         .prop_flat_map(move |optypes: Vec<OpType>| arb_operations_1(item_gen.clone(), optypes))
+    }
+
+    pub fn apply_operation<H, T: Tree<H>>(tree: &mut T, op: Operation<H>) {
+        match op {
+            Append(value) => {
+                tree.append(&value);
+            }
+            Witness => {
+                tree.witness();
+            }
+            Unwitness(position, value) => {
+                tree.remove_witness(position, &value);
+            }
+            Checkpoint => {
+                tree.checkpoint();
+            }
+            Rewind => {
+                tree.rewind();
+            }
+            Authpath(_, _) => {}
+        }
     }
 
     fn check_operations<H: Hashable + Ord + Clone + Debug>(
