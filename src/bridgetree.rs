@@ -1313,6 +1313,6 @@ mod tests {
         tree.garbage_collect();
         assert!(tree.root() != empty_root);
         tree.rewind();
-        assert!(tree.root() != empty_root); // this panics
+        assert!(tree.root() != empty_root);
     }
 }
