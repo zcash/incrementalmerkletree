@@ -839,13 +839,13 @@ impl<H: Hashable + Ord + Clone, const DEPTH: u8> BridgeTree<H, DEPTH> {
                 .cloned()
                 .collect();
 
-            let mut pruned_bridges: Vec<MerkleBridge<H>> = vec![];
             let mut cur: Option<MerkleBridge<H>> = None;
             let mut merged = 0;
             let mut prune_fragment_positions: BTreeSet<Position> = BTreeSet::new();
-            // TODO: I really want to use `into_iter` here, but can't because self.bridges is
-            // behind a mut reference?
-            for (i, next_bridge) in self.prior_bridges.iter().enumerate() {
+            for (i, next_bridge) in std::mem::take(&mut self.prior_bridges)
+                .into_iter()
+                .enumerate()
+            {
                 if let Some(cur_bridge) = cur {
                     let witness_key = cur_bridge.tip();
                     let mut new_cur = if remember.contains(&witness_key) || i > gc_len {
@@ -855,29 +855,28 @@ impl<H: Hashable + Ord + Clone, const DEPTH: u8> BridgeTree<H, DEPTH> {
                             *idx -= merged;
                         }
 
-                        pruned_bridges.push(cur_bridge);
-                        next_bridge.clone()
+                        self.prior_bridges.push(cur_bridge);
+                        next_bridge
                     } else {
                         // We can fuse these bridges together because we don't need to
                         // remember next_bridge.
                         merged += 1;
                         prune_fragment_positions.insert(cur_bridge.frontier.position());
-                        cur_bridge.fuse(next_bridge).unwrap()
+                        cur_bridge.fuse(&next_bridge).unwrap()
                     };
 
                     new_cur.prune_auth_fragments(&prune_fragment_positions);
                     cur = Some(new_cur);
                 } else {
                     // this case will only occur for the first bridge
-                    cur = Some(next_bridge.clone());
+                    cur = Some(next_bridge);
                 }
             }
 
             if let Some(last_bridge) = cur {
-                pruned_bridges.push(last_bridge);
+                self.prior_bridges.push(last_bridge);
             }
 
-            self.prior_bridges = pruned_bridges;
             for c in self.checkpoints.iter_mut() {
                 c.rewrite_indices(|idx| idx - merged);
             }
