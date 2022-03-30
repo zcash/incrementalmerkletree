@@ -834,7 +834,9 @@ impl<H: Hashable + Ord + Clone, const DEPTH: u8> BridgeTree<H, DEPTH> {
                     } else {
                         // We can fuse these bridges together because we don't need to
                         // remember next_bridge.
-                        merged += 1;
+                        if cur_bridge.frontier.position() != next_bridge.frontier.position() {
+                            merged += 1;
+                        }
                         to_prune.insert(cur_bridge.frontier.position());
                         cur_bridge.fuse(next_bridge).unwrap()
                     };
