@@ -232,9 +232,6 @@ pub trait Frontier<H> {
 /// A Merkle tree that supports incremental appends, witnessing of
 /// leaf nodes, checkpoints and rollbacks.
 pub trait Tree<H>: Frontier<H> {
-    /// The type of recordings that can be made of the operations of this tree.
-    type Recording: Recording<H>;
-
     /// Returns the most recently appended leaf value.
     fn current_position(&self) -> Option<Position>;
 
@@ -272,23 +269,6 @@ pub trait Tree<H>: Frontier<H> {
     /// at that tree state have been removed using `rewind`. This function
     /// return false and leave the tree unmodified if no checkpoints exist.
     fn rewind(&mut self) -> bool;
-
-    /// Start a recording of append operations performed on a tree.
-    fn recording(&self) -> Self::Recording;
-
-    /// Plays a recording of append operations back. Returns true if successful
-    /// and false if the recording is incompatible with the current tree state.
-    fn play(&mut self, recording: &Self::Recording) -> bool;
-}
-
-pub trait Recording<H> {
-    /// Appends a new value to the tree at the next available slot. Returns true
-    /// if successful and false if the tree is full.
-    fn append(&mut self, value: &H) -> bool;
-
-    /// Plays a recording of append operations back. Returns true if successful
-    /// and false if the provided recording is incompatible with `Self`.
-    fn play(&mut self, recording: &Self) -> bool;
 }
 
 #[cfg(test)]
@@ -298,9 +278,9 @@ pub(crate) mod tests {
     use std::hash::Hasher;
     use std::hash::SipHasher;
 
-    use super::bridgetree::{BridgeRecording, BridgeTree};
-    use super::sample::{lazy_root, CompleteRecording, CompleteTree};
-    use super::{Altitude, Frontier, Hashable, Position, Recording, Tree};
+    use super::bridgetree::BridgeTree;
+    use super::sample::{lazy_root, CompleteTree};
+    use super::{Altitude, Frontier, Hashable, Position, Tree};
 
     #[test]
     fn position_altitudes() {
@@ -784,8 +764,6 @@ pub(crate) mod tests {
     }
 
     impl<H: Hashable + Ord + Clone + Debug, const DEPTH: u8> Tree<H> for CombinedTree<H, DEPTH> {
-        type Recording = CombinedRecording<H, DEPTH>;
-
         /// Returns the most recently appended leaf value.
         fn current_position(&self) -> Option<Position> {
             let a = self.inefficient.current_position();
@@ -854,47 +832,6 @@ pub(crate) mod tests {
         fn rewind(&mut self) -> bool {
             let a = self.inefficient.rewind();
             let b = self.efficient.rewind();
-            assert_eq!(a, b);
-            a
-        }
-
-        /// Start a recording of append operations performed on a tree.
-        fn recording(&self) -> CombinedRecording<H, DEPTH> {
-            CombinedRecording {
-                inefficient: self.inefficient.recording(),
-                efficient: self.efficient.recording(),
-            }
-        }
-
-        /// Plays a recording of append operations back. Returns true if successful
-        /// and false if the recording is incompatible with the current tree state.
-        fn play(&mut self, recording: &CombinedRecording<H, DEPTH>) -> bool {
-            let a = self.inefficient.play(&recording.inefficient);
-            let b = self.efficient.play(&recording.efficient);
-            assert_eq!(a, b);
-            a
-        }
-    }
-
-    #[derive(Clone)]
-    pub struct CombinedRecording<H: Hashable + Ord, const DEPTH: u8> {
-        inefficient: CompleteRecording<H>,
-        efficient: BridgeRecording<H, DEPTH>,
-    }
-
-    impl<H: Hashable + Ord + Clone + Debug, const DEPTH: u8> Recording<H>
-        for CombinedRecording<H, DEPTH>
-    {
-        fn append(&mut self, value: &H) -> bool {
-            let a = self.inefficient.append(value);
-            let b = self.efficient.append(value);
-            assert_eq!(a, b);
-            a
-        }
-
-        fn play(&mut self, recording: &Self) -> bool {
-            let a = self.inefficient.play(&recording.inefficient);
-            let b = self.efficient.play(&recording.efficient);
             assert_eq!(a, b);
             a
         }
@@ -1135,8 +1072,6 @@ pub(crate) mod tests {
         const DEPTH: u8 = 4;
         let mut tree = CombinedTree::<H, DEPTH>::new();
 
-        let mut prevtrees = vec![];
-
         let mut tree_size = 0;
         let mut tree_values = vec![];
         // the number of leaves in the tree at the time that a checkpoint is made
@@ -1146,15 +1081,10 @@ pub(crate) mod tests {
             prop_assert_eq!(tree_size, tree_values.len());
             match op {
                 Append(value) => {
-                    prevtrees.push((tree.clone(), tree.recording()));
                     if tree.append(&value) {
                         prop_assert!(tree_size < (1 << DEPTH));
                         tree_size += 1;
                         tree_values.push(value.clone());
-
-                        for &mut (_, ref mut recording) in &mut prevtrees {
-                            prop_assert!(recording.append(&value));
-                        }
                     } else {
                         prop_assert_eq!(tree_size, 1 << DEPTH);
                     }
@@ -1174,8 +1104,6 @@ pub(crate) mod tests {
                     tree.checkpoint();
                 }
                 Rewind => {
-                    prevtrees.truncate(0);
-
                     if tree.rewind() {
                         prop_assert!(!tree_checkpoints.is_empty());
                         let checkpointed_tree_size = tree_checkpoints.pop().unwrap();
@@ -1199,11 +1127,6 @@ pub(crate) mod tests {
                     }
                 }
             }
-        }
-
-        for (mut other_tree, other_recording) in prevtrees {
-            prop_assert!(other_tree.play(&other_recording));
-            prop_assert_eq!(tree.root(), other_tree.root());
         }
 
         Ok(())
