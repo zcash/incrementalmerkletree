@@ -1169,6 +1169,28 @@ mod tests {
                 Ok(tree),
             );
         }
+
+        #[test]
+        fn prop_garbage_collect(
+            tree in arb_bridgetree((97u8..123).prop_map(|c| char::from(c).to_string()), 1..100)
+        ) {
+            let mut tree_mut = tree.clone();
+            // ensure we have enough checkpoints to not rewind past the state `tree` is in
+            for _ in 0..10 {
+                tree_mut.checkpoint();
+            }
+
+            tree_mut.garbage_collect();
+
+            tree_mut.rewind();
+
+            for (pos, h) in tree.saved.keys() {
+                assert_eq!(
+                    tree.authentication_path(*pos, h),
+                    tree_mut.authentication_path(*pos, h)
+                );
+            }
+        }
     }
 
     #[test]
@@ -1279,5 +1301,19 @@ mod tests {
             })
             .collect::<Vec<_>>();
         assert_eq!(auth_paths, retained_auth_paths);
+    }
+
+    #[test]
+    fn garbage_collect_idx() {
+        let mut tree: BridgeTree<String, 7> = BridgeTree::new(100);
+        let empty_root = tree.root();
+        tree.append(&"a".to_string());
+        for _ in 0..100 {
+            tree.checkpoint();
+        }
+        tree.garbage_collect();
+        assert!(tree.root() != empty_root);
+        tree.rewind();
+        assert!(tree.root() != empty_root); // this panics
     }
 }
