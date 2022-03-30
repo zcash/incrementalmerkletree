@@ -9,7 +9,7 @@ use std::convert::TryFrom;
 use std::fmt::Debug;
 use std::mem::size_of;
 
-use super::{Altitude, Hashable, Position, Recording, Tree};
+use super::{Altitude, Hashable, Position, Tree};
 
 /// A set of leaves of a Merkle tree.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -891,8 +891,6 @@ impl<H: Hashable + Ord + Clone, const DEPTH: u8> crate::Frontier<H> for BridgeTr
 }
 
 impl<H: Hashable + Ord + Clone, const DEPTH: u8> Tree<H> for BridgeTree<H, DEPTH> {
-    type Recording = BridgeRecording<H, DEPTH>;
-
     fn current_position(&self) -> Option<Position> {
         self.bridges.last().map(|b| b.position())
     }
@@ -1080,75 +1078,6 @@ impl<H: Hashable + Ord + Clone, const DEPTH: u8> Tree<H> for BridgeTree<H, DEPTH
                 true
             }
             None => false,
-        }
-    }
-
-    /// Start a recording of append operations performed on a tree.
-    fn recording(&self) -> BridgeRecording<H, DEPTH> {
-        BridgeRecording {
-            bridge: self.bridges.last().cloned(),
-        }
-    }
-
-    /// Plays a recording of append operations back. Returns true if successful
-    /// and false if the recording is incompatible with the current tree state.
-    fn play(&mut self, recording: &BridgeRecording<H, DEPTH>) -> bool {
-        let bridge_count = self.bridges.len();
-        if bridge_count == 0 {
-            if let Some(bridge) = &recording.bridge {
-                self.bridges.push(bridge.clone());
-                true
-            } else {
-                // nothing to do, but no incompatibilities here
-                true
-            }
-        } else if let Some(bridge) = &recording.bridge {
-            if bridge_count == 1 {
-                self.bridges[0] = bridge.clone();
-                true
-            } else if bridge.can_follow(&self.bridges[bridge_count - 2]) {
-                self.bridges[bridge_count - 1] = bridge.clone();
-                true
-            } else {
-                false
-            }
-        } else {
-            false
-        }
-    }
-}
-
-#[derive(Clone)]
-pub struct BridgeRecording<H: Ord, const DEPTH: u8> {
-    bridge: Option<MerkleBridge<H>>,
-}
-
-impl<H: Hashable + Clone + Ord, const DEPTH: u8> Recording<H> for BridgeRecording<H, DEPTH> {
-    fn append(&mut self, value: &H) -> bool {
-        if let Some(bridge) = self.bridge.as_mut() {
-            if bridge.frontier.position.is_complete(Altitude(DEPTH)) {
-                false
-            } else {
-                bridge.append(value.clone());
-                true
-            }
-        } else {
-            self.bridge = Some(MerkleBridge::new(value.clone()));
-            true
-        }
-    }
-
-    fn play(&mut self, recording: &Self) -> bool {
-        if let Some((current, next)) = self.bridge.as_ref().zip(recording.bridge.as_ref()) {
-            if let Some(fused) = current.fuse(next) {
-                self.bridge = Some(fused);
-                true
-            } else {
-                false
-            }
-        } else {
-            self.bridge = recording.bridge.clone();
-            true
         }
     }
 }

@@ -1,5 +1,5 @@
 //! Sample implementation of the Tree interface.
-use super::{Altitude, Frontier, Hashable, Position, Recording, Tree};
+use super::{Altitude, Frontier, Hashable, Position, Tree};
 
 #[derive(Clone, Debug)]
 pub struct TreeState<H: Hashable> {
@@ -114,30 +114,6 @@ impl<H: Hashable + PartialEq + Clone> TreeState<H> {
             false
         }
     }
-
-    /// Start a recording of append operations performed on a tree.
-    fn recording(&self) -> CompleteRecording<H> {
-        CompleteRecording {
-            start_position: self.current_offset,
-            current_offset: self.current_offset,
-            depth: self.depth,
-            appends: vec![],
-        }
-    }
-
-    /// Plays a recording of append operations back. Returns true if successful
-    /// and false if the recording is incompatible with the current tree state.
-    fn play(&mut self, recording: &CompleteRecording<H>) -> bool {
-        #[allow(clippy::suspicious_operation_groupings)]
-        if recording.start_position == self.current_offset && self.depth == recording.depth {
-            for val in recording.appends.iter() {
-                self.append(val);
-            }
-            true
-        } else {
-            false
-        }
-    }
 }
 
 #[derive(Clone, Debug)]
@@ -186,8 +162,6 @@ impl<H: Hashable + PartialEq + Clone> CompleteTree<H> {
 }
 
 impl<H: Hashable + PartialEq + Clone> Tree<H> for CompleteTree<H> {
-    type Recording = CompleteRecording<H>;
-
     /// Returns the most recently appended leaf value.
     fn current_position(&self) -> Option<Position> {
         self.tree_state.current_position()
@@ -238,53 +212,6 @@ impl<H: Hashable + PartialEq + Clone> Tree<H> for CompleteTree<H> {
     fn rewind(&mut self) -> bool {
         if let Some(checkpointed_state) = self.checkpoints.pop() {
             self.tree_state = checkpointed_state;
-            true
-        } else {
-            false
-        }
-    }
-
-    /// Start a recording of append operations performed on a tree.
-    fn recording(&self) -> CompleteRecording<H> {
-        self.tree_state.recording()
-    }
-
-    /// Plays a recording of append operations back. Returns true if successful
-    /// and false if the recording is incompatible with the current tree state.
-    fn play(&mut self, recording: &CompleteRecording<H>) -> bool {
-        self.tree_state.play(recording)
-    }
-}
-
-#[derive(Clone)]
-pub struct CompleteRecording<H: Hashable> {
-    start_position: usize,
-    current_offset: usize,
-    depth: usize,
-    appends: Vec<H>,
-}
-
-impl<H: Hashable + Clone> Recording<H> for CompleteRecording<H> {
-    /// Appends a new value to the tree at the next available slot. Returns true
-    /// if successful and false if the tree is full.
-    fn append(&mut self, value: &H) -> bool {
-        if self.current_offset == (1 << self.depth) {
-            false
-        } else {
-            self.appends.push(value.clone());
-            self.current_offset += 1;
-
-            true
-        }
-    }
-
-    /// Plays a recording of append operations back. Returns true if successful
-    /// and false if the provided recording is incompatible with `Self`.
-    fn play(&mut self, recording: &Self) -> bool {
-        #[allow(clippy::suspicious_operation_groupings)]
-        if self.current_offset == recording.start_position && self.depth == recording.depth {
-            self.appends.extend_from_slice(&recording.appends);
-            self.current_offset = recording.current_offset;
             true
         } else {
             false
