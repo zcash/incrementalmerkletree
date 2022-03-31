@@ -24,8 +24,6 @@ impl<H: Hashable + Clone> TreeState<H> {
 }
 
 impl<H: Hashable + Clone> Frontier<H> for TreeState<H> {
-    /// Appends a new value to the tree at the next available slot. Returns true
-    /// if successful and false if the tree is full.
     fn append(&mut self, value: &H) -> bool {
         if self.current_offset == (1 << self.depth) {
             false
@@ -128,13 +126,10 @@ impl<H: Hashable + Clone> CompleteTree<H> {
 }
 
 impl<H: Hashable + Clone> Frontier<H> for CompleteTree<H> {
-    /// Appends a new value to the tree at the next available slot. Returns true
-    /// if successful and false if the tree is full.
     fn append(&mut self, value: &H) -> bool {
         self.tree_state.append(value)
     }
 
-    /// Obtains the current root of this Merkle tree.
     fn root(&self) -> H {
         self.tree_state.root()
     }
@@ -154,44 +149,30 @@ impl<H: Hashable + PartialEq + Clone> CompleteTree<H> {
 }
 
 impl<H: Hashable + PartialEq + Clone> Tree<H> for CompleteTree<H> {
-    /// Returns the most recently appended leaf value.
     fn current_position(&self) -> Option<Position> {
         self.tree_state.current_position()
     }
 
-    /// Returns the leaf most recently appended to the tree
     fn current_leaf(&self) -> Option<&H> {
         self.tree_state.current_leaf()
     }
 
-    /// Returns the leaf at the specified position if the tree can produce
-    /// an authentication path for it.
     fn get_witnessed_leaf(&self, position: Position) -> Option<&H> {
         self.tree_state.get_witnessed_leaf(position)
     }
 
-    /// Marks the current tree state leaf as a value that we're interested in
-    /// witnessing. Returns the current position if the tree is non-empty.
     fn witness(&mut self) -> Option<Position> {
         self.tree_state.witness()
     }
 
-    /// Obtains an authentication path to the value at the specified position.
-    /// Returns `None` if there is no available authentication path to that
-    /// value.
     fn authentication_path(&self, position: Position) -> Option<Vec<H>> {
         self.tree_state.authentication_path(position)
     }
 
-    /// Marks the value at the specified position as a value we're no longer
-    /// interested in maintaining a witness for. Returns true if successful and
-    /// false if we were already not maintaining a witness at this position.
     fn remove_witness(&mut self, position: Position) -> bool {
         self.tree_state.remove_witness(position)
     }
 
-    /// Marks the current tree state as a checkpoint if it is not already a
-    /// checkpoint.
     fn checkpoint(&mut self) {
         self.checkpoints.push(self.tree_state.clone());
         if self.checkpoints.len() > self.max_checkpoints {
@@ -199,8 +180,6 @@ impl<H: Hashable + PartialEq + Clone> Tree<H> for CompleteTree<H> {
         }
     }
 
-    /// Rewinds the tree state to the previous checkpoint. This function will
-    /// return false and leave the tree unmodified if no checkpoints exist.
     fn rewind(&mut self) -> bool {
         if let Some(checkpointed_state) = self.checkpoints.pop() {
             self.tree_state = checkpointed_state;

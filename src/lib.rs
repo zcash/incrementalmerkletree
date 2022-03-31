@@ -761,7 +761,6 @@ pub(crate) mod tests {
     }
 
     impl<H: Hashable + Ord + Clone + Debug, const DEPTH: u8> Tree<H> for CombinedTree<H, DEPTH> {
-        /// Returns the most recently appended leaf value.
         fn current_position(&self) -> Option<Position> {
             let a = self.inefficient.current_position();
             let b = self.efficient.current_position();
@@ -769,7 +768,6 @@ pub(crate) mod tests {
             a
         }
 
-        /// Returns the most recently appended leaf value.
         fn current_leaf(&self) -> Option<&H> {
             let a = self.inefficient.current_leaf();
             let b = self.efficient.current_leaf();
@@ -777,8 +775,6 @@ pub(crate) mod tests {
             a
         }
 
-        /// Returns the leaf at the specified position if the tree can produce
-        /// an authentication path for it.
         fn get_witnessed_leaf(&self, position: Position) -> Option<&H> {
             let a = self.inefficient.get_witnessed_leaf(position);
             let b = self.efficient.get_witnessed_leaf(position);
@@ -786,8 +782,6 @@ pub(crate) mod tests {
             a
         }
 
-        /// Marks the current tree state leaf as a value that we're interested in
-        /// witnessing. Returns the current position if the tree is non-empty.
         fn witness(&mut self) -> Option<Position> {
             let a = self.inefficient.witness();
             let b = self.efficient.witness();
@@ -795,9 +789,6 @@ pub(crate) mod tests {
             a
         }
 
-        /// Obtains an authentication path to the value specified in the tree.
-        /// Returns `None` if there is no available authentication path to the
-        /// specified value.
         fn authentication_path(&self, position: Position) -> Option<Vec<H>> {
             let a = self.inefficient.authentication_path(position);
             let b = self.efficient.authentication_path(position);
@@ -805,9 +796,6 @@ pub(crate) mod tests {
             a
         }
 
-        /// Marks the value at the specified position as a value we're no longer
-        /// interested in maintaining a witness for. Returns true if successful and
-        /// false if we were already not maintaining a witness at this position.
         fn remove_witness(&mut self, position: Position) -> bool {
             let a = self.inefficient.remove_witness(position);
             let b = self.efficient.remove_witness(position);
@@ -815,16 +803,11 @@ pub(crate) mod tests {
             a
         }
 
-        /// Marks the current tree state as a checkpoint if it is not already a
-        /// checkpoint.
         fn checkpoint(&mut self) {
             self.inefficient.checkpoint();
             self.efficient.checkpoint();
         }
 
-        /// Rewinds the tree state to the previous checkpoint. This function will
-        /// fail and return false if there is no previous checkpoint or in the event
-        /// witness data would be destroyed in the process.
         fn rewind(&mut self) -> bool {
             let a = self.inefficient.rewind();
             let b = self.efficient.rewind();

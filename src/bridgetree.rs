@@ -108,7 +108,6 @@ impl<H: Hashable + Clone> NonEmptyFrontier<H> {
         self.leaf.value()
     }
 
-    /// Appends a new leaf value to the Merkle frontier. If the current leaf subtree
     /// of two nodes is full (if the current leaf before the append is a `Leaf::Right`)
     /// then recompute the ommers by hashing together full subtrees until an empty
     /// ommer slot is found.
@@ -309,9 +308,6 @@ impl<H, const DEPTH: u8> Frontier<H, DEPTH> {
 }
 
 impl<H: Hashable + Clone, const DEPTH: u8> crate::Frontier<H> for Frontier<H, DEPTH> {
-    /// Appends a new value to the tree at the next available slot. Returns true
-    /// if successful and false if the frontier would exceed the maximum
-    /// allowed depth.
     fn append(&mut self, value: &H) -> bool {
         if let Some(frontier) = self.frontier.as_mut() {
             if frontier.position().is_complete(Altitude(DEPTH)) {
@@ -326,7 +322,6 @@ impl<H: Hashable + Clone, const DEPTH: u8> crate::Frontier<H> for Frontier<H, DE
         }
     }
 
-    /// Obtains the current root of this Merkle frontier.
     fn root(&self) -> H {
         self.frontier
             .as_ref()
@@ -893,7 +888,6 @@ impl<H: Hashable + Ord + Clone, const DEPTH: u8> crate::Frontier<H> for BridgeTr
         }
     }
 
-    /// Obtains the current root of this Merkle tree.
     fn root(&self) -> H {
         self.current_bridge
             .as_ref()
@@ -914,21 +908,16 @@ impl<H: Hashable + Ord + Clone, const DEPTH: u8> Tree<H> for BridgeTree<H, DEPTH
         self.current_bridge.as_ref().map(|b| b.position())
     }
 
-    /// Returns the most recently appended leaf value.
     fn current_leaf(&self) -> Option<&H> {
         self.current_bridge.as_ref().map(|b| b.current_leaf())
     }
 
-    /// Returns the leaf at the specified position if the tree can produce
-    /// an authentication path for it.
     fn get_witnessed_leaf(&self, position: Position) -> Option<&H> {
         self.saved
             .get(&position)
             .and_then(|idx| self.prior_bridges.get(*idx).map(|b| b.current_leaf()))
     }
 
-    /// Marks the current tree state leaf as a value that we're interested in
-    /// witnessing. Returns the current position if the tree is non-empty.
     fn witness(&mut self) -> Option<Position> {
         match self.current_bridge.take() {
             Some(mut cur_b) => {
@@ -963,9 +952,6 @@ impl<H: Hashable + Ord + Clone, const DEPTH: u8> Tree<H> for BridgeTree<H, DEPTH
         }
     }
 
-    /// Obtains an authentication path to the value specified in the tree.
-    /// Returns `None` if there is no available authentication path to the
-    /// value at the specified position.
     fn authentication_path(&self, position: Position) -> Option<Vec<H>> {
         self.saved.get(&position).and_then(|idx| {
             let frontier = &self.prior_bridges[*idx].frontier;
@@ -1032,11 +1018,6 @@ impl<H: Hashable + Ord + Clone, const DEPTH: u8> Tree<H> for BridgeTree<H, DEPTH
         })
     }
 
-    /// Marks the specified posisition as a value we're no longer interested in maintaining a
-    /// witness for. Use the `garbage_collect` method to fully remove witness information.
-    ///
-    /// Returns true if successful and false if we were already not maintaining a
-    /// witness at this position.
     fn remove_witness(&mut self, position: Position) -> bool {
         if let Some(idx) = self.saved.remove(&position) {
             // If the index of the saved value is one that could have been known
@@ -1054,8 +1035,6 @@ impl<H: Hashable + Ord + Clone, const DEPTH: u8> Tree<H> for BridgeTree<H, DEPTH
         }
     }
 
-    /// Marks the current tree state as a checkpoint if it is not already a
-    /// checkpoint.
     fn checkpoint(&mut self) {
         match self.current_bridge.take() {
             Some(cur_b) => {
@@ -1088,8 +1067,6 @@ impl<H: Hashable + Ord + Clone, const DEPTH: u8> Tree<H> for BridgeTree<H, DEPTH
         }
     }
 
-    /// Rewinds the tree state to the previous checkpoint. This function will
-    /// return false and leave the tree unmodified if no checkpoints exist.
     fn rewind(&mut self) -> bool {
         match self.checkpoints.pop() {
             Some(mut c) => {
