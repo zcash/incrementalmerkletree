@@ -512,9 +512,7 @@ impl<H: Ord> MerkleBridge<H> {
     /// Checks whether this bridge is a valid successor for the specified
     /// bridge.
     pub fn can_follow(&self, prev: &Self) -> bool {
-        self.prior_position
-            .iter()
-            .all(|p| *p == prev.frontier.position())
+        self.prior_position == Some(prev.frontier.position())
     }
 }
 
