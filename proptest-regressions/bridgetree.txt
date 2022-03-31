@@ -1,0 +1,7 @@
+# Seeds for failure cases proptest has generated in the past. It is
+# automatically read and these particular cases re-run before any
+# novel cases are generated.
+#
+# It is recommended to check this file in to source control so that
+# everyone who runs the test benefits from these saved cases.
+cc ed8f0851cbfcde17e671dca49e83151f01d277c881abdb09c738d00ead7fc74b # shrinks to tree = BridgeTree {   depth: 8,   bridges: [MerkleBridge { prior_position: None, auth_fragments: {}, frontier: NonEmptyFrontier { position: Position(1), leaf: Right("a", "a"), ommers: [] } }, MerkleBridge { prior_position: Some(Position(1)), auth_fragments: {Position(1): AuthFragment { position: Position(1), altitudes_observed: 1, values: ["ek"] }}, frontier: NonEmptyFrontier { position: Position(3), leaf: Right("e", "k"), ommers: ["aa"] } }],  saved: {(Position(1), "a"): 0},   checkpoints: [],   max_checkpoints: 10 }

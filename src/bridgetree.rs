@@ -94,9 +94,7 @@ impl<H> NonEmptyFrontier<H> {
     pub fn ommers(&self) -> &[H] {
         &self.ommers
     }
-}
 
-impl<H> NonEmptyFrontier<H> {
     /// Returns the value of the most recently appended leaf.
     pub fn leaf_value(&self) -> &H {
         match &self.leaf {
@@ -106,6 +104,10 @@ impl<H> NonEmptyFrontier<H> {
 }
 
 impl<H: Hashable + Clone> NonEmptyFrontier<H> {
+    pub fn current_leaf(&self) -> (Position, H) {
+        (self.position, self.leaf.value().clone())
+    }
+
     /// Appends a new leaf value to the Merkle frontier. If the current leaf subtree
     /// of two nodes is full (if the current leaf before the append is a `Leaf::Right`)
     /// then recompute the ommers by hashing together full subtrees until an empty
@@ -496,11 +498,6 @@ impl<H: Ord> MerkleBridge<H> {
         self.frontier.position()
     }
 
-    /// Returns the most recently appended leaf.
-    pub fn current_leaf(&self) -> &H {
-        self.frontier.leaf().value()
-    }
-
     /// Returns the fragments of authorization path data for prior bridges,
     /// keyed by bridge index.
     pub fn auth_fragments(&self) -> &BTreeMap<Position, AuthFragment<H>> {
@@ -526,7 +523,12 @@ impl<H: Ord> MerkleBridge<H> {
     }
 }
 
-impl<H: Hashable + Ord + Clone> MerkleBridge<H> {
+impl<'a, H: Hashable + Ord + Clone + 'a> MerkleBridge<H> {
+    /// Returns the current leaf and its position.
+    pub fn current_leaf(&self) -> (Position, H) {
+        self.frontier.current_leaf()
+    }
+
     /// Constructs a new bridge to follow this one. If witness_current_leaf is true, the successor
     /// will track the information necessary to create an authentication path for the leaf most
     /// recently appended to this bridge's frontier.
@@ -608,8 +610,7 @@ impl<H: Hashable + Ord + Clone> MerkleBridge<H> {
     /// Returns a single MerkleBridge that contains the aggregate information
     /// of all the provided bridges (discarding internal frontiers) or None
     /// if any of the bridges are not valid successors to one another.
-    fn fuse_all(bridges: &[Self]) -> Option<Self> {
-        let mut iter = bridges.iter();
+    fn fuse_all<T: Iterator<Item = &'a Self>>(mut iter: T) -> Option<Self> {
         let first = iter.next();
         iter.fold(first.cloned(), |acc, b| acc?.fuse(b))
     }
@@ -678,9 +679,10 @@ impl<H: Ord> Checkpoint<H> {
 #[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct BridgeTree<H: Ord, const DEPTH: u8> {
     /// The ordered list of Merkle bridges representing the history
-    /// of the tree. There will be one bridge for each saved leaf, plus
-    /// the current bridge to the tip of the tree.
-    bridges: Vec<MerkleBridge<H>>,
+    /// of the tree. There will be one bridge for each saved leaf.
+    prior_bridges: Vec<MerkleBridge<H>>,
+    /// The current (mutable) bridge at the tip of the tree.
+    current_bridge: Option<MerkleBridge<H>>,
     /// A map from positions and hashes for which we wish to be able to compute an
     /// authentication path to index in the bridges vector.
     saved: BTreeMap<(Position, H), usize>,
@@ -696,8 +698,8 @@ impl<H: Hashable + Ord + Debug, const DEPTH: u8> Debug for BridgeTree<H, DEPTH> 
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> Result<(), std::fmt::Error> {
         write!(
             f,
-            "BridgeTree {{\n  depth: {:?},\n  bridges: {:?},\n saved: {:?},\n  checkpoints: {:?},\n  max_checkpoints: {:?}\n}}",
-            DEPTH, self.bridges, self.saved, self.checkpoints, self.max_checkpoints
+            "BridgeTree {{\n  depth: {:?},\n  prior_bridges: {:?},\n  current_bridge: {:?},\n,  saved: {:?},\n  checkpoints: {:?},\n  max_checkpoints: {:?}\n}}",
+            DEPTH, self.prior_bridges, self.current_bridge, self.saved, self.checkpoints, self.max_checkpoints
         )
     }
 }
@@ -725,9 +727,14 @@ impl<H: Ord, const DEPTH: u8> BridgeTree<H, DEPTH> {
         }
     }
 
-    /// Returns the bridges that make up this tree
-    pub fn bridges(&self) -> &[MerkleBridge<H>] {
-        &self.bridges
+    /// Returns the prior bridges that make up this tree
+    pub fn prior_bridges(&self) -> &[MerkleBridge<H>] {
+        &self.prior_bridges
+    }
+
+    /// Returns the current bridge at the tip of this tree
+    pub fn current_bridge(&self) -> &Option<MerkleBridge<H>> {
+        &self.current_bridge
     }
 
     pub fn witnessed_indices(&self) -> &BTreeMap<(Position, H), usize> {
@@ -747,14 +754,15 @@ impl<H: Ord, const DEPTH: u8> BridgeTree<H, DEPTH> {
     }
 
     pub fn frontier(&self) -> Option<&NonEmptyFrontier<H>> {
-        self.bridges.last().map(|b| b.frontier())
+        self.current_bridge.as_ref().map(|b| b.frontier())
     }
 }
 
 impl<H: Hashable + Ord + Clone, const DEPTH: u8> BridgeTree<H, DEPTH> {
     pub fn new(max_checkpoints: usize) -> Self {
         Self {
-            bridges: vec![],
+            prior_bridges: vec![],
+            current_bridge: None,
             saved: BTreeMap::new(),
             checkpoints: vec![],
             max_checkpoints,
@@ -762,35 +770,47 @@ impl<H: Hashable + Ord + Clone, const DEPTH: u8> BridgeTree<H, DEPTH> {
     }
 
     pub fn from_parts(
-        bridges: Vec<MerkleBridge<H>>,
+        prior_bridges: Vec<MerkleBridge<H>>,
+        current_bridge: Option<MerkleBridge<H>>,
         saved: BTreeMap<(Position, H), usize>,
         checkpoints: Vec<Checkpoint<H>>,
         max_checkpoints: usize,
     ) -> Result<Self, BridgeTreeError> {
         // check that saved values correspond to bridges
-        if saved.iter().any(|((pos, leaf), i)| {
-            i >= &bridges.len()
-                || !(bridges[*i].position() == *pos && bridges[*i].current_leaf() == leaf)
-        }) {
+        if saved
+            .iter()
+            .any(|(key, i)| i >= &prior_bridges.len() || &prior_bridges[*i].current_leaf() != key)
+        {
             return Err(BridgeTreeError::InvalidWitnessIndex);
         }
 
         if checkpoints.len() > max_checkpoints
-            || checkpoints.iter().any(|c| c.bridges_len > bridges.len())
+            || checkpoints
+                .iter()
+                .any(|c| c.bridges_len > prior_bridges.len())
         {
             return Err(BridgeTreeError::CheckpointMismatch);
         }
 
-        if bridges
+        if !prior_bridges
             .iter()
-            .zip(bridges.iter().skip(1))
-            .any(|(prev, next)| !next.can_follow(prev))
+            .zip(prior_bridges.iter().skip(1))
+            .all(|(prev, next)| next.can_follow(prev))
+        {
+            return Err(BridgeTreeError::ContinuityError);
+        }
+
+        if !prior_bridges
+            .last()
+            .zip(current_bridge.as_ref())
+            .map_or(true, |(prev, next)| next.can_follow(prev))
         {
             return Err(BridgeTreeError::ContinuityError);
         }
 
         Ok(BridgeTree {
-            bridges,
+            prior_bridges,
+            current_bridge,
             saved,
             checkpoints,
             max_checkpoints,
@@ -813,15 +833,15 @@ impl<H: Hashable + Ord + Clone, const DEPTH: u8> BridgeTree<H, DEPTH> {
                 .cloned()
                 .collect();
 
-            let mut new_bridges: Vec<MerkleBridge<H>> = vec![];
             let mut cur: Option<MerkleBridge<H>> = None;
             let mut merged = 0;
-            let mut to_prune: BTreeSet<Position> = BTreeSet::new();
-            // TODO: I really want to use `into_iter` here, but can't because self.bridges is
-            // behind a mut reference?
-            for (i, next_bridge) in self.bridges.iter().enumerate() {
+            let mut prune_fragment_positions: BTreeSet<Position> = BTreeSet::new();
+            for (i, next_bridge) in std::mem::take(&mut self.prior_bridges)
+                .into_iter()
+                .enumerate()
+            {
                 if let Some(cur_bridge) = cur {
-                    let witness_key = (cur_bridge.position(), cur_bridge.current_leaf().clone());
+                    let witness_key = cur_bridge.current_leaf();
                     let mut new_cur = if remember.contains(&witness_key) || i > gc_len {
                         // We need to remember cur_bridge; update its save index & put next_bridge
                         // on the chopping block
@@ -829,29 +849,28 @@ impl<H: Hashable + Ord + Clone, const DEPTH: u8> BridgeTree<H, DEPTH> {
                             *idx -= merged;
                         }
 
-                        new_bridges.push(cur_bridge);
-                        next_bridge.clone()
+                        self.prior_bridges.push(cur_bridge);
+                        next_bridge
                     } else {
                         // We can fuse these bridges together because we don't need to
                         // remember next_bridge.
                         merged += 1;
-                        to_prune.insert(cur_bridge.frontier.position());
-                        cur_bridge.fuse(next_bridge).unwrap()
+                        prune_fragment_positions.insert(cur_bridge.frontier.position());
+                        cur_bridge.fuse(&next_bridge).unwrap()
                     };
 
-                    new_cur.prune_auth_fragments(&to_prune);
+                    new_cur.prune_auth_fragments(&prune_fragment_positions);
                     cur = Some(new_cur);
                 } else {
                     // this case will only occur for the first bridge
-                    cur = Some(next_bridge.clone());
+                    cur = Some(next_bridge);
                 }
             }
 
             if let Some(last_bridge) = cur {
-                new_bridges.push(last_bridge);
+                self.prior_bridges.push(last_bridge);
             }
 
-            self.bridges = new_bridges;
             for c in self.checkpoints.iter_mut() {
                 c.rewrite_indices(|idx| idx - merged);
             }
@@ -861,7 +880,7 @@ impl<H: Hashable + Ord + Clone, const DEPTH: u8> BridgeTree<H, DEPTH> {
 
 impl<H: Hashable + Ord + Clone, const DEPTH: u8> crate::Frontier<H> for BridgeTree<H, DEPTH> {
     fn append(&mut self, value: &H) -> bool {
-        if let Some(bridge) = self.bridges.last_mut() {
+        if let Some(bridge) = self.current_bridge.as_mut() {
             if bridge.frontier.position().is_complete(Altitude(DEPTH)) {
                 false
             } else {
@@ -869,15 +888,15 @@ impl<H: Hashable + Ord + Clone, const DEPTH: u8> crate::Frontier<H> for BridgeTr
                 true
             }
         } else {
-            self.bridges.push(MerkleBridge::new(value.clone()));
+            self.current_bridge = Some(MerkleBridge::new(value.clone()));
             true
         }
     }
 
     /// Obtains the current root of this Merkle tree.
     fn root(&self) -> H {
-        self.bridges
-            .last()
+        self.current_bridge
+            .as_ref()
             .map_or(H::empty_root(Altitude(DEPTH)), |bridge| {
                 // fold from the current height, combining with empty branches,
                 // up to the maximum height of the tree
@@ -892,14 +911,12 @@ impl<H: Hashable + Ord + Clone, const DEPTH: u8> crate::Frontier<H> for BridgeTr
 
 impl<H: Hashable + Ord + Clone, const DEPTH: u8> Tree<H> for BridgeTree<H, DEPTH> {
     fn current_position(&self) -> Option<Position> {
-        self.bridges.last().map(|b| b.position())
+        self.current_bridge.as_ref().map(|b| b.position())
     }
 
     /// Returns the most recently appended leaf value.
     fn current_leaf(&self) -> Option<(Position, H)> {
-        self.bridges
-            .last()
-            .map(|b| (b.position(), b.current_leaf().clone()))
+        self.current_bridge.as_ref().map(|b| b.current_leaf())
     }
 
     /// Returns `true` if the tree can produce an authentication path for
@@ -912,26 +929,37 @@ impl<H: Hashable + Ord + Clone, const DEPTH: u8> Tree<H> for BridgeTree<H, DEPTH
     /// witnessing. Returns the current position and leaf value if the tree
     /// is non-empty.
     fn witness(&mut self) -> Option<(Position, H)> {
-        self.current_leaf().map(|key @ (position, _)| {
-            // If the latest bridge is a newly created checkpoint, the last two
-            // bridges will have the same position and all we need to do is mark
-            // the checkpointed leaf as being saved.
-            let idx = self.bridges.len() - 1;
-            if idx > 0 && position == self.bridges[idx - 1].position() {
-                // the current bridge has not been advanced, so we just need to make
-                // sure that we have an auth fragment tracking the witnessed leaf
-                self.bridges[idx]
-                    .auth_fragments
-                    .entry(position)
-                    .or_insert_with(|| AuthFragment::new(position));
-                self.saved.entry(key.clone()).or_insert(idx - 1);
-            } else {
-                self.bridges.push(self.bridges[idx].successor(true));
-                self.saved.entry(key.clone()).or_insert(idx);
-            }
+        match self.current_bridge.take() {
+            Some(mut cur_b) => {
+                let key = cur_b.current_leaf();
+                // If the latest bridge is a newly created checkpoint, the last prior
+                // bridge will have the same position and all we need to do is mark
+                // the checkpointed leaf as being saved.
+                if self
+                    .prior_bridges
+                    .last()
+                    .map_or(false, |prior_b| prior_b.position() == cur_b.position())
+                {
+                    // the current bridge has not been advanced, so we just need to make
+                    // sure that we have an auth fragment tracking the witnessed leaf
+                    cur_b
+                        .auth_fragments
+                        .entry(key.0)
+                        .or_insert_with(|| AuthFragment::new(key.0));
+                    self.current_bridge = Some(cur_b);
+                } else {
+                    let successor = cur_b.successor(true);
+                    self.prior_bridges.push(cur_b);
+                    self.current_bridge = Some(successor);
+                }
 
-            key
-        })
+                self.saved
+                    .entry(key.clone())
+                    .or_insert(self.prior_bridges.len() - 1);
+                Some(key)
+            }
+            None => None,
+        }
     }
 
     /// Obtains an authentication path to the value specified in the tree.
@@ -939,13 +967,18 @@ impl<H: Hashable + Ord + Clone, const DEPTH: u8> Tree<H> for BridgeTree<H, DEPTH
     /// specified value.
     fn authentication_path(&self, position: Position, value: &H) -> Option<Vec<H>> {
         self.saved.get(&(position, value.clone())).and_then(|idx| {
-            let frontier = &self.bridges[*idx].frontier;
+            let frontier = &self.prior_bridges[*idx].frontier;
 
             // Fuse the following bridges to obtain a bridge that has all
             // of the data to the right of the selected value in the tree.
             // The unwrap here is safe because a witnessed leaf always
             // generates a subsequent bridge in the tree.
-            MerkleBridge::fuse_all(&self.bridges[(idx + 1)..]).map(|fused| {
+            MerkleBridge::fuse_all(
+                self.prior_bridges[(idx + 1)..]
+                    .iter()
+                    .chain(self.current_bridge.iter()),
+            )
+            .map(|fused| {
                 // construct a complete trailing edge that includes the data from
                 // the following frontier not yet included in the trailing edge.
                 let auth_fragment = fused.auth_fragments.get(&frontier.position());
@@ -1024,21 +1057,31 @@ impl<H: Hashable + Ord + Clone, const DEPTH: u8> Tree<H> for BridgeTree<H, DEPTH
     /// Marks the current tree state as a checkpoint if it is not already a
     /// checkpoint.
     fn checkpoint(&mut self) {
-        let len = self.bridges.len();
-        let is_witnessed = self
-            .current_leaf()
-            .map_or(false, |(pos, l)| self.is_witnessed(pos, &l));
-        if len < 2 || self.bridges[len - 1].position() != self.bridges[len - 2].position() {
-            if len > 0 {
-                self.bridges.push(self.bridges[len - 1].successor(false));
+        match self.current_bridge.take() {
+            Some(cur_b) => {
+                // Do not create a duplicate bridge
+                if self
+                    .prior_bridges
+                    .last()
+                    .map_or(false, |pb| pb.position() == cur_b.position())
+                {
+                    self.current_bridge = Some(cur_b);
+                } else {
+                    self.current_bridge = Some(cur_b.successor(false));
+                    self.prior_bridges.push(cur_b);
+                }
+
+                let len = self.prior_bridges.len();
+                let is_witnessed = self
+                    .current_leaf()
+                    .map_or(false, |(pos, l)| self.is_witnessed(pos, &l));
+
+                self.checkpoints
+                    .push(Checkpoint::at_length(len, is_witnessed));
             }
-            self.checkpoints
-                .push(Checkpoint::at_length(len, is_witnessed));
-        } else {
-            // the leading bridge and the previous bridge both point at the same state,
-            // so we checkpoint the former and record whether or not it was witnessed.
-            self.checkpoints
-                .push(Checkpoint::at_length(len - 1, is_witnessed));
+            None => {
+                self.checkpoints.push(Checkpoint::at_length(0, false));
+            }
         }
 
         if self.checkpoints.len() > self.max_checkpoints {
@@ -1053,27 +1096,12 @@ impl<H: Hashable + Ord + Clone, const DEPTH: u8> Tree<H> for BridgeTree<H, DEPTH
             Some(mut c) => {
                 // drop witnessed values at and above the checkpoint height;
                 // we will re-witness if necessary.
-                self.saved
-                    .retain(|_, saved_idx| *saved_idx + 1 < c.bridges_len);
-                self.bridges.truncate(c.bridges_len);
+                self.saved.retain(|_, i| *i + 1 < c.bridges_len);
                 self.saved.append(&mut c.forgotten);
-
-                let was_duplicate_checkpoint = self
-                    .checkpoints
-                    .last()
-                    .iter()
-                    .any(|c0| c0.bridges_len == c.bridges_len);
-                let len = self.bridges.len();
+                self.prior_bridges.truncate(c.bridges_len);
+                self.current_bridge = self.prior_bridges.last().map(|b| b.successor(false));
                 if c.is_witnessed {
-                    // if the checkpointed state was witnessed, we need to
-                    // restore the witness, as the successor bridge will have
-                    // been removed by truncation.
                     self.witness();
-                } else if len > 0 && was_duplicate_checkpoint {
-                    // if the checkpoint was a duplicate, we need to create
-                    // a successor so that future appends do not mutate the
-                    // state at the tip.
-                    self.bridges.push(self.bridges[len - 1].successor(false));
                 }
                 true
             }
@@ -1123,13 +1151,36 @@ mod tests {
         ) {
             assert_eq!(
                 BridgeTree::from_parts(
-                    tree.bridges.clone(),
+                    tree.prior_bridges.clone(),
+                    tree.current_bridge.clone(),
                     tree.saved.clone(),
                     tree.checkpoints.clone(),
                     tree.max_checkpoints
                 ),
                 Ok(tree),
             );
+        }
+
+        #[test]
+        fn prop_garbage_collect(
+            tree in arb_bridgetree((97u8..123).prop_map(|c| char::from(c).to_string()), 1..100)
+        ) {
+            let mut tree_mut = tree.clone();
+            // ensure we have enough checkpoints to not rewind past the state `tree` is in
+            for _ in 0..10 {
+                tree_mut.checkpoint();
+            }
+
+            tree_mut.garbage_collect();
+
+            tree_mut.rewind();
+
+            for (pos, h) in tree.saved.keys() {
+                assert_eq!(
+                    tree.authentication_path(*pos, h),
+                    tree_mut.authentication_path(*pos, h)
+                );
+            }
         }
     }
 
@@ -1221,8 +1272,8 @@ mod tests {
                 t.remove_witness(pos, &elem);
             }
         }
-        // 33 = 1 (root) + 20 (checkpointed) + 14 (witnessed) - 2 (witnessed & checkpointed)
-        assert_eq!(t.bridges().len(), 1 + 20 + 14 - 2);
+        // 32 = 20 (checkpointed) + 14 (witnessed) - 2 (witnessed & checkpointed)
+        assert_eq!(t.prior_bridges().len(), 20 + 14 - 2);
         let auth_paths = has_auth_path
             .iter()
             .map(|(pos, elem)| {
@@ -1231,8 +1282,8 @@ mod tests {
             })
             .collect::<Vec<_>>();
         t.garbage_collect();
-        // 21 = 33 - 10 (removed checkpoints) + 1 (not removed due to witness) - 3 (removed witnesses)
-        assert_eq!(t.bridges().len(), 33 - 10 + 1 - 3);
+        // 20 = 32 - 10 (removed checkpoints) + 1 (not removed due to witness) - 3 (removed witnesses)
+        assert_eq!(t.prior_bridges().len(), 32 - 10 + 1 - 3);
         let retained_auth_paths = has_auth_path
             .iter()
             .map(|(pos, elem)| {
@@ -1241,5 +1292,19 @@ mod tests {
             })
             .collect::<Vec<_>>();
         assert_eq!(auth_paths, retained_auth_paths);
+    }
+
+    #[test]
+    fn garbage_collect_idx() {
+        let mut tree: BridgeTree<String, 7> = BridgeTree::new(100);
+        let empty_root = tree.root();
+        tree.append(&"a".to_string());
+        for _ in 0..100 {
+            tree.checkpoint();
+        }
+        tree.garbage_collect();
+        assert!(tree.root() != empty_root);
+        tree.rewind();
+        assert!(tree.root() != empty_root);
     }
 }
