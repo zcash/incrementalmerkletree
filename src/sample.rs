@@ -57,7 +57,8 @@ impl<H: Hashable + PartialEq + Clone> TreeState<H> {
             .map(|p| &self.leaves[<usize>::from(p)])
     }
 
-    /// Returns whether a leaf with the specified position and value has been witnessed
+    /// Returns the leaf at the specified position if the tree can produce
+    /// an authentication path for it.
     fn get_witnessed_leaf(&self, position: Position) -> Option<&H> {
         if self.witnesses.contains(&position) {
             self.leaves.get(<usize>::from(position))
@@ -67,8 +68,7 @@ impl<H: Hashable + PartialEq + Clone> TreeState<H> {
     }
 
     /// Marks the current tree state leaf as a value that we're interested in
-    /// witnessing. Returns the current position and leaf value if the tree
-    /// is non-empty.
+    /// witnessing. Returns the current position if the tree is non-empty.
     fn witness(&mut self) -> Option<Position> {
         self.current_position().map(|pos| {
             if !self.witnesses.contains(&pos) {
@@ -78,9 +78,9 @@ impl<H: Hashable + PartialEq + Clone> TreeState<H> {
         })
     }
 
-    /// Obtains an authentication path to the value specified in the tree.
-    /// Returns `None` if there is no available authentication path to the
-    /// specified value.
+    /// Obtains an authentication path to the value at the specified position.
+    /// Returns `None` if there is no available authentication path to that
+    /// value.
     fn authentication_path(&self, position: Position) -> Option<Vec<H>> {
         if self.witnesses.contains(&position) {
             let mut path = vec![];
@@ -100,9 +100,9 @@ impl<H: Hashable + PartialEq + Clone> TreeState<H> {
         }
     }
 
-    /// Marks the specified tree state value as a value we're no longer
+    /// Marks the value at the specified position as a value we're no longer
     /// interested in maintaining a witness for. Returns true if successful and
-    /// false if the value is not a known witness.
+    /// false if we were already not maintaining a witness at this position.
     fn remove_witness(&mut self, position: Position) -> bool {
         self.witnesses.remove(&position)
     }
@@ -164,28 +164,28 @@ impl<H: Hashable + PartialEq + Clone> Tree<H> for CompleteTree<H> {
         self.tree_state.current_leaf()
     }
 
-    /// Returns whether a leaf with the specified value has been witnessed
+    /// Returns the leaf at the specified position if the tree can produce
+    /// an authentication path for it.
     fn get_witnessed_leaf(&self, position: Position) -> Option<&H> {
         self.tree_state.get_witnessed_leaf(position)
     }
 
     /// Marks the current tree state leaf as a value that we're interested in
-    /// witnessing. Returns the current position and leaf value if the tree
-    /// is non-empty.
+    /// witnessing. Returns the current position if the tree is non-empty.
     fn witness(&mut self) -> Option<Position> {
         self.tree_state.witness()
     }
 
-    /// Obtains an authentication path to the value specified in the tree.
-    /// Returns `None` if there is no available authentication path to the
-    /// specified value.
+    /// Obtains an authentication path to the value at the specified position.
+    /// Returns `None` if there is no available authentication path to that
+    /// value.
     fn authentication_path(&self, position: Position) -> Option<Vec<H>> {
         self.tree_state.authentication_path(position)
     }
 
-    /// Marks the specified tree state value as a value we're no longer
+    /// Marks the value at the specified position as a value we're no longer
     /// interested in maintaining a witness for. Returns true if successful and
-    /// false if the value is not a known witness.
+    /// false if we were already not maintaining a witness at this position.
     fn remove_witness(&mut self, position: Position) -> bool {
         self.tree_state.remove_witness(position)
     }

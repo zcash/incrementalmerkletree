@@ -35,7 +35,7 @@ use std::ops::{Add, AddAssign, Sub};
 /// A type-safe wrapper for indexing into "levels" of a binary tree, such that
 /// nodes at altitude `0` are leaves, nodes at altitude `1` are parents
 /// of nodes at altitude `0`, and so forth. This type is capable of
-/// representing altitudes in trees containing up to 2^256 leaves.
+/// representing altitudes in trees containing up to 2^255 leaves.
 #[derive(Copy, Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 #[repr(transparent)]
 pub struct Altitude(u8);
@@ -238,24 +238,24 @@ pub trait Tree<H>: Frontier<H> {
     /// Returns the most recently appended leaf value.
     fn current_leaf(&self) -> Option<&H>;
 
-    /// Returns the leaf for which tree can produce an authentication path
-    /// at the specified position in the tree.
+    /// Returns the leaf at the specified position if the tree can produce
+    /// an authentication path for it.
     fn get_witnessed_leaf(&self, position: Position) -> Option<&H>;
 
     /// Marks the current leaf as one for which we're interested in producing
     /// an authentication path. Returns an optional value containing the
-    /// current position and leaf value if successful or if the current
-    /// value was already marked, or None if the tree is empty.
+    /// current position if successful or if the current value was already
+    /// marked, or None if the tree is empty.
     fn witness(&mut self) -> Option<Position>;
 
-    /// Obtains an authentication path to the value specified in the tree.
-    /// Returns `None` if there is no available authentication path to the
-    /// specified value.
+    /// Obtains an authentication path to the value at the specified position.
+    /// Returns `None` if there is no available authentication path to that
+    /// value.
     fn authentication_path(&self, position: Position) -> Option<Vec<H>>;
 
-    /// Marks the specified tree state value as a value we're no longer
+    /// Marks the value at the specified position as a value we're no longer
     /// interested in maintaining a witness for. Returns true if successful and
-    /// false if the value is not a known witness.
+    /// false if we were already not maintaining a witness at this position.
     fn remove_witness(&mut self, position: Position) -> bool;
 
     /// Creates a new checkpoint for the current tree state. It is valid to
@@ -769,7 +769,7 @@ pub(crate) mod tests {
             a
         }
 
-        /// Returns the most recently appended leaf value and its position in the tree.
+        /// Returns the most recently appended leaf value.
         fn current_leaf(&self) -> Option<&H> {
             let a = self.inefficient.current_leaf();
             let b = self.efficient.current_leaf();
@@ -777,8 +777,8 @@ pub(crate) mod tests {
             a
         }
 
-        /// Returns `true` if the tree can produce an authentication path for
-        /// the specified leaf value from the specified position in the tree.
+        /// Returns the leaf at the specified position if the tree can produce
+        /// an authentication path for it.
         fn get_witnessed_leaf(&self, position: Position) -> Option<&H> {
             let a = self.inefficient.get_witnessed_leaf(position);
             let b = self.efficient.get_witnessed_leaf(position);
@@ -787,8 +787,7 @@ pub(crate) mod tests {
         }
 
         /// Marks the current tree state leaf as a value that we're interested in
-        /// witnessing. Returns the current position and leaf value if the tree
-        /// is non-empty.
+        /// witnessing. Returns the current position if the tree is non-empty.
         fn witness(&mut self) -> Option<Position> {
             let a = self.inefficient.witness();
             let b = self.efficient.witness();
@@ -806,9 +805,9 @@ pub(crate) mod tests {
             a
         }
 
-        /// Marks the specified tree state value as a value we're no longer
+        /// Marks the value at the specified position as a value we're no longer
         /// interested in maintaining a witness for. Returns true if successful and
-        /// false if the value is not a known witness.
+        /// false if we were already not maintaining a witness at this position.
         fn remove_witness(&mut self, position: Position) -> bool {
             let a = self.inefficient.remove_witness(position);
             let b = self.efficient.remove_witness(position);
