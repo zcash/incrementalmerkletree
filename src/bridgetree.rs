@@ -104,7 +104,7 @@ impl<H> NonEmptyFrontier<H> {
 }
 
 impl<H: Hashable + Clone> NonEmptyFrontier<H> {
-    pub fn tip(&self) -> (Position, H) {
+    pub fn current_leaf(&self) -> (Position, H) {
         (self.position, self.leaf.value().clone())
     }
 
@@ -498,11 +498,6 @@ impl<H: Ord> MerkleBridge<H> {
         self.frontier.position()
     }
 
-    /// Returns the most recently appended leaf.
-    pub fn current_leaf(&self) -> &H {
-        self.frontier.leaf().value()
-    }
-
     /// Returns the fragments of authorization path data for prior bridges,
     /// keyed by bridge index.
     pub fn auth_fragments(&self) -> &BTreeMap<Position, AuthFragment<H>> {
@@ -530,8 +525,8 @@ impl<H: Ord> MerkleBridge<H> {
 
 impl<'a, H: Hashable + Ord + Clone + 'a> MerkleBridge<H> {
     /// Returns the current leaf and its position.
-    pub fn tip(&self) -> (Position, H) {
-        self.frontier.tip()
+    pub fn current_leaf(&self) -> (Position, H) {
+        self.frontier.current_leaf()
     }
 
     /// Constructs a new bridge to follow this one. If witness_current_leaf is true, the successor
@@ -782,11 +777,10 @@ impl<H: Hashable + Ord + Clone, const DEPTH: u8> BridgeTree<H, DEPTH> {
         max_checkpoints: usize,
     ) -> Result<Self, BridgeTreeError> {
         // check that saved values correspond to bridges
-        if saved.iter().any(|((pos, leaf), i)| {
-            i >= &prior_bridges.len()
-                || !(prior_bridges[*i].position() == *pos
-                    && prior_bridges[*i].current_leaf() == leaf)
-        }) {
+        if saved
+            .iter()
+            .any(|(key, i)| i >= &prior_bridges.len() || &prior_bridges[*i].current_leaf() != key)
+        {
             return Err(BridgeTreeError::InvalidWitnessIndex);
         }
 
@@ -847,7 +841,7 @@ impl<H: Hashable + Ord + Clone, const DEPTH: u8> BridgeTree<H, DEPTH> {
                 .enumerate()
             {
                 if let Some(cur_bridge) = cur {
-                    let witness_key = cur_bridge.tip();
+                    let witness_key = cur_bridge.current_leaf();
                     let mut new_cur = if remember.contains(&witness_key) || i > gc_len {
                         // We need to remember cur_bridge; update its save index & put next_bridge
                         // on the chopping block
@@ -922,9 +916,7 @@ impl<H: Hashable + Ord + Clone, const DEPTH: u8> Tree<H> for BridgeTree<H, DEPTH
 
     /// Returns the most recently appended leaf value.
     fn current_leaf(&self) -> Option<(Position, H)> {
-        self.current_bridge
-            .as_ref()
-            .map(|b| (b.position(), b.current_leaf().clone()))
+        self.current_bridge.as_ref().map(|b| b.current_leaf())
     }
 
     /// Returns `true` if the tree can produce an authentication path for
@@ -939,7 +931,7 @@ impl<H: Hashable + Ord + Clone, const DEPTH: u8> Tree<H> for BridgeTree<H, DEPTH
     fn witness(&mut self) -> Option<(Position, H)> {
         match self.current_bridge.take() {
             Some(mut cur_b) => {
-                let key = cur_b.tip();
+                let key = cur_b.current_leaf();
                 // If the latest bridge is a newly created checkpoint, the last prior
                 // bridge will have the same position and all we need to do is mark
                 // the checkpointed leaf as being saved.
