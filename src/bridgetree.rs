@@ -1026,8 +1026,8 @@ impl<H: Hashable + Ord + Clone, const DEPTH: u8> Tree<H> for BridgeTree<H, DEPTH
             Some(mut c) => {
                 // drop witnessed values at and above the checkpoint height;
                 // we will re-witness if necessary.
-                self.saved.retain(|_, i| *i + 1 < c.bridges_len);
                 self.saved.append(&mut c.forgotten);
+                self.saved.retain(|_, i| *i + 1 < c.bridges_len);
                 self.prior_bridges.truncate(c.bridges_len);
                 self.current_bridge = self.prior_bridges.last().map(|b| b.successor(false));
                 if c.is_witnessed {
