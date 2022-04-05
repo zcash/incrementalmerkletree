@@ -28,6 +28,7 @@ pub mod bridgetree;
 mod sample;
 
 use serde::{Deserialize, Serialize};
+use std::collections::BTreeSet;
 use std::convert::TryFrom;
 use std::num::TryFromIntError;
 use std::ops::{Add, AddAssign, Sub};
@@ -248,6 +249,9 @@ pub trait Tree<H>: Frontier<H> {
     /// marked, or None if the tree is empty.
     fn witness(&mut self) -> Option<Position>;
 
+    /// Return a set of all the positions for which we have witnessed.
+    fn witnessed_positions(&self) -> BTreeSet<Position>;
+
     /// Obtains an authentication path to the value at the specified position.
     /// Returns `None` if there is no available authentication path to that
     /// value.
@@ -269,11 +273,19 @@ pub trait Tree<H>: Frontier<H> {
     /// at that tree state have been removed using `rewind`. This function
     /// return false and leave the tree unmodified if no checkpoints exist.
     fn rewind(&mut self) -> bool;
+
+    /// Remove state from the tree that no longer needs to be maintained
+    /// because it is associated with checkpoints or witnesses that
+    /// have been removed from the tree at positions deeper than those
+    /// reachable by calls to `rewind`. It is always safe to implement
+    /// this as a no-op operation
+    fn garbage_collect(&mut self);
 }
 
 #[cfg(test)]
 pub(crate) mod tests {
     #![allow(deprecated)]
+    use std::collections::BTreeSet;
     use std::fmt::Debug;
     use std::hash::Hasher;
     use std::hash::SipHasher;
@@ -786,6 +798,16 @@ pub(crate) mod tests {
             let a = self.inefficient.witness();
             let b = self.efficient.witness();
             assert_eq!(a, b);
+            let apos = self.inefficient.witnessed_positions();
+            let bpos = self.efficient.witnessed_positions();
+            assert_eq!(apos, bpos);
+            a
+        }
+
+        fn witnessed_positions(&self) -> BTreeSet<Position> {
+            let a = self.inefficient.witnessed_positions();
+            let b = self.efficient.witnessed_positions();
+            assert_eq!(a, b);
             a
         }
 
@@ -814,6 +836,11 @@ pub(crate) mod tests {
             assert_eq!(a, b);
             a
         }
+
+        fn garbage_collect(&mut self) {
+            self.inefficient.garbage_collect();
+            self.efficient.garbage_collect();
+        }
     }
 
     #[derive(Clone, Debug)]
@@ -823,10 +850,12 @@ pub(crate) mod tests {
         CurrentLeaf,
         Witness,
         WitnessedLeaf(Position),
+        WitnessedPositions,
         Unwitness(Position),
         Checkpoint,
         Rewind,
         Authpath(Position),
+        GarbageCollect,
     }
 
     use Operation::*;
@@ -845,6 +874,7 @@ pub(crate) mod tests {
                     None
                 }
                 WitnessedLeaf(_) => None,
+                WitnessedPositions => None,
                 Unwitness(p) => {
                     assert!(tree.remove_witness(*p), "remove witness failed");
                     None
@@ -858,6 +888,7 @@ pub(crate) mod tests {
                     None
                 }
                 Authpath(p) => tree.authentication_path(*p).map(|xs| (*p, xs)),
+                GarbageCollect => None,
             }
         }
 
@@ -957,9 +988,13 @@ pub(crate) mod tests {
     {
         prop_oneof![
             item_gen.prop_map(Operation::Append),
-            Just(Operation::CurrentLeaf),
-            Just(Operation::CurrentPosition),
             Just(Operation::Witness),
+            prop_oneof![
+                Just(Operation::CurrentLeaf),
+                Just(Operation::CurrentPosition),
+                Just(Operation::WitnessedPositions),
+            ],
+            Just(Operation::GarbageCollect),
             pos_gen
                 .clone()
                 .prop_map(|i| Operation::WitnessedLeaf(Position::from(i))),
@@ -993,6 +1028,8 @@ pub(crate) mod tests {
             CurrentLeaf => {}
             Authpath(_) => {}
             WitnessedLeaf(_) => {}
+            WitnessedPositions => {}
+            GarbageCollect => {}
         }
     }
 
@@ -1043,6 +1080,7 @@ pub(crate) mod tests {
                 Unwitness(position) => {
                     tree.remove_witness(position);
                 }
+                WitnessedPositions => {}
                 Checkpoint => {
                     tree_checkpoints.push(tree_size);
                     tree.checkpoint();
@@ -1071,6 +1109,7 @@ pub(crate) mod tests {
                         );
                     }
                 }
+                GarbageCollect => {}
             }
         }
 
