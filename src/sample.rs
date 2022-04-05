@@ -165,6 +165,10 @@ impl<H: Hashable + PartialEq + Clone> Tree<H> for CompleteTree<H> {
         self.tree_state.witness()
     }
 
+    fn witnessed_positions(&self) -> BTreeSet<Position> {
+        self.tree_state.witnesses.clone()
+    }
+
     fn authentication_path(&self, position: Position) -> Option<Vec<H>> {
         self.tree_state.authentication_path(position)
     }
@@ -187,6 +191,10 @@ impl<H: Hashable + PartialEq + Clone> Tree<H> for CompleteTree<H> {
         } else {
             false
         }
+    }
+
+    fn garbage_collect(&mut self) { 
+        // Garbage collection of the sample tree is a no-op.
     }
 }
 
