@@ -888,7 +888,7 @@ pub(crate) mod tests {
                     None
                 }
                 Authpath(p) => tree.authentication_path(*p).map(|xs| (*p, xs)),
-                GarbageCollect => None
+                GarbageCollect => None,
             }
         }
 
@@ -1080,8 +1080,7 @@ pub(crate) mod tests {
                 Unwitness(position) => {
                     tree.remove_witness(position);
                 }
-                WitnessedPositions => {
-                }
+                WitnessedPositions => {}
                 Checkpoint => {
                     tree_checkpoints.push(tree_size);
                     tree.checkpoint();
@@ -1110,8 +1109,7 @@ pub(crate) mod tests {
                         );
                     }
                 }
-                GarbageCollect => {
-                }
+                GarbageCollect => {}
             }
         }
 

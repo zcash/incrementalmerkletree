@@ -193,7 +193,7 @@ impl<H: Hashable + PartialEq + Clone> Tree<H> for CompleteTree<H> {
         }
     }
 
-    fn garbage_collect(&mut self) { 
+    fn garbage_collect(&mut self) {
         // Garbage collection of the sample tree is a no-op.
     }
 }

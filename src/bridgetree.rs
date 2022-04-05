@@ -702,7 +702,8 @@ impl<H: Hashable + Ord + Debug, const DEPTH: u8> Debug for BridgeTree<H, DEPTH> 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum BridgeTreeError {
     IncorrectIncompleteIndex,
-    InvalidWitnessIndex,
+    InvalidWitnessIndex(usize),
+    PositionMismatch { expected: Position, found: Position },
     InvalidSavePoints,
     ContinuityError,
     CheckpointMismatch,
@@ -762,31 +763,25 @@ impl<H: Hashable + Ord + Clone, const DEPTH: u8> BridgeTree<H, DEPTH> {
         }
     }
 
-    /// Construct a new BridgeTree that will start recording changes from the state of
-    /// the specified frontier.
-    pub fn from_frontier(max_checkpoints: usize, frontier: NonEmptyFrontier<H>) -> Self {
-        Self {
-            prior_bridges: vec![],
-            current_bridge: Some(MerkleBridge::from_parts(None, BTreeMap::new(), frontier)),
-            saved: BTreeMap::new(),
-            checkpoints: vec![],
-            max_checkpoints,
-        }
-    }
-
-    pub fn from_parts(
-        prior_bridges: Vec<MerkleBridge<H>>,
-        current_bridge: Option<MerkleBridge<H>>,
-        saved: BTreeMap<Position, usize>,
-        checkpoints: Vec<Checkpoint>,
+    fn check_consistency_internal(
+        prior_bridges: &[MerkleBridge<H>],
+        current_bridge: &Option<MerkleBridge<H>>,
+        saved: &BTreeMap<Position, usize>,
+        checkpoints: &[Checkpoint],
         max_checkpoints: usize,
-    ) -> Result<Self, BridgeTreeError> {
+    ) -> Result<(), BridgeTreeError> {
         // check that saved values correspond to bridges
-        if saved
-            .iter()
-            .any(|(pos, i)| i >= &prior_bridges.len() || &prior_bridges[*i].position() != pos)
-        {
-            return Err(BridgeTreeError::InvalidWitnessIndex);
+        for (pos, i) in saved {
+            if i >= &prior_bridges.len() {
+                return Err(BridgeTreeError::InvalidWitnessIndex(*i));
+            }
+            let found = prior_bridges[*i].position();
+            if &found != pos {
+                return Err(BridgeTreeError::PositionMismatch {
+                    expected: *pos,
+                    found,
+                });
+            }
         }
 
         if checkpoints.len() > max_checkpoints
@@ -813,6 +808,35 @@ impl<H: Hashable + Ord + Clone, const DEPTH: u8> BridgeTree<H, DEPTH> {
             return Err(BridgeTreeError::ContinuityError);
         }
 
+        Ok(())
+    }
+
+    /// Construct a new BridgeTree that will start recording changes from the state of
+    /// the specified frontier.
+    pub fn from_frontier(max_checkpoints: usize, frontier: NonEmptyFrontier<H>) -> Self {
+        Self {
+            prior_bridges: vec![],
+            current_bridge: Some(MerkleBridge::from_parts(None, BTreeMap::new(), frontier)),
+            saved: BTreeMap::new(),
+            checkpoints: vec![],
+            max_checkpoints,
+        }
+    }
+
+    pub fn from_parts(
+        prior_bridges: Vec<MerkleBridge<H>>,
+        current_bridge: Option<MerkleBridge<H>>,
+        saved: BTreeMap<Position, usize>,
+        checkpoints: Vec<Checkpoint>,
+        max_checkpoints: usize,
+    ) -> Result<Self, BridgeTreeError> {
+        Self::check_consistency_internal(
+            &prior_bridges,
+            &current_bridge,
+            &saved,
+            &checkpoints,
+            max_checkpoints,
+        )?;
         Ok(BridgeTree {
             prior_bridges,
             current_bridge,
@@ -820,6 +844,16 @@ impl<H: Hashable + Ord + Clone, const DEPTH: u8> BridgeTree<H, DEPTH> {
             checkpoints,
             max_checkpoints,
         })
+    }
+
+    pub fn check_consistency(&self) -> Result<(), BridgeTreeError> {
+        Self::check_consistency_internal(
+            &self.prior_bridges,
+            &self.current_bridge,
+            &self.saved,
+            &self.checkpoints,
+            self.max_checkpoints,
+        )
     }
 }
 
@@ -853,7 +887,7 @@ impl<H: Hashable + Ord + Clone, const DEPTH: u8> crate::Frontier<H> for BridgeTr
     }
 }
 
-impl<H: Hashable + Ord + Clone, const DEPTH: u8> Tree<H> for BridgeTree<H, DEPTH> {
+impl<H: Hashable + Ord + Clone + Debug, const DEPTH: u8> Tree<H> for BridgeTree<H, DEPTH> {
     fn current_position(&self) -> Option<Position> {
         self.current_bridge.as_ref().map(|b| b.position())
     }
@@ -1089,13 +1123,20 @@ impl<H: Hashable + Ord + Clone, const DEPTH: u8> Tree<H> for BridgeTree<H, DEPTH
                 }
             }
 
+            // unwrap is safe because we know that prior_bridges was nonempty.
             if let Some(last_bridge) = cur {
+                if let Some(idx) = self.saved.get_mut(&last_bridge.position()) {
+                    *idx -= merged;
+                }
                 self.prior_bridges.push(last_bridge);
             }
 
             for c in self.checkpoints.iter_mut() {
                 c.rewrite_indices(|idx| idx - merged);
             }
+        }
+        if let Err(e) = self.check_consistency() {
+            panic!("Consistency check failed with {:?} for tree {:?}", e, self);
         }
     }
 }
