@@ -512,9 +512,7 @@ impl<H: Ord> MerkleBridge<H> {
     /// Checks whether this bridge is a valid successor for the specified
     /// bridge.
     pub fn can_follow(&self, prev: &Self) -> bool {
-        self.prior_position
-            .iter()
-            .all(|p| *p == prev.frontier.position())
+        self.prior_position == Some(prev.frontier.position())
     }
 }
 
@@ -758,6 +756,18 @@ impl<H: Hashable + Ord + Clone, const DEPTH: u8> BridgeTree<H, DEPTH> {
         Self {
             prior_bridges: vec![],
             current_bridge: None,
+            saved: BTreeMap::new(),
+            checkpoints: vec![],
+            max_checkpoints,
+        }
+    }
+
+    /// Construct a new BridgeTree that will start recording changes from the state of
+    /// the specified frontier.
+    pub fn from_frontier(max_checkpoints: usize, frontier: NonEmptyFrontier<H>) -> Self {
+        Self {
+            prior_bridges: vec![],
+            current_bridge: Some(MerkleBridge::from_parts(None, BTreeMap::new(), frontier)),
             saved: BTreeMap::new(),
             checkpoints: vec![],
             max_checkpoints,
