@@ -22,26 +22,23 @@ and this project adheres to Rust's notion of
 
 ### Changed
 
-Changes to top-level types and traits:
-
-- The `Tree` trait has substantial changes in this release. Hashes are no longer used
-  in identifying nodes when generating authentication paths and removing witnesses;
-  instead, these operations now use position information exclusively.
-- `Tree::authentication_path` and `Tree::remove_witness` have both been changed to only
-  take a `position` parameter, instead of both the leaf value and the position.
-- `Tree::current_leaf` and `Tree::witness` have both been changed to only return the leaf
-  value, instead of both the leaf value and the position.
-
-Changes to the `bridgetree` module:
-
-- The type of `BridgeTree::saved` and `Checkpoint::forgotten` have been changed from 
-  `BTreeMap<(Position, H), usize>` to `BTreeMap<Position, usize>`. This change
-  is also reflected in the rturn type of the `BridgeTree::witnessed_indices` method.
-- The `Checkpoint` type is no longer parameterized by `H`.
-- `BridgeTree::bridges` has been split into two parts: 
-  - `BridgeTree::prior_bridges` now tracks past bridges not including the current frontier.
-  - `BridgeTree::current_bridge` now tracks current mutable frontier.
-- The signature of `BridgeTree::from_parts` has been modified to reflect these changes.
+- `incrementalmerkletree`:
+  - The `Tree` trait has substantial changes in this release. Hashes are no longer used
+    in identifying nodes when generating authentication paths and removing witnesses;
+    instead, these operations now use position information exclusively.
+  - `Tree::authentication_path` and `Tree::remove_witness` have both been changed to only
+    take a `position` parameter, instead of both the leaf value and the position.
+  - `Tree::current_leaf` and `Tree::witness` have both been changed to only return the leaf
+    value, instead of both the leaf value and the position.
+- `incrementalmerkletree::bridgetree`:
+  - The type of `BridgeTree::saved` and `Checkpoint::forgotten` have been changed from 
+    `BTreeMap<(Position, H), usize>` to `BTreeMap<Position, usize>`. This change
+    is also reflected in the rturn type of the `BridgeTree::witnessed_indices` method.
+  - The `Checkpoint` type is no longer parameterized by `H`.
+  - `BridgeTree::bridges` has been split into two parts: 
+    - `BridgeTree::prior_bridges` now tracks past bridges not including the current frontier.
+    - `BridgeTree::current_bridge` now tracks current mutable frontier.
+  - The signature of `BridgeTree::from_parts` has been modified to reflect these changes.
 
 ### Removed
 - `incrementalmerkletree`:
@@ -56,9 +53,9 @@ Changes to the `bridgetree` module:
 
 ### Fixed
 
-- A bug in `BridgeTree::garbage_collect` has been fixed. This bug caused garbage
-  collection to in some cases incorrectly rewrite checkpointed bridge lengths, resulting
-  in a condition where a rewind could panic after a GC operation.
+- A bug in `BridgeTree::garbage_collect` that caused garbage collection to in some 
+  cases incorrectly rewrite checkpointed bridge lengths, resulting in a condition 
+  where a rewind could panic after a GC operation.
 
 ## [0.3.0-beta.1] - 2022-03-22
 
@@ -118,9 +115,9 @@ Changes to the `bridgetree` module:
     `Hash` constraint.
 
 ### Removed
-- `impl TryFrom<incrementalmerkletree::Position> for usize` (use the `From` impl
-  instead).
-- `incrementalmerkletree::Position::increment`
+- `incrementalmerkletree`:
+  - `Position::increment`
+  - `impl TryFrom<Position> for usize` (use the `From` impl instead).
 - `incrementalmerkletree::bridgetree`:
   - `Leaf::into_value` (use `Leaf::value` instead).
   - `MerkleBridge::leaf_value` (use `MerkleBridge::current_leaf` instead).
@@ -129,7 +126,8 @@ Changes to the `bridgetree` module:
 
 ## [0.2.0] - 2022-03-22
 
-TBD
+v0.2.0 is essentially a complete rewrite relative to v0.1.0, and should be considered
+the first usable release.  
 
 ## [0.1.0] - 2021-06-23
 Initial release!
