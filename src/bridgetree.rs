@@ -896,12 +896,6 @@ impl<H: Hashable + Ord + Clone + Debug, const DEPTH: u8> Tree<H> for BridgeTree<
         self.current_bridge.as_ref().map(|b| b.current_leaf())
     }
 
-    fn get_witnessed_leaf(&self, position: Position) -> Option<&H> {
-        self.saved
-            .get(&position)
-            .and_then(|idx| self.prior_bridges.get(*idx).map(|b| b.current_leaf()))
-    }
-
     fn witness(&mut self) -> Option<Position> {
         match self.current_bridge.take() {
             Some(mut cur_b) => {
@@ -940,70 +934,10 @@ impl<H: Hashable + Ord + Clone + Debug, const DEPTH: u8> Tree<H> for BridgeTree<
         self.saved.keys().cloned().collect()
     }
 
-    fn authentication_path(&self, position: Position) -> Option<Vec<H>> {
-        self.saved.get(&position).and_then(|idx| {
-            let frontier = &self.prior_bridges[*idx].frontier;
-
-            // Fuse the following bridges to obtain a bridge that has all
-            // of the data to the right of the selected value in the tree.
-            // The unwrap here is safe because a witnessed leaf always
-            // generates a subsequent bridge in the tree.
-            MerkleBridge::fuse_all(
-                self.prior_bridges[(idx + 1)..]
-                    .iter()
-                    .chain(self.current_bridge.iter()),
-            )
-            .map(|fused| {
-                // construct a complete trailing edge that includes the data from
-                // the following frontier not yet included in the trailing edge.
-                let auth_fragment = fused.auth_fragments.get(&frontier.position());
-                let rest_frontier = fused.frontier;
-
-                let mut auth_values = auth_fragment.iter().flat_map(|auth_fragment| {
-                    let last_altitude = auth_fragment.next_required_altitude();
-                    let last_digest =
-                        last_altitude.and_then(|lvl| rest_frontier.witness_incomplete(lvl));
-
-                    // TODO: can we eliminate this .cloned()?
-                    auth_fragment.values.iter().cloned().chain(last_digest)
-                });
-
-                let mut result = vec![];
-                match &frontier.leaf {
-                    Leaf::Left(_) => {
-                        result.push(auth_values.next().unwrap_or_else(H::empty_leaf));
-                    }
-                    Leaf::Right(a, _) => {
-                        result.push(a.clone());
-                    }
-                }
-
-                for (ommer, ommer_lvl) in frontier
-                    .ommers
-                    .iter()
-                    .zip(frontier.position.ommer_altitudes())
-                {
-                    for synth_lvl in (result.len() as u8)..(ommer_lvl.into()) {
-                        result.push(
-                            auth_values
-                                .next()
-                                .unwrap_or_else(|| H::empty_root(Altitude(synth_lvl))),
-                        )
-                    }
-                    result.push(ommer.clone());
-                }
-
-                for synth_lvl in (result.len() as u8)..DEPTH {
-                    result.push(
-                        auth_values
-                            .next()
-                            .unwrap_or_else(|| H::empty_root(Altitude(synth_lvl))),
-                    );
-                }
-
-                result
-            })
-        })
+    fn get_witnessed_leaf(&self, position: Position) -> Option<&H> {
+        self.saved
+            .get(&position)
+            .and_then(|idx| self.prior_bridges.get(*idx).map(|b| b.current_leaf()))
     }
 
     fn remove_witness(&mut self, position: Position) -> bool {
@@ -1071,6 +1005,72 @@ impl<H: Hashable + Ord + Clone + Debug, const DEPTH: u8> Tree<H> for BridgeTree<
             }
             None => false,
         }
+    }
+
+    fn authentication_path(&self, position: Position) -> Option<Vec<H>> {
+        self.saved.get(&position).and_then(|idx| {
+            let frontier = &self.prior_bridges[*idx].frontier;
+
+            // Fuse the following bridges to obtain a bridge that has all
+            // of the data to the right of the selected value in the tree.
+            // The unwrap here is safe because a witnessed leaf always
+            // generates a subsequent bridge in the tree.
+            MerkleBridge::fuse_all(
+                self.prior_bridges[(idx + 1)..]
+                    .iter()
+                    .chain(self.current_bridge.iter()),
+            )
+            .map(|fused| {
+                // construct a complete trailing edge that includes the data from
+                // the following frontier not yet included in the trailing edge.
+                let auth_fragment = fused.auth_fragments.get(&frontier.position());
+                let rest_frontier = fused.frontier;
+
+                let mut auth_values = auth_fragment.iter().flat_map(|auth_fragment| {
+                    let last_altitude = auth_fragment.next_required_altitude();
+                    let last_digest =
+                        last_altitude.and_then(|lvl| rest_frontier.witness_incomplete(lvl));
+
+                    // TODO: can we eliminate this .cloned()?
+                    auth_fragment.values.iter().cloned().chain(last_digest)
+                });
+
+                let mut result = vec![];
+                match &frontier.leaf {
+                    Leaf::Left(_) => {
+                        result.push(auth_values.next().unwrap_or_else(H::empty_leaf));
+                    }
+                    Leaf::Right(a, _) => {
+                        result.push(a.clone());
+                    }
+                }
+
+                for (ommer, ommer_lvl) in frontier
+                    .ommers
+                    .iter()
+                    .zip(frontier.position.ommer_altitudes())
+                {
+                    for synth_lvl in (result.len() as u8)..(ommer_lvl.into()) {
+                        result.push(
+                            auth_values
+                                .next()
+                                .unwrap_or_else(|| H::empty_root(Altitude(synth_lvl))),
+                        )
+                    }
+                    result.push(ommer.clone());
+                }
+
+                for synth_lvl in (result.len() as u8)..DEPTH {
+                    result.push(
+                        auth_values
+                            .next()
+                            .unwrap_or_else(|| H::empty_root(Altitude(synth_lvl))),
+                    );
+                }
+
+                result
+            })
+        })
     }
 
     fn garbage_collect(&mut self) {
