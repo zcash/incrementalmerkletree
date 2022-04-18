@@ -69,9 +69,7 @@ impl<H: Hashable + PartialEq + Clone> TreeState<H> {
     /// witnessing. Returns the current position if the tree is non-empty.
     fn witness(&mut self) -> Option<Position> {
         self.current_position().map(|pos| {
-            if !self.witnesses.contains(&pos) {
-                self.witnesses.insert(pos);
-            }
+            self.witnesses.insert(pos);
             pos
         })
     }
@@ -80,7 +78,7 @@ impl<H: Hashable + PartialEq + Clone> TreeState<H> {
     /// Returns `None` if there is no available authentication path to that
     /// value.
     fn authentication_path(&self, position: Position) -> Option<Vec<H>> {
-        if self.witnesses.contains(&position) {
+        if Some(position) <= self.current_position() {
             let mut path = vec![];
 
             let mut leaf_idx: usize = position.into();
@@ -117,21 +115,11 @@ impl<H: Hashable + Clone> CompleteTree<H> {
     /// Creates a new, empty binary tree of specified depth.
     #[cfg(test)]
     pub fn new(depth: usize, max_checkpoints: usize) -> Self {
-        CompleteTree {
+        Self {
             tree_state: TreeState::new(depth),
             checkpoints: vec![],
             max_checkpoints,
         }
-    }
-}
-
-impl<H: Hashable + Clone> Frontier<H> for CompleteTree<H> {
-    fn append(&mut self, value: &H) -> bool {
-        self.tree_state.append(value)
-    }
-
-    fn root(&self) -> H {
-        self.tree_state.root()
     }
 }
 
@@ -146,9 +134,30 @@ impl<H: Hashable + PartialEq + Clone> CompleteTree<H> {
             true
         }
     }
+
+    /// Retrieve the tree state at the specified checkpoint depth. This
+    /// is the current tree state if the depth is 0, and this will return
+    /// None if not enough checkpoints exist to obtain the requested depth.
+    fn tree_state_at_checkpoint_depth(&self, checkpoint_depth: usize) -> Option<&TreeState<H>> {
+        if self.checkpoints.len() < checkpoint_depth {
+            None
+        } else if checkpoint_depth == 0 {
+            Some(&self.tree_state)
+        } else {
+            self.checkpoints
+                .get(self.checkpoints.len() - checkpoint_depth)
+        }
+    }
 }
 
-impl<H: Hashable + PartialEq + Clone> Tree<H> for CompleteTree<H> {
+impl<H: Hashable + PartialEq + Clone + std::fmt::Debug> Tree<H> for CompleteTree<H> {
+    /// Appends a new value to the tree at the next available slot. Returns true
+    /// if successful and false if the tree is full.
+    fn append(&mut self, value: &H) -> bool {
+        self.tree_state.append(value)
+    }
+
+    /// Returns the most recently appended leaf value.
     fn current_position(&self) -> Option<Position> {
         self.tree_state.current_position()
     }
@@ -169,8 +178,26 @@ impl<H: Hashable + PartialEq + Clone> Tree<H> for CompleteTree<H> {
         self.tree_state.witnesses.clone()
     }
 
-    fn authentication_path(&self, position: Position) -> Option<Vec<H>> {
-        self.tree_state.authentication_path(position)
+    fn root(&self, checkpoint_depth: usize) -> Option<H> {
+        self.tree_state_at_checkpoint_depth(checkpoint_depth)
+            .map(|s| s.root())
+    }
+
+    fn authentication_path(&self, position: Position, root: &H) -> Option<Vec<H>> {
+        // Search for the checkpointed state corresponding to the provided root, and if one is
+        // found, compute the authentication path as of that root.
+        self.checkpoints
+            .iter()
+            .chain(Some(&self.tree_state))
+            .rev()
+            .skip_while(|c| !c.witnesses.contains(&position))
+            .find_map(|c| {
+                if &c.root() == root {
+                    c.authentication_path(position)
+                } else {
+                    None
+                }
+            })
     }
 
     fn remove_witness(&mut self, position: Position) -> bool {
@@ -225,7 +252,7 @@ pub(crate) fn lazy_root<H: Hashable + Clone>(mut leaves: Vec<H>) -> H {
 #[cfg(test)]
 mod tests {
     use crate::tests::{compute_root_from_auth_path, SipHashable};
-    use crate::{Altitude, Frontier, Hashable, Position, Tree};
+    use crate::{Altitude, Hashable, Position, Tree};
     use std::convert::TryFrom;
 
     use super::CompleteTree;
@@ -239,7 +266,7 @@ mod tests {
         }
 
         let tree = CompleteTree::<SipHashable>::new(DEPTH as usize, 100);
-        assert_eq!(tree.root(), expected);
+        assert_eq!(tree.root(0).unwrap(), expected);
     }
 
     #[test]
@@ -267,7 +294,7 @@ mod tests {
             ),
         );
 
-        assert_eq!(tree.root(), expected);
+        assert_eq!(tree.root(0).unwrap(), expected);
     }
 
     #[test]
@@ -306,11 +333,13 @@ mod tests {
             ),
         );
 
-        assert_eq!(tree.root(), expected);
+        assert_eq!(tree.root(0).unwrap(), expected);
 
         for i in 0u64..(1 << DEPTH) {
             let position = Position::try_from(i).unwrap();
-            let path = tree.authentication_path(position).unwrap();
+            let path = tree
+                .authentication_path(position, &tree.root(0).unwrap())
+                .unwrap();
             assert_eq!(
                 compute_root_from_auth_path(SipHashable(i), position, &path),
                 expected
