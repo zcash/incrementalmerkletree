@@ -20,7 +20,8 @@ and this project adheres to Rust's notion of
     This allows computation of the authentication path as of previous tree states, in
     addition to the previous behavior which only allowed computation of the path as of the
     most recent tree state. The provided `as_of_root` value must be equal to either the
-    current root of the tree, or to the root of the tree at a previous checkpoint. 
+    current root of the tree, or to the root of the tree at a previous checkpoint that
+    contained a note at the given position. 
 
 ### Removed
 
