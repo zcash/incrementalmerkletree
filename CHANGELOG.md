@@ -8,6 +8,30 @@ and this project adheres to Rust's notion of
 ## [Unreleased]
 
 ### Added
+
+- `incrementalmerkletree::bridgetree`:
+  - `Checkpoint::witnessed` returns the set of positions that have been marked with
+    `BridgeTree::witness` while this checkpoint was the current checkpoint.
+
+### Changed
+
+- `incrementalmerkletree`:
+  - `Tree::authentication_path` has been changed to take an `as_of_root` parameter.
+    This allows computation of the authentication path as of previous tree states, in
+    addition to the previous behavior which only allowed computation of the path as of the
+    most recent tree state. The provided `as_of_root` value must be equal to either the
+    current root of the tree, or to the root of the tree at a previous checkpoint that
+    contained a note at the given position. 
+
+### Removed
+
+- `incrementalmerkletree::bridgetree`:
+  - `Checkpoint::rewrite_indices` was an internal utility method that had inadvertently
+    been made a part of the public API.
+
+## [0.3.0-beta.2] - 2022-04-06
+
+### Added
 - `incrementalmerkletree`:
   - `Tree::get_witnessed_leaf`, to allow a user to query for the leaf value of
     witnessed leaves by their position in the tree.
