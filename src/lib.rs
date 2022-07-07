@@ -217,6 +217,27 @@ pub trait Hashable: Sized {
     }
 }
 
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub(crate) struct RootCache<H> {
+    roots: Vec<H>,
+}
+
+impl<H: Hashable> RootCache<H> {
+    pub(crate) fn new(depth: u8) -> Self {
+        assert!(depth < u8::MAX);
+        RootCache {
+            roots: Altitude::zero()
+                .iter_to(Altitude(depth + 1))
+                .map(H::empty_root)
+                .collect::<Vec<_>>(),
+        }
+    }
+
+    pub(crate) fn empty_root(&self, level: Altitude) -> &H {
+        &self.roots[<usize>::from(level)]
+    }
+}
+
 /// A possibly-empty incremental Merkle frontier.
 pub trait Frontier<H> {
     /// Appends a new value to the frontier at the next available slot.

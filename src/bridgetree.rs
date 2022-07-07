@@ -9,7 +9,7 @@ use std::convert::TryFrom;
 use std::fmt::Debug;
 use std::mem::size_of;
 
-use super::{Altitude, Hashable, Position, Tree};
+use super::{Altitude, Hashable, Position, RootCache, Tree};
 
 /// A set of leaves of a Merkle tree.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -155,12 +155,23 @@ impl<H: Hashable + Clone> NonEmptyFrontier<H> {
 
     /// Generate the root of the Merkle tree by hashing against empty branches.
     pub fn root(&self) -> H {
-        Self::inner_root(self.position, &self.leaf, &self.ommers, None)
+        self.root0(&RootCache::new(self.max_altitude().into()))
+    }
+
+    fn root0(&self, root_cache: &RootCache<H>) -> H {
+        Self::inner_root(self.position, &self.leaf, &self.ommers, None, root_cache)
     }
 
     /// If the tree is full to the specified altitude, return the data
     /// required to witness a sibling at that altitude.
     pub fn witness(&self, sibling_altitude: Altitude) -> Option<H> {
+        self.witness0(
+            sibling_altitude,
+            &RootCache::new(self.max_altitude().into()),
+        )
+    }
+
+    fn witness0(&self, sibling_altitude: Altitude, root_cache: &RootCache<H>) -> Option<H> {
         if sibling_altitude == Altitude::zero() {
             match &self.leaf {
                 Leaf::Left(_) => None,
@@ -174,6 +185,7 @@ impl<H: Hashable + Clone> NonEmptyFrontier<H> {
                 &self.leaf,
                 self.ommers.split_last().map_or(&[], |(_, s)| s),
                 Some(sibling_altitude),
+                root_cache,
             ))
         } else {
             None
@@ -183,6 +195,10 @@ impl<H: Hashable + Clone> NonEmptyFrontier<H> {
     /// If the tree is not full, generate the root of the incomplete subtree
     /// by hashing with empty branches
     pub fn witness_incomplete(&self, altitude: Altitude) -> Option<H> {
+        self.witness_incomplete0(altitude, &RootCache::new(self.max_altitude().into()))
+    }
+
+    fn witness_incomplete0(&self, altitude: Altitude, root_cache: &RootCache<H>) -> Option<H> {
         if self.position.is_complete(altitude) {
             // if the tree is complete to this altitude, its hash should
             // have already been included in an auth fragment.
@@ -196,6 +212,7 @@ impl<H: Hashable + Clone> NonEmptyFrontier<H> {
                     &self.leaf,
                     self.ommers.split_last().map_or(&[], |(_, s)| s),
                     Some(altitude),
+                    root_cache,
                 )
             })
         }
@@ -207,6 +224,7 @@ impl<H: Hashable + Clone> NonEmptyFrontier<H> {
         leaf: &Leaf<H>,
         ommers: &[H],
         result_lvl: Option<Altitude>,
+        root_cache: &RootCache<H>,
     ) -> H {
         let mut digest = match leaf {
             Leaf::Left(a) => H::combine(Altitude::zero(), a, &H::empty_leaf()),
@@ -231,7 +249,7 @@ impl<H: Hashable + Clone> NonEmptyFrontier<H> {
                 // digest to this point
                 &complete_lvl
                     .iter_to(ommer_lvl)
-                    .fold(digest, |d, l| H::combine(l, &d, &H::empty_root(l))),
+                    .fold(digest, |d, l| H::combine(l, &d, root_cache.empty_root(l))),
             );
 
             complete_lvl = ommer_lvl + 1;
@@ -241,7 +259,7 @@ impl<H: Hashable + Clone> NonEmptyFrontier<H> {
         // continue hashing against empty roots
         digest = complete_lvl
             .iter_to(result_lvl.unwrap_or(complete_lvl))
-            .fold(digest, |d, l| H::combine(l, &d, &H::empty_root(l)));
+            .fold(digest, |d, l| H::combine(l, &d, root_cache.empty_root(l)));
 
         digest
     }
@@ -305,6 +323,24 @@ impl<H, const DEPTH: u8> Frontier<H, DEPTH> {
             2 * size_of::<usize>() + f.ommers.capacity() * size_of::<H>()
         })
     }
+
+    fn inner_root(&self, cache: &RootCache<H>) -> H
+    where
+        H: Hashable + Clone,
+    {
+        self.frontier.as_ref().map_or_else(
+            || cache.empty_root(Altitude(DEPTH)).clone(),
+            |frontier| {
+                // fold from the current height, combining with empty branches,
+                // up to the maximum height of the tree
+                (frontier.max_altitude() + 1)
+                    .iter_to(Altitude(DEPTH))
+                    .fold(frontier.root0(cache), |d, lvl| {
+                        H::combine(lvl, &d, cache.empty_root(lvl))
+                    })
+            },
+        )
+    }
 }
 
 impl<H: Hashable + Clone, const DEPTH: u8> crate::Frontier<H> for Frontier<H, DEPTH> {
@@ -323,17 +359,8 @@ impl<H: Hashable + Clone, const DEPTH: u8> crate::Frontier<H> for Frontier<H, DE
     }
 
     fn root(&self) -> H {
-        self.frontier
-            .as_ref()
-            .map_or(H::empty_root(Altitude(DEPTH)), |frontier| {
-                // fold from the current height, combining with empty branches,
-                // up to the maximum height of the tree
-                (frontier.max_altitude() + 1)
-                    .iter_to(Altitude(DEPTH))
-                    .fold(frontier.root(), |d, lvl| {
-                        H::combine(lvl, &d, &H::empty_root(lvl))
-                    })
-            })
+        let cache = RootCache::new(DEPTH);
+        self.inner_root(&cache)
     }
 }
 
@@ -435,8 +462,15 @@ impl<A: Clone> AuthFragment<A> {
 
 impl<H: Hashable + Clone + PartialEq> AuthFragment<H> {
     pub fn augment(&mut self, frontier: &NonEmptyFrontier<H>) {
+        self.augment0(
+            frontier,
+            &RootCache::new(self.position.max_altitude().into()),
+        )
+    }
+
+    fn augment0(&mut self, frontier: &NonEmptyFrontier<H>, root_cache: &RootCache<H>) {
         if let Some(altitude) = self.next_required_altitude() {
-            if let Some(digest) = frontier.witness(altitude) {
+            if let Some(digest) = frontier.witness0(altitude, root_cache) {
                 self.values.push(digest);
                 self.altitudes_observed += 1;
             }
@@ -551,26 +585,34 @@ impl<'a, H: Hashable + Ord + Clone + 'a> MerkleBridge<H> {
     /// Advances this bridge's frontier by appending the specified node,
     /// and updates any auth path fragments being tracked if necessary.
     pub fn append(&mut self, value: H) {
+        self.append0(value, &RootCache::new(self.max_altitude().into()))
+    }
+
+    fn append0(&mut self, value: H, root_cache: &RootCache<H>) {
         self.frontier.append(value);
 
         for ext in self.auth_fragments.values_mut() {
-            ext.augment(&self.frontier);
+            ext.augment0(&self.frontier, root_cache);
         }
     }
 
     /// Returns the Merkle root of this bridge's current frontier, as obtained
     /// by hashing against empty nodes.
     pub fn root(&self) -> H {
-        self.frontier.root()
+        self.root0(&RootCache::new(self.max_altitude().into()))
     }
 
-    fn root_at_altitude(&self, alt: Altitude) -> H {
+    fn root0(&self, root_cache: &RootCache<H>) -> H {
+        self.frontier.root0(root_cache)
+    }
+
+    fn root_at_altitude(&self, alt: Altitude, root_cache: &RootCache<H>) -> H {
         // fold from the current height, combining with empty branches,
         // up to the specified altitude
         (self.max_altitude() + 1)
             .iter_to(alt)
-            .fold(self.frontier.root(), |d, lvl| {
-                H::combine(lvl, &d, &H::empty_root(lvl))
+            .fold(self.frontier.root0(root_cache), |d, lvl| {
+                H::combine(lvl, &d, root_cache.empty_root(lvl))
             })
     }
 
@@ -704,11 +746,12 @@ impl Checkpoint {
         &self,
         bridges: &[MerkleBridge<H>],
         altitude: Altitude,
+        root_cache: &RootCache<H>,
     ) -> H {
         if self.bridges_len == 0 {
-            H::empty_root(altitude)
+            root_cache.empty_root(altitude).clone()
         } else {
-            bridges[self.bridges_len - 1].root_at_altitude(altitude)
+            bridges[self.bridges_len - 1].root_at_altitude(altitude, root_cache)
         }
     }
 
@@ -748,6 +791,8 @@ pub struct BridgeTree<H: Ord, const DEPTH: u8> {
     /// exceeded, the oldest checkpoint will be dropped when creating
     /// a new checkpoint.
     max_checkpoints: usize,
+    /// A cache of the empty tree roots
+    root_cache: RootCache<H>,
 }
 
 impl<H: Hashable + Ord + Debug, const DEPTH: u8> Debug for BridgeTree<H, DEPTH> {
@@ -823,6 +868,7 @@ impl<H: Hashable + Ord + Clone, const DEPTH: u8> BridgeTree<H, DEPTH> {
             saved: BTreeMap::new(),
             checkpoints: vec![],
             max_checkpoints,
+            root_cache: RootCache::new(DEPTH),
         }
     }
 
@@ -883,6 +929,7 @@ impl<H: Hashable + Ord + Clone, const DEPTH: u8> BridgeTree<H, DEPTH> {
             saved: BTreeMap::new(),
             checkpoints: vec![],
             max_checkpoints,
+            root_cache: RootCache::new(DEPTH),
         }
     }
 
@@ -906,6 +953,7 @@ impl<H: Hashable + Ord + Clone, const DEPTH: u8> BridgeTree<H, DEPTH> {
             saved,
             checkpoints,
             max_checkpoints,
+            root_cache: RootCache::new(DEPTH),
         })
     }
 
@@ -926,7 +974,7 @@ impl<H: Hashable + Ord + Clone + Debug, const DEPTH: u8> Tree<H> for BridgeTree<
             if bridge.frontier.position().is_complete(Altitude(DEPTH)) {
                 false
             } else {
-                bridge.append(value.clone());
+                bridge.append0(value.clone(), &self.root_cache);
                 true
             }
         } else {
@@ -938,18 +986,15 @@ impl<H: Hashable + Ord + Clone + Debug, const DEPTH: u8> Tree<H> for BridgeTree<
     fn root(&self, checkpoint_depth: usize) -> Option<H> {
         let altitude = Altitude(DEPTH);
         if checkpoint_depth == 0 {
-            Some(
-                self.current_bridge
-                    .as_ref()
-                    .map_or(H::empty_root(altitude), |bridge| {
-                        bridge.root_at_altitude(altitude)
-                    }),
-            )
+            Some(self.current_bridge.as_ref().map_or_else(
+                || self.root_cache.empty_root(altitude).clone(),
+                |bridge| bridge.root_at_altitude(altitude, &self.root_cache),
+            ))
         } else if self.checkpoints.len() >= checkpoint_depth {
             let checkpoint_idx = self.checkpoints.len() - checkpoint_depth;
             self.checkpoints
                 .get(checkpoint_idx)
-                .map(|c| c.root(&self.prior_bridges, altitude))
+                .map(|c| c.root(&self.prior_bridges, altitude, &self.root_cache))
         } else {
             None
         }
@@ -1107,7 +1152,7 @@ impl<H: Hashable + Ord + Clone + Debug, const DEPTH: u8> Tree<H> for BridgeTree<
             .enumerate()
             .rev()
             .take_while(|(_, c)| c.position(&self.prior_bridges) >= Some(position))
-            .filter(|(_, c)| &c.root(&self.prior_bridges, max_alt) == as_of_root)
+            .filter(|(_, c)| &c.root(&self.prior_bridges, max_alt, &self.root_cache) == as_of_root)
             .last()
             .map(|(i, c)| AuthBase::Checkpoint(i, c))
             .unwrap_or_else(|| {
@@ -1178,8 +1223,8 @@ impl<H: Hashable + Ord + Clone + Debug, const DEPTH: u8> Tree<H> for BridgeTree<
 
                 let mut auth_values = auth_fragment.iter().flat_map(|auth_fragment| {
                     let last_altitude = auth_fragment.next_required_altitude();
-                    let last_digest =
-                        last_altitude.and_then(|lvl| rest_frontier.witness_incomplete(lvl));
+                    let last_digest = last_altitude
+                        .and_then(|lvl| rest_frontier.witness_incomplete0(lvl, &self.root_cache));
 
                     // TODO: can we eliminate this .cloned()?
                     auth_fragment.values.iter().cloned().chain(last_digest)
