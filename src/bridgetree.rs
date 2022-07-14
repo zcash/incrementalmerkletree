@@ -618,6 +618,67 @@ impl<'a, H: Hashable + Ord + Clone + 'a> MerkleBridge<H> {
         iter.fold(first.cloned(), |acc, b| acc?.fuse(b))
     }
 
+    /// If this bridge contains sufficient auth fragment information, construct an
+    /// authentication path for the specified position.
+    fn authentication_path(
+        &self,
+        depth: u8,
+        prior_frontier: &NonEmptyFrontier<H>,
+    ) -> Option<Vec<H>> {
+        // construct a complete trailing edge that includes the data from
+        // the following frontier not yet included in the trailing edge.
+        let auth_fragment = self.auth_fragments.get(&prior_frontier.position());
+        if auth_fragment.is_none() && self.frontier.position() > prior_frontier.position() {
+            None
+        } else {
+            let rest_frontier = &self.frontier;
+
+            let mut auth_values = auth_fragment.iter().flat_map(|auth_fragment| {
+                let last_altitude = auth_fragment.next_required_altitude();
+                let last_digest =
+                    last_altitude.and_then(|lvl| rest_frontier.witness_incomplete(lvl));
+
+                // TODO: can we eliminate this .cloned()?
+                auth_fragment.values.iter().cloned().chain(last_digest)
+            });
+
+            let mut result = vec![];
+            match &prior_frontier.leaf {
+                Leaf::Left(_) => {
+                    result.push(auth_values.next().unwrap_or_else(H::empty_leaf));
+                }
+                Leaf::Right(a, _) => {
+                    result.push(a.clone());
+                }
+            }
+
+            for (ommer, ommer_lvl) in prior_frontier
+                .ommers
+                .iter()
+                .zip(prior_frontier.position.ommer_altitudes())
+            {
+                for synth_lvl in (result.len() as u8)..(ommer_lvl.into()) {
+                    result.push(
+                        auth_values
+                            .next()
+                            .unwrap_or_else(|| H::empty_root(Altitude(synth_lvl))),
+                    )
+                }
+                result.push(ommer.clone());
+            }
+
+            for synth_lvl in (result.len() as u8)..depth {
+                result.push(
+                    auth_values
+                        .next()
+                        .unwrap_or_else(|| H::empty_root(Altitude(synth_lvl))),
+                );
+            }
+
+            Some(result)
+        }
+    }
+
     fn prune_auth_fragments(&mut self, to_remove: &BTreeSet<Position>) {
         self.auth_fragments.retain(|k, _| !to_remove.contains(k));
     }
@@ -1136,7 +1197,7 @@ impl<H: Hashable + Ord + Clone + Debug, const DEPTH: u8> Tree<H> for BridgeTree<
         });
 
         saved_idx.and_then(|idx| {
-            let frontier = &self.prior_bridges[*idx].frontier;
+            let prior_frontier = &self.prior_bridges[*idx].frontier;
 
             // Fuse the following bridges to obtain a bridge that has all
             // of the data to the right of the selected value in the tree,
@@ -1170,56 +1231,7 @@ impl<H: Hashable + Ord + Clone + Debug, const DEPTH: u8> Tree<H> for BridgeTree<
                 AuthBase::NotFound => None,
             };
 
-            fused.map(|successor| {
-                // construct a complete trailing edge that includes the data from
-                // the following frontier not yet included in the trailing edge.
-                let auth_fragment = successor.auth_fragments.get(&frontier.position());
-                let rest_frontier = successor.frontier;
-
-                let mut auth_values = auth_fragment.iter().flat_map(|auth_fragment| {
-                    let last_altitude = auth_fragment.next_required_altitude();
-                    let last_digest =
-                        last_altitude.and_then(|lvl| rest_frontier.witness_incomplete(lvl));
-
-                    // TODO: can we eliminate this .cloned()?
-                    auth_fragment.values.iter().cloned().chain(last_digest)
-                });
-
-                let mut result = vec![];
-                match &frontier.leaf {
-                    Leaf::Left(_) => {
-                        result.push(auth_values.next().unwrap_or_else(H::empty_leaf));
-                    }
-                    Leaf::Right(a, _) => {
-                        result.push(a.clone());
-                    }
-                }
-
-                for (ommer, ommer_lvl) in frontier
-                    .ommers
-                    .iter()
-                    .zip(frontier.position.ommer_altitudes())
-                {
-                    for synth_lvl in (result.len() as u8)..(ommer_lvl.into()) {
-                        result.push(
-                            auth_values
-                                .next()
-                                .unwrap_or_else(|| H::empty_root(Altitude(synth_lvl))),
-                        )
-                    }
-                    result.push(ommer.clone());
-                }
-
-                for synth_lvl in (result.len() as u8)..DEPTH {
-                    result.push(
-                        auth_values
-                            .next()
-                            .unwrap_or_else(|| H::empty_root(Altitude(synth_lvl))),
-                    );
-                }
-
-                result
-            })
+            fused.and_then(|successor| successor.authentication_path(DEPTH, prior_frontier))
         })
     }
 
