@@ -29,15 +29,15 @@ mod sample;
 
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeSet;
-use std::convert::TryFrom;
+use std::convert::{TryFrom, TryInto};
 use std::num::TryFromIntError;
-use std::ops::{Add, AddAssign, Sub};
+use std::ops::{Add, AddAssign, Range, Sub};
 
 /// A type-safe wrapper for indexing into "levels" of a binary tree, such that
 /// nodes at altitude `0` are leaves, nodes at altitude `1` are parents
 /// of nodes at altitude `0`, and so forth. This type is capable of
 /// representing altitudes in trees containing up to 2^255 leaves.
-#[derive(Copy, Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[derive(Copy, Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 #[repr(transparent)]
 pub struct Altitude(u8);
 
@@ -123,45 +123,34 @@ impl Position {
             })
     }
 
-    /// Returns the altitude of each cousin and/or ommer required to construct
+    /// Returns the number of cousins and/or ommers required to construct
     /// an authentication path to the root of a merkle tree that has `self + 1`
     /// nodes.
-    pub fn altitudes_required(&self) -> impl Iterator<Item = Altitude> + '_ {
+    pub fn count_altitudes_required(&self) -> usize {
         (0..=self.max_altitude().0)
-            .into_iter()
-            .filter_map(move |i| {
-                if self.0 == 0 || self.0 & (1 << i) == 0 {
-                    Some(Altitude(i))
-                } else {
-                    None
-                }
-            })
-    }
-
-    /// Returns the altitude of each cousin and/or ommer required to construct
-    /// an authentication path to the root of a merkle tree containing 2^64
-    /// nodes.
-    pub fn all_altitudes_required(&self) -> impl Iterator<Item = Altitude> + '_ {
-        (0..64).into_iter().filter_map(move |i| {
-            if self.0 == 0 || self.0 & (1 << i) == 0 {
-                Some(Altitude(i))
-            } else {
-                None
-            }
-        })
+            .filter(|i| self.0 == 0 || self.0 & (1 << i) == 0)
+            .count()
     }
 
     /// Returns whether the binary tree having `self` as the position of the
     /// rightmost leaf contains a perfect balanced tree of height
     /// `to_altitude + 1` that contains the aforesaid leaf, without requiring
     /// any empty leaves or internal nodes.
-    pub fn is_complete(&self, to_altitude: Altitude) -> bool {
-        for i in 0..(to_altitude.0) {
-            if self.0 & (1 << i) == 0 {
-                return false;
-            }
+    pub fn is_complete_subtree(&self, to_altitude: Altitude) -> bool {
+        !(0..(to_altitude.0)).any(|l| self.0 & (1 << l) == 0)
+    }
+
+    pub fn ommer_index(&self, level: Altitude) -> Option<usize> {
+        if self.0 & (1 << level.0) == 0 || level.0 == 0 {
+            // Ommers only exist where 1's appear in the binary representation of the position.
+            // Ommers don't exist at level 0 because of the design of the `bridgetree::Frontier`
+            // `Leaf` type. This is a problem with the design of `Frontier` though - we should
+            // actually capture level-0 left nodes (in the presence of a right node) in the ommers
+            // list instead, but that's too big of a refactor for right now
+            None
+        } else {
+            Some((1..=(level.0)).filter(|l| (self.0 >> l) & 0x1 == 1).count() - 1)
         }
-        true
     }
 }
 
@@ -200,6 +189,171 @@ impl TryFrom<u64> for Position {
     type Error = TryFromIntError;
     fn try_from(sz: u64) -> Result<Self, Self::Error> {
         <usize>::try_from(sz).map(Self)
+    }
+}
+
+/// The address of an internal node of the Merkle tree.
+/// When `level == 0`, the index has the same value as the
+/// position.
+#[derive(Copy, Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+pub struct Address {
+    level: Altitude,
+    index: usize,
+}
+
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+pub(crate) enum Source {
+    Past,
+    Future,
+}
+
+impl Address {
+    pub fn from_parts(level: Altitude, index: usize) -> Self {
+        Address { level, index }
+    }
+
+    pub fn position_range(&self) -> Range<Position> {
+        Range {
+            start: (self.index << self.level.0).try_into().unwrap(),
+            end: ((self.index + 1) << self.level.0).try_into().unwrap(),
+        }
+    }
+
+    pub fn level(&self) -> Altitude {
+        self.level
+    }
+
+    pub fn index(&self) -> usize {
+        self.index
+    }
+
+    pub fn parent(&self) -> Address {
+        Address {
+            level: self.level + 1,
+            index: self.index >> 1,
+        }
+    }
+
+    pub fn sibling(&self) -> Address {
+        Address {
+            level: self.level,
+            index: if self.index & 0x1 == 0 {
+                self.index + 1
+            } else {
+                self.index - 1
+            },
+        }
+    }
+
+    pub fn is_complete_node(&self) -> bool {
+        self.index & 0x1 == 1
+    }
+
+    pub fn current_incomplete(&self) -> Address {
+        // find the first zero bit in the index, searching from the least significant bit
+        let mut index = self.index;
+        for level in self.level.0.. {
+            if index & 0x1 == 1 {
+                index >>= 1;
+            } else {
+                return Address {
+                    level: Altitude(level),
+                    index,
+                };
+            }
+        }
+
+        unreachable!("The loop will always terminate via return in at most 64 iterations.")
+    }
+
+    pub fn next_incomplete_parent(&self) -> Address {
+        if self.is_complete_node() {
+            self.current_incomplete()
+        } else {
+            let complete = Address {
+                level: self.level,
+                index: self.index + 1,
+            };
+            complete.current_incomplete()
+        }
+    }
+
+    /// Returns the authentication path for this address, beginning with the sibling
+    /// of this node and ending with the sibling of the ancestor of this node that
+    /// is required to compute a root at the specified altitude.
+    pub(crate) fn auth_path(
+        &self,
+        to_altitude: Altitude,
+    ) -> impl Iterator<Item = (Address, Source)> {
+        AuthPathIter {
+            to_altitude,
+            current: *self,
+        }
+    }
+}
+
+impl From<Position> for Address {
+    fn from(p: Position) -> Self {
+        Address {
+            level: Altitude::zero(),
+            index: p.into(),
+        }
+    }
+}
+
+impl<'a> From<&'a Position> for Address {
+    fn from(p: &'a Position) -> Self {
+        Address {
+            level: Altitude::zero(),
+            index: (*p).into(),
+        }
+    }
+}
+
+impl From<Address> for Option<Position> {
+    fn from(addr: Address) -> Self {
+        if addr.level == Altitude::zero() {
+            Some(addr.index.into())
+        } else {
+            None
+        }
+    }
+}
+
+impl<'a> From<&'a Address> for Option<Position> {
+    fn from(addr: &'a Address) -> Self {
+        if addr.level == Altitude::zero() {
+            Some(addr.index.into())
+        } else {
+            None
+        }
+    }
+}
+
+#[must_use = "iterators are lazy and do nothing unless consumed"]
+pub(crate) struct AuthPathIter {
+    to_altitude: Altitude,
+    current: Address,
+}
+
+impl Iterator for AuthPathIter {
+    type Item = (Address, Source);
+
+    fn next(&mut self) -> Option<(Address, Source)> {
+        if self.current.level() < self.to_altitude {
+            let current = self.current;
+            self.current = current.parent();
+            Some((
+                current.sibling(),
+                if current.is_complete_node() {
+                    Source::Past
+                } else {
+                    Source::Future
+                },
+            ))
+        } else {
+            None
+        }
     }
 }
 
@@ -305,7 +459,18 @@ pub(crate) mod tests {
 
     use super::bridgetree::BridgeTree;
     use super::sample::{lazy_root, CompleteTree};
-    use super::{Altitude, Hashable, Position, Tree};
+    use super::{Address, Altitude, Hashable, Position, Source, Tree};
+
+    #[test]
+    fn position_is_complete_subtree() {
+        assert!(Position(0).is_complete_subtree(Altitude(0)));
+        assert!(Position(1).is_complete_subtree(Altitude(0)));
+        assert!(!Position(2).is_complete_subtree(Altitude(1)));
+        assert!(Position(3).is_complete_subtree(Altitude(1)));
+        assert!(!Position(4).is_complete_subtree(Altitude(2)));
+        assert!(Position(7).is_complete_subtree(Altitude(2)));
+        assert!(Position(u32::MAX as usize).is_complete_subtree(Altitude(32)));
+    }
 
     #[test]
     fn position_altitudes() {
@@ -316,6 +481,80 @@ pub(crate) mod tests {
         assert_eq!(Position(4).max_altitude(), Altitude(2));
         assert_eq!(Position(7).max_altitude(), Altitude(2));
         assert_eq!(Position(8).max_altitude(), Altitude(3));
+    }
+
+    #[test]
+    fn position_ommer_index() {
+        assert_eq!(None, Position(3).ommer_index(0.into()));
+        assert_eq!(Some(0), Position(3).ommer_index(1.into()));
+        assert_eq!(None, Position(3).ommer_index(2.into()));
+
+        assert_eq!(Some(0), Position(6).ommer_index(1.into()));
+        assert_eq!(Some(1), Position(6).ommer_index(2.into()));
+        assert_eq!(None, Position(8).ommer_index(1.into()));
+        assert_eq!(Some(0), Position(10).ommer_index(1.into()));
+    }
+
+    #[test]
+    fn current_incomplete() {
+        let addr = |l, i| Address::from_parts(Altitude(l), i);
+        assert_eq!(addr(0, 0), addr(0, 0).current_incomplete());
+        assert_eq!(addr(1, 0), addr(0, 1).current_incomplete());
+        assert_eq!(addr(0, 2), addr(0, 2).current_incomplete());
+        assert_eq!(addr(2, 0), addr(0, 3).current_incomplete());
+    }
+
+    #[test]
+    fn next_incomplete_parent() {
+        let addr = |l, i| Address::from_parts(Altitude(l), i);
+        assert_eq!(addr(1, 0), addr(0, 0).next_incomplete_parent());
+        assert_eq!(addr(1, 0), addr(0, 1).next_incomplete_parent());
+        assert_eq!(addr(2, 0), addr(0, 2).next_incomplete_parent());
+        assert_eq!(addr(2, 0), addr(0, 3).next_incomplete_parent());
+        assert_eq!(addr(3, 0), addr(2, 0).next_incomplete_parent());
+        assert_eq!(addr(1, 2), addr(0, 4).next_incomplete_parent());
+        assert_eq!(addr(3, 0), addr(1, 2).next_incomplete_parent());
+    }
+
+    #[test]
+    fn address_auth_path() {
+        use Source::*;
+        let addr = |l, i| Address::from_parts(Altitude(l), i);
+        let path_elem = |l, i, s| (Address::from_parts(Altitude(l), i), s);
+        assert_eq!(
+            vec![path_elem(0, 1, Future), path_elem(1, 1, Future)],
+            addr(0, 0).auth_path(Altitude(2)).collect::<Vec<_>>()
+        );
+        assert_eq!(
+            vec![path_elem(0, 3, Future), path_elem(1, 0, Past)],
+            addr(0, 2).auth_path(Altitude(2)).collect::<Vec<_>>()
+        );
+        assert_eq!(
+            vec![
+                path_elem(0, 2, Past),
+                path_elem(1, 0, Past),
+                path_elem(2, 1, Future)
+            ],
+            addr(0, 3).auth_path(Altitude(3)).collect::<Vec<_>>()
+        );
+        assert_eq!(
+            vec![
+                path_elem(0, 5, Future),
+                path_elem(1, 3, Future),
+                path_elem(2, 0, Past),
+                path_elem(3, 1, Future)
+            ],
+            addr(0, 4).auth_path(Altitude(4)).collect::<Vec<_>>()
+        );
+        assert_eq!(
+            vec![
+                path_elem(0, 7, Future),
+                path_elem(1, 2, Past),
+                path_elem(2, 0, Past),
+                path_elem(3, 1, Future)
+            ],
+            addr(0, 6).auth_path(Altitude(4)).collect::<Vec<_>>()
+        );
     }
 
     //

@@ -8,8 +8,9 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::convert::TryFrom;
 use std::fmt::Debug;
 use std::mem::size_of;
+use std::ops::Range;
 
-use super::{Altitude, Hashable, Position, Tree};
+use super::{Address, Altitude, Hashable, Position, Source, Tree};
 
 /// A set of leaves of a Merkle tree.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -27,10 +28,18 @@ impl<A> Leaf<A> {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub enum FrontierError {
     PositionMismatch { expected_ommers: usize },
     MaxDepthExceeded { altitude: Altitude },
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum PathError {
+    PositionNotWitnessed(Position),
+    BridgeFusionError,
+    FrontierAddressInvalid(Address),
+    BridgeAddressInvalid(Address),
 }
 
 /// A `[NonEmptyFrontier]` is a reduced representation of a Merkle tree,
@@ -94,13 +103,6 @@ impl<H> NonEmptyFrontier<H> {
     pub fn ommers(&self) -> &[H] {
         &self.ommers
     }
-
-    /// Returns the value of the most recently appended leaf.
-    pub fn leaf_value(&self) -> &H {
-        match &self.leaf {
-            Leaf::Left(v) | Leaf::Right(_, v) => v,
-        }
-    }
 }
 
 impl<H: Hashable + Clone> NonEmptyFrontier<H> {
@@ -124,7 +126,7 @@ impl<H: Hashable + Clone> NonEmptyFrontier<H> {
         };
 
         if carry.is_some() {
-            let mut new_ommers = Vec::with_capacity(self.position.altitudes_required().count());
+            let mut new_ommers = Vec::with_capacity(self.position.count_altitudes_required());
             for (ommer, ommer_lvl) in self.ommers.iter().zip(self.position.ommer_altitudes()) {
                 if let Some((carry_ommer, carry_lvl)) = carry.as_ref() {
                     if *carry_lvl == ommer_lvl {
@@ -158,15 +160,15 @@ impl<H: Hashable + Clone> NonEmptyFrontier<H> {
         Self::inner_root(self.position, &self.leaf, &self.ommers, None)
     }
 
-    /// If the tree is full to the specified altitude, return the data
-    /// required to witness a sibling at that altitude.
+    /// If the tree is full to the specified altitude, return root at
+    /// that altitude
     pub fn witness(&self, sibling_altitude: Altitude) -> Option<H> {
         if sibling_altitude == Altitude::zero() {
             match &self.leaf {
                 Leaf::Left(_) => None,
                 Leaf::Right(_, a) => Some(a.clone()),
             }
-        } else if self.position.is_complete(sibling_altitude) {
+        } else if self.position.is_complete_subtree(sibling_altitude) {
             // the "incomplete" subtree root is actually complete
             // if the tree is full to this altitude
             Some(Self::inner_root(
@@ -183,9 +185,7 @@ impl<H: Hashable + Clone> NonEmptyFrontier<H> {
     /// If the tree is not full, generate the root of the incomplete subtree
     /// by hashing with empty branches
     pub fn witness_incomplete(&self, altitude: Altitude) -> Option<H> {
-        if self.position.is_complete(altitude) {
-            // if the tree is complete to this altitude, its hash should
-            // have already been included in an auth fragment.
+        if self.position.is_complete_subtree(altitude) {
             None
         } else {
             Some(if altitude == Altitude::zero() {
@@ -199,6 +199,53 @@ impl<H: Hashable + Clone> NonEmptyFrontier<H> {
                 )
             })
         }
+    }
+
+    pub fn value_at(&self, addr: Address) -> Option<H> {
+        if addr.level() == Altitude::zero() {
+            match &self.leaf {
+                Leaf::Left(a) => {
+                    if addr.is_complete_node() {
+                        None
+                    } else {
+                        Some(a)
+                    }
+                }
+                Leaf::Right(a, b) => Some(if addr.is_complete_node() { b } else { a }),
+            }
+            .cloned()
+        } else {
+            self.position.ommer_index(addr.level()).and_then(|i| {
+                if addr.is_complete_node() {
+                    // we don't have an ommer yet, but we have enough information
+                    // to compute the value
+                    self.witness(addr.level())
+                } else {
+                    Some(self.ommers[i].clone())
+                }
+            })
+        }
+    }
+
+    /// Constructs an authentication path for the leaf at the tip of this
+    /// frontier, given a source of node values that complement this frontier.
+    pub fn authentication_path<F>(&self, depth: u8, bridge_value_at: F) -> Result<Vec<H>, PathError>
+    where
+        F: Fn(Address) -> Option<H>,
+    {
+        // construct a complete trailing edge that includes the data from
+        // the following frontier not yet included in the trailing edge.
+        Address::from(self.position())
+            .auth_path(depth.into())
+            .map(|(addr, source)| match source {
+                Source::Past => self
+                    .value_at(addr)
+                    .ok_or(PathError::FrontierAddressInvalid(addr)),
+                Source::Future => {
+                    bridge_value_at(addr).ok_or(PathError::BridgeAddressInvalid(addr))
+                }
+            })
+            .collect::<Result<Vec<_>, _>>()
     }
 
     // returns
@@ -310,7 +357,7 @@ impl<H, const DEPTH: u8> Frontier<H, DEPTH> {
 impl<H: Hashable + Clone, const DEPTH: u8> crate::Frontier<H> for Frontier<H, DEPTH> {
     fn append(&mut self, value: &H) -> bool {
         if let Some(frontier) = self.frontier.as_mut() {
-            if frontier.position().is_complete(Altitude(DEPTH)) {
+            if frontier.position().is_complete_subtree(Altitude(DEPTH)) {
                 false
             } else {
                 frontier.append(value.clone());
@@ -337,122 +384,26 @@ impl<H: Hashable + Clone, const DEPTH: u8> crate::Frontier<H> for Frontier<H, DE
     }
 }
 
-/// Each AuthFragment stores part of the authentication path for the leaf at a
-/// particular position.  Successive fragments may be concatenated to produce
-/// the authentication path up to one less than the maximum altitude of the
-/// Merkle frontier corresponding to the leaf at the specified position. Then,
-/// the authentication path may be completed by hashing with empty roots.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct AuthFragment<A> {
-    /// The position of the leaf for which this path fragment is being constructed.
-    position: Position,
-    /// We track the total number of altitudes collected across all fragments
-    /// constructed for the specified position separately from the length of
-    /// the values vector because the values will usually be split across multiple
-    /// fragments.
-    altitudes_observed: usize,
-    /// The subtree roots at altitudes required for the position that have not
-    /// been included in preceding fragments.
-    values: Vec<A>,
-}
-
-impl<A> AuthFragment<A> {
-    /// Construct the new empty authentication path fragment for the specified
-    /// position.
-    pub fn new(position: Position) -> Self {
-        Self {
-            position,
-            altitudes_observed: 0,
-            values: vec![],
-        }
-    }
-
-    /// Construct a fragment from its component parts. This cannot
-    /// perform any meaningful validation that the provided values
-    /// are valid.
-    pub fn from_parts(position: Position, altitudes_observed: usize, values: Vec<A>) -> Self {
-        Self {
-            position,
-            altitudes_observed,
-            values,
-        }
-    }
-
-    /// Construct the successor fragment for this fragment to produce a new empty fragment
-    /// for the specified position.
-    #[must_use]
-    pub fn successor(&self) -> Self {
-        Self {
-            position: self.position,
-            altitudes_observed: self.altitudes_observed,
-            values: vec![],
-        }
-    }
-
-    pub fn position(&self) -> Position {
-        self.position
-    }
-
-    pub fn altitudes_observed(&self) -> usize {
-        self.altitudes_observed
-    }
-
-    pub fn values(&self) -> &[A] {
-        &self.values
-    }
-
-    pub fn is_complete(&self) -> bool {
-        self.altitudes_observed >= self.position.altitudes_required().count()
-    }
-
-    pub fn next_required_altitude(&self) -> Option<Altitude> {
-        self.position
-            .all_altitudes_required()
-            .nth(self.altitudes_observed)
-    }
-}
-
-impl<A: Clone> AuthFragment<A> {
-    pub fn fuse(&self, other: &Self) -> Option<Self> {
-        if self.position == other.position
-            && self.altitudes_observed + other.values.len() == other.altitudes_observed
-        {
-            Some(Self {
-                position: self.position,
-                altitudes_observed: other.altitudes_observed,
-                values: self
-                    .values
-                    .iter()
-                    .chain(other.values.iter())
-                    .cloned()
-                    .collect(),
-            })
-        } else {
-            None
-        }
-    }
-}
-
-impl<H: Hashable + Clone + PartialEq> AuthFragment<H> {
-    pub fn augment(&mut self, frontier: &NonEmptyFrontier<H>) {
-        if let Some(altitude) = self.next_required_altitude() {
-            if let Some(digest) = frontier.witness(altitude) {
-                self.values.push(digest);
-                self.altitudes_observed += 1;
-            }
-        }
-    }
-}
-
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct MerkleBridge<H: Ord> {
-    /// The position of the final leaf in the frontier of the
-    /// bridge that this bridge is the successor of, or None
-    /// if this is the first bridge in a tree.
+    /// The position of the final leaf in the frontier of the bridge that this bridge is the
+    /// successor of, or None if this is the first bridge in a tree.
     prior_position: Option<Position>,
-    /// Fragments of authorization path data for prior bridges,
-    /// keyed by bridge index.
-    auth_fragments: BTreeMap<Position, AuthFragment<H>>,
+    /// The set of addresses for which we are waiting to discover the fragments.  The values of this
+    /// set and the keys of the `need` map should always be disjoint. Also, this set should
+    /// never contain an address for which the sibling value has been discovered; at that point,
+    /// the address is replaced in this set with its parent and the address/sibling pair is stored
+    /// in `fragments`.
+    ///
+    /// Another way to consider the contents of this set is that the values that exist in
+    /// `fragments`, combined with the values in previous bridges' `fragments` and an original leaf
+    /// node, already contain all the values needed to compute the value at the given address.
+    /// Therefore, we are tracking that address as we do not yet have enough information to compute
+    /// its sibling without filling the sibling subtree with empty nodes.
+    tracking: BTreeSet<Address>,
+    /// A map from addresses that were being tracked to the values of their fragments that have been
+    /// discovered while scanning this bridge's range by adding leaves to the bridge's frontier.
+    fragments: BTreeMap<Address, H>,
     /// The leading edge of the bridge.
     frontier: NonEmptyFrontier<H>,
 }
@@ -463,7 +414,8 @@ impl<H: Ord> MerkleBridge<H> {
     pub fn new(value: H) -> Self {
         Self {
             prior_position: None,
-            auth_fragments: BTreeMap::new(),
+            tracking: BTreeSet::new(),
+            fragments: BTreeMap::new(),
             frontier: NonEmptyFrontier::new(value),
         }
     }
@@ -471,12 +423,14 @@ impl<H: Ord> MerkleBridge<H> {
     /// Construct a new Merkle bridge from its constituent parts.
     pub fn from_parts(
         prior_position: Option<Position>,
-        auth_fragments: BTreeMap<Position, AuthFragment<H>>,
+        tracking: BTreeSet<Address>,
+        fragments: BTreeMap<Address, H>,
         frontier: NonEmptyFrontier<H>,
     ) -> Self {
         Self {
             prior_position,
-            auth_fragments,
+            tracking,
+            fragments,
             frontier,
         }
     }
@@ -493,10 +447,18 @@ impl<H: Ord> MerkleBridge<H> {
         self.frontier.position()
     }
 
-    /// Returns the fragments of authorization path data for prior bridges,
-    /// keyed by bridge index.
-    pub fn auth_fragments(&self) -> &BTreeMap<Position, AuthFragment<H>> {
-        &self.auth_fragments
+    /// Returns the range of positions observed by this bridge.
+    pub fn position_range(&self) -> Range<Position> {
+        Range {
+            start: self.prior_position.unwrap_or(Position(0)),
+            end: self.position() + 1,
+        }
+    }
+
+    /// Returns the set of internal node addresses that we're searching
+    /// for the fragments for.
+    pub fn tracking(&self) -> &BTreeSet<Address> {
+        &self.tracking
     }
 
     /// Returns the non-empty frontier of this Merkle bridge.
@@ -527,25 +489,23 @@ impl<'a, H: Hashable + Ord + Clone + 'a> MerkleBridge<H> {
     /// recently appended to this bridge's frontier.
     #[must_use]
     pub fn successor(&self, witness_current_leaf: bool) -> Self {
-        let result = Self {
+        let mut result = Self {
             prior_position: Some(self.frontier.position()),
-            auth_fragments: self
-                .auth_fragments
-                .iter()
-                .map(|(k, v)| (*k, v.successor())) //TODO: filter_map and discard what we can
-                .chain(if witness_current_leaf {
-                    Some((
-                        self.frontier.position(),
-                        AuthFragment::new(self.frontier.position()),
-                    ))
-                } else {
-                    None
-                })
-                .collect(),
+            tracking: self.tracking.clone(),
+            fragments: BTreeMap::new(),
             frontier: self.frontier.clone(),
         };
 
+        if witness_current_leaf {
+            result.track_current_leaf();
+        }
+
         result
+    }
+
+    fn track_current_leaf(&mut self) {
+        self.tracking
+            .insert(Address::from(self.frontier.position()).current_incomplete());
     }
 
     /// Advances this bridge's frontier by appending the specified node,
@@ -553,8 +513,27 @@ impl<'a, H: Hashable + Ord + Clone + 'a> MerkleBridge<H> {
     pub fn append(&mut self, value: H) {
         self.frontier.append(value);
 
-        for ext in self.auth_fragments.values_mut() {
-            ext.augment(&self.frontier);
+        let mut found = vec![];
+        for address in self.tracking.iter() {
+            // We know that there will only ever be one address that we're
+            // tracking at a given level, because as soon as we find a
+            // value for the sibling of the address we're tracking, we
+            // remove the tracked address and replace it the next parent
+            // of that address for which we need to find a sibling.
+            if let Some(digest) = self.frontier.witness(address.level()) {
+                self.fragments.insert(address.sibling(), digest);
+                found.push(*address);
+            }
+        }
+
+        for address in found {
+            self.tracking.remove(&address);
+
+            // The address of the next incomplete parent note for which
+            // we need to find a sibling.
+            let parent = address.next_incomplete_parent();
+            assert!(!self.fragments.contains_key(&parent));
+            self.tracking.insert(parent);
         }
     }
 
@@ -583,23 +562,12 @@ impl<'a, H: Hashable + Ord + Clone + 'a> MerkleBridge<H> {
         if next.can_follow(self) {
             let fused = Self {
                 prior_position: self.prior_position,
-                auth_fragments: self
-                    .auth_fragments
+                tracking: next.tracking.clone(),
+                fragments: self
+                    .fragments
                     .iter()
-                    .map(|(k, ext)| {
-                        // we only need to maintain & augment auth fragments that are in the current
-                        // bridge, because we only need to complete the authentication path for the
-                        // previous frontier, not the current one.
-                        next.auth_fragments
-                            .get(k)
-                            .map_or((*k, ext.clone()), |next_ext| {
-                                (
-                                    *k,
-                                    ext.fuse(next_ext)
-                                        .expect("Found auth fragments at incompatible positions."),
-                                )
-                            })
-                    })
+                    .chain(next.fragments.iter())
+                    .map(|(k, v)| (*k, v.clone()))
                     .collect(),
                 frontier: next.frontier.clone(),
             };
@@ -618,69 +586,42 @@ impl<'a, H: Hashable + Ord + Clone + 'a> MerkleBridge<H> {
         iter.fold(first.cloned(), |acc, b| acc?.fuse(b))
     }
 
-    /// If this bridge contains sufficient auth fragment information, construct an
-    /// authentication path for the specified position.
+    /// If this bridge contains sufficient auth fragment information, construct an authentication
+    /// path for the specified position by interleaving with values from the prior frontier. This
+    /// method will panic if the position of the prior frontier does not match this bridge's prior
+    /// position.
     fn authentication_path(
         &self,
         depth: u8,
         prior_frontier: &NonEmptyFrontier<H>,
-    ) -> Option<Vec<H>> {
-        // construct a complete trailing edge that includes the data from
-        // the following frontier not yet included in the trailing edge.
-        let auth_fragment = self.auth_fragments.get(&prior_frontier.position());
-        if auth_fragment.is_none() && self.frontier.position() > prior_frontier.position() {
-            None
-        } else {
-            let rest_frontier = &self.frontier;
+    ) -> Result<Vec<H>, PathError> {
+        assert!(Some(prior_frontier.position()) == self.prior_position);
 
-            let mut auth_values = auth_fragment.iter().flat_map(|auth_fragment| {
-                let last_altitude = auth_fragment.next_required_altitude();
-                let last_digest =
-                    last_altitude.and_then(|lvl| rest_frontier.witness_incomplete(lvl));
-
-                // TODO: can we eliminate this .cloned()?
-                auth_fragment.values.iter().cloned().chain(last_digest)
-            });
-
-            let mut result = vec![];
-            match &prior_frontier.leaf {
-                Leaf::Left(_) => {
-                    result.push(auth_values.next().unwrap_or_else(H::empty_leaf));
+        prior_frontier.authentication_path(depth, |addr| {
+            let r = addr.position_range();
+            if self.frontier.position() < r.start {
+                Some(H::empty_root(addr.level))
+            } else if r.contains(&self.frontier.position()) {
+                if self.frontier.position().is_complete_subtree(addr.level) {
+                    self.frontier.witness(addr.level)
+                } else {
+                    self.frontier.witness_incomplete(addr.level)
                 }
-                Leaf::Right(a, _) => {
-                    result.push(a.clone());
-                }
+            } else {
+                // the frontier's position is after the end of the requested
+                // range, so the requested value should exist in a stored
+                // fragment
+                self.fragments.get(&addr).cloned()
             }
-
-            for (ommer, ommer_lvl) in prior_frontier
-                .ommers
-                .iter()
-                .zip(prior_frontier.position.ommer_altitudes())
-            {
-                for synth_lvl in (result.len() as u8)..(ommer_lvl.into()) {
-                    result.push(
-                        auth_values
-                            .next()
-                            .unwrap_or_else(|| H::empty_root(Altitude(synth_lvl))),
-                    )
-                }
-                result.push(ommer.clone());
-            }
-
-            for synth_lvl in (result.len() as u8)..depth {
-                result.push(
-                    auth_values
-                        .next()
-                        .unwrap_or_else(|| H::empty_root(Altitude(synth_lvl))),
-                );
-            }
-
-            Some(result)
-        }
+        })
     }
 
-    fn prune_auth_fragments(&mut self, to_remove: &BTreeSet<Position>) {
-        self.auth_fragments.retain(|k, _| !to_remove.contains(k));
+    fn retain(&mut self, witness_node_addrs: &BTreeSet<Address>) {
+        // Prune away any fragments & tracking addresses we don't need
+        self.tracking
+            .retain(|addr| witness_node_addrs.contains(&addr.sibling()));
+        self.fragments
+            .retain(|addr, _| witness_node_addrs.contains(addr));
     }
 }
 
@@ -940,7 +881,12 @@ impl<H: Hashable + Ord + Clone, const DEPTH: u8> BridgeTree<H, DEPTH> {
     pub fn from_frontier(max_checkpoints: usize, frontier: NonEmptyFrontier<H>) -> Self {
         Self {
             prior_bridges: vec![],
-            current_bridge: Some(MerkleBridge::from_parts(None, BTreeMap::new(), frontier)),
+            current_bridge: Some(MerkleBridge::from_parts(
+                None,
+                BTreeSet::new(),
+                BTreeMap::new(),
+                frontier,
+            )),
             saved: BTreeMap::new(),
             checkpoints: vec![],
             max_checkpoints,
@@ -979,12 +925,106 @@ impl<H: Hashable + Ord + Clone, const DEPTH: u8> BridgeTree<H, DEPTH> {
             self.max_checkpoints,
         )
     }
+
+    fn authentication_path_inner(
+        &self,
+        position: Position,
+        as_of_root: &H,
+    ) -> Result<Vec<H>, PathError> {
+        #[derive(Debug)]
+        enum AuthBase<'a> {
+            Current,
+            Checkpoint(usize, &'a Checkpoint),
+            NotFound,
+        }
+
+        let max_alt = Altitude(DEPTH);
+
+        // Find the earliest checkpoint having a matching root, or the current
+        // root if it matches and there is no earlier matching checkpoint.
+        let auth_base = self
+            .checkpoints
+            .iter()
+            .enumerate()
+            .rev()
+            .take_while(|(_, c)| c.position(&self.prior_bridges) >= Some(position))
+            .filter(|(_, c)| &c.root(&self.prior_bridges, max_alt) == as_of_root)
+            .last()
+            .map(|(i, c)| AuthBase::Checkpoint(i, c))
+            .unwrap_or_else(|| {
+                if self.root(0).as_ref() == Some(as_of_root) {
+                    AuthBase::Current
+                } else {
+                    AuthBase::NotFound
+                }
+            });
+
+        let saved_idx = self
+            .saved
+            .get(&position)
+            .or_else(|| {
+                if let AuthBase::Checkpoint(i, _) = auth_base {
+                    // The saved position might have been forgotten since the checkpoint,
+                    // so look for it in each of the subsequent checkpoints' forgotten
+                    // items.
+                    self.checkpoints[i..].iter().find_map(|c| {
+                        // restore the forgotten position, if that position was not also witnessed
+                        // in the same checkpoint
+                        c.forgotten
+                            .get(&position)
+                            .filter(|_| !c.witnessed.contains(&position))
+                    })
+                } else {
+                    None
+                }
+            })
+            .ok_or(PathError::PositionNotWitnessed(position))?;
+
+        let prior_frontier = &self.prior_bridges[*saved_idx].frontier;
+
+        // Fuse the following bridges to obtain a bridge that has all
+        // of the data to the right of the selected value in the tree,
+        // up to the specified checkpoint depth.
+        let fuse_from = saved_idx + 1;
+        let successor = match auth_base {
+            AuthBase::Current => MerkleBridge::fuse_all(
+                self.prior_bridges[fuse_from..]
+                    .iter()
+                    .chain(&self.current_bridge),
+            ),
+            AuthBase::Checkpoint(_, checkpoint) if fuse_from < checkpoint.bridges_len => {
+                MerkleBridge::fuse_all(self.prior_bridges[fuse_from..checkpoint.bridges_len].iter())
+            }
+            AuthBase::Checkpoint(_, checkpoint) if fuse_from == checkpoint.bridges_len => {
+                // The successor bridge should just be the empty successor to the
+                // checkpointed bridge.
+                if checkpoint.bridges_len > 0 {
+                    Some(self.prior_bridges[checkpoint.bridges_len - 1].successor(false))
+                } else {
+                    None
+                }
+            }
+            AuthBase::Checkpoint(_, _) => {
+                // if the saved index is after the checkpoint, we can't generate
+                // an auth path
+                None
+            }
+            AuthBase::NotFound => None,
+        }
+        .ok_or(PathError::BridgeFusionError)?;
+
+        successor.authentication_path(DEPTH, prior_frontier)
+    }
 }
 
-impl<H: Hashable + Ord + Clone + Debug, const DEPTH: u8> Tree<H> for BridgeTree<H, DEPTH> {
+impl<H: Hashable + Ord + Clone, const DEPTH: u8> Tree<H> for BridgeTree<H, DEPTH> {
     fn append(&mut self, value: &H) -> bool {
         if let Some(bridge) = self.current_bridge.as_mut() {
-            if bridge.frontier.position().is_complete(Altitude(DEPTH)) {
+            if bridge
+                .frontier
+                .position()
+                .is_complete_subtree(Altitude(DEPTH))
+            {
                 false
             } else {
                 bridge.append(value.clone());
@@ -1027,6 +1067,7 @@ impl<H: Hashable + Ord + Clone + Debug, const DEPTH: u8> Tree<H> for BridgeTree<
     fn witness(&mut self) -> Option<Position> {
         match self.current_bridge.take() {
             Some(mut cur_b) => {
+                cur_b.track_current_leaf();
                 let pos = cur_b.position();
                 // If the latest bridge is a newly created checkpoint, the last prior
                 // bridge will have the same position and all we need to do is mark
@@ -1037,11 +1078,7 @@ impl<H: Hashable + Ord + Clone + Debug, const DEPTH: u8> Tree<H> for BridgeTree<
                     .map_or(false, |prior_b| prior_b.position() == cur_b.position())
                 {
                     // the current bridge has not been advanced, so we just need to make
-                    // sure that we have an auth fragment tracking the witnessed leaf
-                    cur_b
-                        .auth_fragments
-                        .entry(pos)
-                        .or_insert_with(|| AuthFragment::new(pos));
+                    // sure that we have are tracking the witnessed leaf
                     self.current_bridge = Some(cur_b);
                 } else {
                     let successor = cur_b.successor(true);
@@ -1078,11 +1115,6 @@ impl<H: Hashable + Ord + Clone + Debug, const DEPTH: u8> Tree<H> for BridgeTree<
 
     fn remove_witness(&mut self, position: Position) -> bool {
         if let Some(idx) = self.saved.remove(&position) {
-            // Stop tracking auth fragments for the removed position
-            if let Some(cur_b) = self.current_bridge.as_mut() {
-                cur_b.auth_fragments.remove(&position);
-            }
-
             // If the position is one that has *not* just been witnessed since the last checkpoint,
             // then add it to the set of those forgotten during the current checkpoint span so that
             // it can be restored on rollback.
@@ -1151,88 +1183,7 @@ impl<H: Hashable + Ord + Clone + Debug, const DEPTH: u8> Tree<H> for BridgeTree<
     }
 
     fn authentication_path(&self, position: Position, as_of_root: &H) -> Option<Vec<H>> {
-        #[derive(Debug)]
-        enum AuthBase<'a> {
-            Current,
-            Checkpoint(usize, &'a Checkpoint),
-            NotFound,
-        }
-
-        let max_alt = Altitude(DEPTH);
-
-        // Find the earliest checkpoint having a matching root, or the current
-        // root if it matches and there is no earlier matching checkpoint.
-        let auth_base = self
-            .checkpoints
-            .iter()
-            .enumerate()
-            .rev()
-            .take_while(|(_, c)| c.position(&self.prior_bridges) >= Some(position))
-            .filter(|(_, c)| &c.root(&self.prior_bridges, max_alt) == as_of_root)
-            .last()
-            .map(|(i, c)| AuthBase::Checkpoint(i, c))
-            .unwrap_or_else(|| {
-                if self.root(0).as_ref() == Some(as_of_root) {
-                    AuthBase::Current
-                } else {
-                    AuthBase::NotFound
-                }
-            });
-
-        let saved_idx = self.saved.get(&position).or_else(|| {
-            if let AuthBase::Checkpoint(i, _) = auth_base {
-                // The saved position might have been forgotten since the checkpoint,
-                // so look for it in each of the subsequent checkpoints' forgotten
-                // items.
-                self.checkpoints[i..].iter().find_map(|c| {
-                    // restore the forgotten position, if that position was not also witnessed
-                    // in the same checkpoint
-                    c.forgotten
-                        .get(&position)
-                        .filter(|_| !c.witnessed.contains(&position))
-                })
-            } else {
-                None
-            }
-        });
-
-        saved_idx.and_then(|idx| {
-            let prior_frontier = &self.prior_bridges[*idx].frontier;
-
-            // Fuse the following bridges to obtain a bridge that has all
-            // of the data to the right of the selected value in the tree,
-            // up to the specified checkpoint depth.
-            let fuse_from = idx + 1;
-            let fused = match auth_base {
-                AuthBase::Current => MerkleBridge::fuse_all(
-                    self.prior_bridges[fuse_from..]
-                        .iter()
-                        .chain(&self.current_bridge),
-                ),
-                AuthBase::Checkpoint(_, checkpoint) if fuse_from < checkpoint.bridges_len => {
-                    MerkleBridge::fuse_all(
-                        self.prior_bridges[fuse_from..checkpoint.bridges_len].iter(),
-                    )
-                }
-                AuthBase::Checkpoint(_, checkpoint) if fuse_from == checkpoint.bridges_len => {
-                    // The successor bridge should just be the empty successor to the
-                    // checkpointed bridge.
-                    if checkpoint.bridges_len > 0 {
-                        Some(self.prior_bridges[checkpoint.bridges_len - 1].successor(false))
-                    } else {
-                        None
-                    }
-                }
-                AuthBase::Checkpoint(_, _) => {
-                    // if the saved index is after the checkpoint, we can't generate
-                    // an auth path
-                    None
-                }
-                AuthBase::NotFound => None,
-            };
-
-            fused.and_then(|successor| successor.authentication_path(DEPTH, prior_frontier))
-        })
+        self.authentication_path_inner(position, as_of_root).ok()
     }
 
     fn garbage_collect(&mut self) {
@@ -1253,7 +1204,7 @@ impl<H: Hashable + Ord + Clone + Debug, const DEPTH: u8> Tree<H> for BridgeTree<
 
             let mut cur: Option<MerkleBridge<H>> = None;
             let mut merged = 0;
-            let mut prune_fragment_positions: BTreeSet<Position> = BTreeSet::new();
+            let mut witness_node_addrs: BTreeSet<Address> = BTreeSet::new();
             for (i, next_bridge) in std::mem::take(&mut self.prior_bridges)
                 .into_iter()
                 .enumerate()
@@ -1267,17 +1218,26 @@ impl<H: Hashable + Ord + Clone + Debug, const DEPTH: u8> Tree<H> for BridgeTree<
                             *idx -= merged;
                         }
 
+                        // Add the elements of the auth path to the set of addresses we should
+                        // continue to track and retain information for
+                        for (addr, source) in Address::from(&cur_bridge.frontier.position())
+                            .auth_path(Altitude(DEPTH))
+                        {
+                            if source == Source::Future {
+                                witness_node_addrs.insert(addr);
+                            }
+                        }
+
                         self.prior_bridges.push(cur_bridge);
                         next_bridge
                     } else {
                         // We can fuse these bridges together because we don't need to
                         // remember next_bridge.
                         merged += 1;
-                        prune_fragment_positions.insert(cur_bridge.frontier.position());
                         cur_bridge.fuse(&next_bridge).unwrap()
                     };
 
-                    new_cur.prune_auth_fragments(&prune_fragment_positions);
+                    new_cur.retain(&witness_node_addrs);
                     cur = Some(new_cur);
                 } else {
                     // this case will only occur for the first bridge
@@ -1298,7 +1258,10 @@ impl<H: Hashable + Ord + Clone + Debug, const DEPTH: u8> Tree<H> for BridgeTree<
             }
         }
         if let Err(e) = self.check_consistency() {
-            panic!("Consistency check failed with {:?} for tree {:?}", e, self);
+            panic!(
+                "Consistency check failed after garbage collection with {:?}",
+                e
+            );
         }
     }
 }
@@ -1310,6 +1273,26 @@ mod tests {
     use super::*;
     use crate::tests::{apply_operation, arb_operation};
     use crate::Tree;
+
+    #[test]
+    fn frontier_auth_path() {
+        let mut frontier = NonEmptyFrontier::<String>::new("a".to_string());
+        for c in 'b'..'h' {
+            frontier.append(c.to_string());
+        }
+        let bridge_value_at = |addr: Address| match <u8>::from(addr.level()) {
+            0 => Some("h".to_string()),
+            3 => Some("xxxxxxxx".to_string()),
+            _ => None,
+        };
+
+        assert_eq!(
+            Ok(["h", "ef", "abcd", "xxxxxxxx"]
+                .map(|v| v.to_string())
+                .to_vec()),
+            frontier.authentication_path(4, bridge_value_at)
+        );
+    }
 
     #[test]
     fn tree_depth() {
@@ -1470,10 +1453,12 @@ mod tests {
         assert_eq!(t.prior_bridges().len(), 20 + 14 - 2);
         let auth_paths = has_auth_path
             .iter()
-            .map(|pos| {
-                t.authentication_path(*pos, &t.root(0).unwrap())
-                    .expect("Must be able to get auth path")
-            })
+            .map(
+                |pos| match t.authentication_path_inner(*pos, &t.root(0).unwrap()) {
+                    Ok(path) => path,
+                    Err(e) => panic!("Failed to get auth path: {:?}", e),
+                },
+            )
             .collect::<Vec<_>>();
         t.garbage_collect();
         // 20 = 32 - 10 (removed checkpoints) + 1 (not removed due to witness) - 3 (removed witnesses)
