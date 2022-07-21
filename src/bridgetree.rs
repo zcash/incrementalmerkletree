@@ -1105,8 +1105,10 @@ mod tests {
     use proptest::prelude::*;
 
     use super::*;
-    use crate::tests::{apply_operation, arb_operation};
-    use crate::{Frontier, Tree};
+    use crate::{
+        testing::{apply_operation, arb_operation},
+        Frontier, Tree,
+    };
 
     #[test]
     fn nonempty_frontier_root() {

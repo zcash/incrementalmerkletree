@@ -251,11 +251,12 @@ pub(crate) fn lazy_root<H: Hashable + Clone>(mut leaves: Vec<H>) -> H {
 
 #[cfg(test)]
 mod tests {
-    use crate::tests::{compute_root_from_witness, SipHashable};
-    use crate::{Hashable, Level, Position, Tree};
     use std::convert::TryFrom;
 
     use super::CompleteTree;
+    use crate::{
+        testing::SipHashable, tests::compute_root_from_witness, Hashable, Level, Position, Tree,
+    };
 
     #[test]
     fn correct_empty_root() {

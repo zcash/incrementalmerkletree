@@ -412,17 +412,180 @@ pub trait Tree<H> {
     fn garbage_collect(&mut self);
 }
 
+#[cfg(any(bench, test, feature = "test-dependencies"))]
+pub mod testing {
+    #![allow(deprecated)]
+
+    use proptest::prelude::*;
+    use std::hash::{Hasher, SipHasher};
+
+    use super::{Hashable, Level, Position, Tree};
+
+    //
+    // Types and utilities for shared example tests.
+    //
+
+    #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
+    pub(crate) struct SipHashable(pub(crate) u64);
+
+    impl Hashable for SipHashable {
+        fn empty_leaf() -> Self {
+            SipHashable(0)
+        }
+
+        fn combine(_level: Level, a: &Self, b: &Self) -> Self {
+            let mut hasher = SipHasher::new();
+            hasher.write_u64(a.0);
+            hasher.write_u64(b.0);
+            SipHashable(hasher.finish())
+        }
+    }
+
+    impl Hashable for String {
+        fn empty_leaf() -> Self {
+            "_".to_string()
+        }
+
+        fn combine(_: Level, a: &Self, b: &Self) -> Self {
+            a.to_string() + b
+        }
+    }
+
+    //
+    // Operations
+    //
+
+    #[derive(Clone, Debug)]
+    pub enum Operation<A> {
+        Append(A),
+        CurrentPosition,
+        CurrentLeaf,
+        Mark,
+        MarkedLeaf(Position),
+        MarkedPositions,
+        Unmark(Position),
+        Checkpoint,
+        Rewind,
+        Authpath(Position, usize),
+        GarbageCollect,
+    }
+
+    use Operation::*;
+
+    impl<H: Hashable> Operation<H> {
+        pub fn apply<T: Tree<H>>(&self, tree: &mut T) -> Option<(Position, Vec<H>)> {
+            match self {
+                Append(a) => {
+                    assert!(tree.append(a), "append failed");
+                    None
+                }
+                CurrentPosition => None,
+                CurrentLeaf => None,
+                Mark => {
+                    assert!(tree.mark().is_some(), "mark failed");
+                    None
+                }
+                MarkedLeaf(_) => None,
+                MarkedPositions => None,
+                Unmark(p) => {
+                    assert!(tree.remove_mark(*p), "remove mark failed");
+                    None
+                }
+                Checkpoint => {
+                    tree.checkpoint();
+                    None
+                }
+                Rewind => {
+                    assert!(tree.rewind(), "rewind failed");
+                    None
+                }
+                Authpath(p, d) => tree
+                    .root(*d)
+                    .and_then(|root| tree.witness(*p, &root))
+                    .map(|xs| (*p, xs)),
+                GarbageCollect => None,
+            }
+        }
+
+        pub fn apply_all<T: Tree<H>>(
+            ops: &[Operation<H>],
+            tree: &mut T,
+        ) -> Option<(Position, Vec<H>)> {
+            let mut result = None;
+            for op in ops {
+                result = op.apply(tree);
+            }
+            result
+        }
+    }
+
+    pub fn arb_operation<G: Strategy + Clone>(
+        item_gen: G,
+        pos_gen: impl Strategy<Value = usize> + Clone,
+    ) -> impl Strategy<Value = Operation<G::Value>>
+    where
+        G::Value: Clone + 'static,
+    {
+        prop_oneof![
+            item_gen.prop_map(Operation::Append),
+            Just(Operation::Mark),
+            prop_oneof![
+                Just(Operation::CurrentLeaf),
+                Just(Operation::CurrentPosition),
+                Just(Operation::MarkedPositions),
+            ],
+            Just(Operation::GarbageCollect),
+            pos_gen
+                .clone()
+                .prop_map(|i| Operation::MarkedLeaf(Position(i))),
+            pos_gen.clone().prop_map(|i| Operation::Unmark(Position(i))),
+            Just(Operation::Checkpoint),
+            Just(Operation::Rewind),
+            pos_gen.prop_flat_map(
+                |i| (0usize..10).prop_map(move |depth| Operation::Authpath(Position(i), depth))
+            ),
+        ]
+    }
+
+    pub fn apply_operation<H, T: Tree<H>>(tree: &mut T, op: Operation<H>) {
+        match op {
+            Append(value) => {
+                tree.append(&value);
+            }
+            Mark => {
+                tree.mark();
+            }
+            Unmark(position) => {
+                tree.remove_mark(position);
+            }
+            Checkpoint => {
+                tree.checkpoint();
+            }
+            Rewind => {
+                tree.rewind();
+            }
+            CurrentPosition => {}
+            CurrentLeaf => {}
+            Authpath(_, _) => {}
+            MarkedLeaf(_) => {}
+            MarkedPositions => {}
+            GarbageCollect => {}
+        }
+    }
+}
+
 #[cfg(test)]
 pub(crate) mod tests {
-    #![allow(deprecated)]
+    use proptest::prelude::*;
     use std::collections::BTreeSet;
     use std::fmt::Debug;
-    use std::hash::Hasher;
-    use std::hash::SipHasher;
 
-    use super::bridgetree::BridgeTree;
-    use super::sample::{lazy_root, CompleteTree};
-    use super::{Address, Hashable, Level, Position, Source, Tree};
+    use super::{
+        bridgetree::BridgeTree,
+        sample::{lazy_root, CompleteTree},
+        testing::{arb_operation, Operation, Operation::*, SipHashable},
+        Address, Hashable, Level, Position, Source, Tree,
+    };
 
     #[test]
     fn position_is_complete_subtree() {
@@ -517,36 +680,6 @@ pub(crate) mod tests {
             ],
             Position(6).witness_addrs(Level(4)).collect::<Vec<_>>()
         );
-    }
-
-    //
-    // Types and utilities for shared example tests.
-    //
-
-    #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
-    pub(crate) struct SipHashable(pub(crate) u64);
-
-    impl Hashable for SipHashable {
-        fn empty_leaf() -> Self {
-            SipHashable(0)
-        }
-
-        fn combine(_level: Level, a: &Self, b: &Self) -> Self {
-            let mut hasher = SipHasher::new();
-            hasher.write_u64(a.0);
-            hasher.write_u64(b.0);
-            SipHashable(hasher.finish())
-        }
-    }
-
-    impl Hashable for String {
-        fn empty_leaf() -> Self {
-            "_".to_string()
-        }
-
-        fn combine(_: Level, a: &Self, b: &Self) -> Self {
-            a.to_string() + b
-        }
     }
 
     //
@@ -835,6 +968,18 @@ pub(crate) mod tests {
         assert_eq!(t.root(0).unwrap(), "ab______________");
     }
 
+    fn append(x: &str) -> Operation<String> {
+        Operation::Append(x.to_string())
+    }
+
+    fn unmark(pos: usize) -> Operation<String> {
+        Operation::Unmark(Position(pos))
+    }
+
+    fn witness(pos: usize, depth: usize) -> Operation<String> {
+        Operation::Authpath(Position(pos), depth)
+    }
+
     pub(crate) fn check_rewind_remove_mark<T: Tree<String>, F: Fn(usize) -> T>(new_tree: F) {
         let mut tree = new_tree(100);
         tree.append(&"e".to_string());
@@ -1024,86 +1169,6 @@ pub(crate) mod tests {
         }
     }
 
-    //
-    // Operations
-    //
-
-    #[derive(Clone, Debug)]
-    pub enum Operation<A> {
-        Append(A),
-        CurrentPosition,
-        CurrentLeaf,
-        Mark,
-        MarkedLeaf(Position),
-        MarkedPositions,
-        Unmark(Position),
-        Checkpoint,
-        Rewind,
-        Authpath(Position, usize),
-        GarbageCollect,
-    }
-
-    use Operation::*;
-
-    fn append(x: &str) -> Operation<String> {
-        Operation::Append(x.to_string())
-    }
-
-    fn unmark(pos: usize) -> Operation<String> {
-        Operation::Unmark(Position(pos))
-    }
-
-    fn authpath(pos: usize, depth: usize) -> Operation<String> {
-        Operation::Authpath(Position(pos), depth)
-    }
-
-    impl<H: Hashable> Operation<H> {
-        pub fn apply<T: Tree<H>>(&self, tree: &mut T) -> Option<(Position, Vec<H>)> {
-            match self {
-                Append(a) => {
-                    assert!(tree.append(a), "append failed");
-                    None
-                }
-                CurrentPosition => None,
-                CurrentLeaf => None,
-                Mark => {
-                    assert!(tree.mark().is_some(), "mark failed");
-                    None
-                }
-                MarkedLeaf(_) => None,
-                MarkedPositions => None,
-                Unmark(p) => {
-                    assert!(tree.remove_mark(*p), "remove mark failed");
-                    None
-                }
-                Checkpoint => {
-                    tree.checkpoint();
-                    None
-                }
-                Rewind => {
-                    assert!(tree.rewind(), "rewind failed");
-                    None
-                }
-                Authpath(p, d) => tree
-                    .root(*d)
-                    .and_then(|root| tree.witness(*p, &root))
-                    .map(|xs| (*p, xs)),
-                GarbageCollect => None,
-            }
-        }
-
-        pub fn apply_all<T: Tree<H>>(
-            ops: &[Operation<H>],
-            tree: &mut T,
-        ) -> Option<(Position, Vec<H>)> {
-            let mut result = None;
-            for op in ops {
-                result = op.apply(tree);
-            }
-            result
-        }
-    }
-
     pub(crate) fn compute_root_from_witness<H: Hashable>(
         value: H,
         position: Position,
@@ -1181,16 +1246,16 @@ pub(crate) mod tests {
     fn test_witness_consistency() {
         let samples = vec![
             // Reduced examples
-            vec![append("a"), append("b"), Checkpoint, Mark, authpath(0, 1)],
-            vec![append("c"), append("d"), Mark, Checkpoint, authpath(1, 1)],
-            vec![append("e"), Checkpoint, Mark, append("f"), authpath(0, 1)],
+            vec![append("a"), append("b"), Checkpoint, Mark, witness(0, 1)],
+            vec![append("c"), append("d"), Mark, Checkpoint, witness(1, 1)],
+            vec![append("e"), Checkpoint, Mark, append("f"), witness(0, 1)],
             vec![
                 append("g"),
                 Mark,
                 Checkpoint,
                 unmark(0),
                 append("h"),
-                authpath(0, 0),
+                witness(0, 0),
             ],
             vec![
                 append("i"),
@@ -1198,7 +1263,7 @@ pub(crate) mod tests {
                 Mark,
                 unmark(0),
                 append("j"),
-                authpath(0, 0),
+                witness(0, 0),
             ],
             vec![
                 append("i"),
@@ -1206,7 +1271,7 @@ pub(crate) mod tests {
                 append("j"),
                 Checkpoint,
                 append("k"),
-                authpath(0, 1),
+                witness(0, 1),
             ],
             vec![
                 append("l"),
@@ -1215,9 +1280,9 @@ pub(crate) mod tests {
                 Checkpoint,
                 append("m"),
                 Checkpoint,
-                authpath(0, 2),
+                witness(0, 2),
             ],
-            vec![Checkpoint, append("n"), Mark, authpath(0, 1)],
+            vec![Checkpoint, append("n"), Mark, witness(0, 1)],
             vec![
                 append("a"),
                 Mark,
@@ -1225,7 +1290,7 @@ pub(crate) mod tests {
                 unmark(0),
                 Checkpoint,
                 append("b"),
-                authpath(0, 1),
+                witness(0, 1),
             ],
             vec![
                 append("a"),
@@ -1233,7 +1298,7 @@ pub(crate) mod tests {
                 append("b"),
                 unmark(0),
                 Checkpoint,
-                authpath(0, 0),
+                witness(0, 0),
             ],
             vec![
                 append("a"),
@@ -1243,7 +1308,7 @@ pub(crate) mod tests {
                 Checkpoint,
                 Rewind,
                 append("b"),
-                authpath(0, 0),
+                witness(0, 0),
             ],
             vec![
                 append("a"),
@@ -1253,7 +1318,7 @@ pub(crate) mod tests {
                 Rewind,
                 append("a"),
                 unmark(0),
-                authpath(0, 1),
+                witness(0, 1),
             ],
             // Unreduced examples
             vec![
@@ -1263,7 +1328,7 @@ pub(crate) mod tests {
                 append("q"),
                 Checkpoint,
                 unmark(1),
-                authpath(1, 1),
+                witness(1, 1),
             ],
             vec![
                 append("r"),
@@ -1273,7 +1338,7 @@ pub(crate) mod tests {
                 Checkpoint,
                 unmark(2),
                 Checkpoint,
-                authpath(2, 2),
+                witness(2, 2),
             ],
             vec![
                 append("u"),
@@ -1285,7 +1350,7 @@ pub(crate) mod tests {
                 append("x"),
                 Checkpoint,
                 Checkpoint,
-                authpath(0, 3),
+                witness(0, 3),
             ],
         ];
 
@@ -1335,62 +1400,6 @@ pub(crate) mod tests {
                 i,
                 result
             );
-        }
-    }
-
-    use proptest::prelude::*;
-
-    pub fn arb_operation<G: Strategy + Clone>(
-        item_gen: G,
-        pos_gen: impl Strategy<Value = usize> + Clone,
-    ) -> impl Strategy<Value = Operation<G::Value>>
-    where
-        G::Value: Clone + 'static,
-    {
-        prop_oneof![
-            item_gen.prop_map(Operation::Append),
-            Just(Operation::Mark),
-            prop_oneof![
-                Just(Operation::CurrentLeaf),
-                Just(Operation::CurrentPosition),
-                Just(Operation::MarkedPositions),
-            ],
-            Just(Operation::GarbageCollect),
-            pos_gen
-                .clone()
-                .prop_map(|i| Operation::MarkedLeaf(Position(i))),
-            pos_gen.clone().prop_map(|i| Operation::Unmark(Position(i))),
-            Just(Operation::Checkpoint),
-            Just(Operation::Rewind),
-            pos_gen.prop_flat_map(
-                |i| (0usize..10).prop_map(move |depth| Operation::Authpath(Position(i), depth))
-            ),
-        ]
-    }
-
-    pub fn apply_operation<H, T: Tree<H>>(tree: &mut T, op: Operation<H>) {
-        match op {
-            Append(value) => {
-                tree.append(&value);
-            }
-            Mark => {
-                tree.mark();
-            }
-            Unmark(position) => {
-                tree.remove_mark(position);
-            }
-            Checkpoint => {
-                tree.checkpoint();
-            }
-            Rewind => {
-                tree.rewind();
-            }
-            CurrentPosition => {}
-            CurrentLeaf => {}
-            Authpath(_, _) => {}
-            MarkedLeaf(_) => {}
-            MarkedPositions => {}
-            GarbageCollect => {}
         }
     }
 
