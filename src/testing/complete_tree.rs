@@ -1,10 +1,11 @@
 //! Sample implementation of the Tree interface.
+use std::collections::BTreeSet;
+
+use super::{Frontier, Tree};
 use crate::{
     hashing::Hashable,
     position::{Level, Position},
-    Frontier, Tree,
 };
-use std::collections::BTreeSet;
 
 #[derive(Clone, Debug)]
 pub struct TreeState<H: Hashable> {
@@ -223,10 +224,6 @@ impl<H: Hashable + PartialEq + Clone + std::fmt::Debug> Tree<H> for CompleteTree
             false
         }
     }
-
-    fn garbage_collect(&mut self) {
-        // Garbage collection of the sample tree is a no-op.
-    }
 }
 
 pub(crate) fn lazy_root<H: Hashable + Clone>(mut leaves: Vec<H>) -> H {
@@ -263,9 +260,8 @@ mod tests {
         position::{Level, Position},
         testing::{
             tests::{self, compute_root_from_witness},
-            SipHashable,
+            SipHashable, Tree,
         },
-        Tree,
     };
 
     #[test]

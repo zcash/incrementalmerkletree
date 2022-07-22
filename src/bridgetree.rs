@@ -13,7 +13,6 @@ use std::ops::Range;
 use super::{
     hashing::Hashable,
     position::{Address, Level, Position, Source},
-    Tree,
 };
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -227,7 +226,7 @@ impl<H, const DEPTH: u8> Frontier<H, DEPTH> {
     }
 }
 
-impl<H: Hashable + Clone, const DEPTH: u8> crate::Frontier<H> for Frontier<H, DEPTH> {
+impl<H: Hashable + Clone, const DEPTH: u8> Frontier<H, DEPTH> {
     fn append(&mut self, value: &H) -> bool {
         if let Some(frontier) = self.frontier.as_mut() {
             if frontier.position().is_complete_subtree(DEPTH.into()) {
@@ -862,10 +861,8 @@ impl<H: Hashable + Ord + Clone, const DEPTH: u8> BridgeTree<H, DEPTH> {
 
         successor.witness(DEPTH, prior_frontier)
     }
-}
 
-impl<H: Hashable + Ord + Clone, const DEPTH: u8> Tree<H> for BridgeTree<H, DEPTH> {
-    fn append(&mut self, value: &H) -> bool {
+    pub fn append(&mut self, value: &H) -> bool {
         if let Some(bridge) = self.current_bridge.as_mut() {
             if bridge
                 .frontier
@@ -883,7 +880,7 @@ impl<H: Hashable + Ord + Clone, const DEPTH: u8> Tree<H> for BridgeTree<H, DEPTH
         }
     }
 
-    fn root(&self, checkpoint_depth: usize) -> Option<H> {
+    pub fn root(&self, checkpoint_depth: usize) -> Option<H> {
         let root_level = Level::from(DEPTH);
         if checkpoint_depth == 0 {
             Some(
@@ -903,15 +900,15 @@ impl<H: Hashable + Ord + Clone, const DEPTH: u8> Tree<H> for BridgeTree<H, DEPTH
         }
     }
 
-    fn current_position(&self) -> Option<Position> {
+    pub fn current_position(&self) -> Option<Position> {
         self.current_bridge.as_ref().map(|b| b.position())
     }
 
-    fn current_leaf(&self) -> Option<&H> {
+    pub fn current_leaf(&self) -> Option<&H> {
         self.current_bridge.as_ref().map(|b| b.current_leaf())
     }
 
-    fn mark(&mut self) -> Option<Position> {
+    pub fn mark(&mut self) -> Option<Position> {
         match self.current_bridge.take() {
             Some(mut cur_b) => {
                 cur_b.track_current_leaf();
@@ -950,17 +947,17 @@ impl<H: Hashable + Ord + Clone, const DEPTH: u8> Tree<H> for BridgeTree<H, DEPTH
         }
     }
 
-    fn marked_positions(&self) -> BTreeSet<Position> {
+    pub fn marked_positions(&self) -> BTreeSet<Position> {
         self.saved.keys().cloned().collect()
     }
 
-    fn get_marked_leaf(&self, position: Position) -> Option<&H> {
+    pub fn get_marked_leaf(&self, position: Position) -> Option<&H> {
         self.saved
             .get(&position)
             .and_then(|idx| self.prior_bridges.get(*idx).map(|b| b.current_leaf()))
     }
 
-    fn remove_mark(&mut self, position: Position) -> bool {
+    pub fn remove_mark(&mut self, position: Position) -> bool {
         if let Some(idx) = self.saved.remove(&position) {
             // If the position is one that has *not* just been marked since the last checkpoint,
             // then add it to the set of those forgotten during the current checkpoint span so that
@@ -976,7 +973,7 @@ impl<H: Hashable + Ord + Clone, const DEPTH: u8> Tree<H> for BridgeTree<H, DEPTH
         }
     }
 
-    fn checkpoint(&mut self) {
+    pub fn checkpoint(&mut self) {
         match self.current_bridge.take() {
             Some(cur_b) => {
                 let is_marked = self.get_marked_leaf(cur_b.position()).is_some();
@@ -1006,7 +1003,7 @@ impl<H: Hashable + Ord + Clone, const DEPTH: u8> Tree<H> for BridgeTree<H, DEPTH
         }
     }
 
-    fn rewind(&mut self) -> bool {
+    pub fn rewind(&mut self) -> bool {
         match self.checkpoints.pop() {
             Some(mut c) => {
                 // drop marked values at and above the checkpoint height;
@@ -1024,11 +1021,11 @@ impl<H: Hashable + Ord + Clone, const DEPTH: u8> Tree<H> for BridgeTree<H, DEPTH
         }
     }
 
-    fn witness(&self, position: Position, as_of_root: &H) -> Option<Vec<H>> {
+    pub fn witness(&self, position: Position, as_of_root: &H) -> Option<Vec<H>> {
         self.witness_inner(position, as_of_root).ok()
     }
 
-    fn garbage_collect(&mut self) {
+    pub fn garbage_collect(&mut self) {
         // Only garbage collect once we have more bridges than the maximum number of
         // checkpoints; we cannot remove information that we might need to restore in
         // a rewind.
@@ -1115,10 +1112,63 @@ mod tests {
     use proptest::prelude::*;
 
     use super::*;
-    use crate::{
-        testing::{apply_operation, arb_operation, tests},
-        Frontier, Tree,
-    };
+    use crate::testing::{apply_operation, arb_operation, tests, Frontier, Tree};
+
+    impl<H: Hashable + Clone, const DEPTH: u8> Frontier<H> for super::Frontier<H, DEPTH> {
+        fn append(&mut self, value: &H) -> bool {
+            super::Frontier::append(self, value)
+        }
+
+        fn root(&self) -> H {
+            super::Frontier::root(self)
+        }
+    }
+
+    impl<H: Hashable + Ord + Clone, const DEPTH: u8> Tree<H> for BridgeTree<H, DEPTH> {
+        fn append(&mut self, value: &H) -> bool {
+            BridgeTree::append(self, value)
+        }
+
+        fn current_position(&self) -> Option<Position> {
+            BridgeTree::current_position(self)
+        }
+
+        fn current_leaf(&self) -> Option<&H> {
+            BridgeTree::current_leaf(self)
+        }
+
+        fn get_marked_leaf(&self, position: Position) -> Option<&H> {
+            BridgeTree::get_marked_leaf(self, position)
+        }
+
+        fn mark(&mut self) -> Option<Position> {
+            BridgeTree::mark(self)
+        }
+
+        fn marked_positions(&self) -> BTreeSet<Position> {
+            BridgeTree::marked_positions(self)
+        }
+
+        fn root(&self, checkpoint_depth: usize) -> Option<H> {
+            BridgeTree::root(self, checkpoint_depth)
+        }
+
+        fn witness(&self, position: Position, as_of_root: &H) -> Option<Vec<H>> {
+            BridgeTree::witness(self, position, as_of_root)
+        }
+
+        fn remove_mark(&mut self, position: Position) -> bool {
+            BridgeTree::remove_mark(self, position)
+        }
+
+        fn checkpoint(&mut self) {
+            BridgeTree::checkpoint(self)
+        }
+
+        fn rewind(&mut self) -> bool {
+            BridgeTree::rewind(self)
+        }
+    }
 
     #[test]
     fn nonempty_frontier_root() {
