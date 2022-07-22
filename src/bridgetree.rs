@@ -252,21 +252,21 @@ pub struct MerkleBridge<H> {
     /// The position of the final leaf in the frontier of the bridge that this bridge is the
     /// successor of, or None if this is the first bridge in a tree.
     prior_position: Option<Position>,
-    /// The set of addresses for which we are waiting to discover the fragments.  The values of this
+    /// The set of addresses for which we are waiting to discover the ommers.  The values of this
     /// set and the keys of the `need` map should always be disjoint. Also, this set should
     /// never contain an address for which the sibling value has been discovered; at that point,
     /// the address is replaced in this set with its parent and the address/sibling pair is stored
-    /// in `fragments`.
+    /// in `ommers`.
     ///
     /// Another way to consider the contents of this set is that the values that exist in
-    /// `fragments`, combined with the values in previous bridges' `fragments` and an original leaf
+    /// `ommers`, combined with the values in previous bridges' `ommers` and an original leaf
     /// node, already contain all the values needed to compute the value at the given address.
     /// Therefore, we are tracking that address as we do not yet have enough information to compute
     /// its sibling without filling the sibling subtree with empty nodes.
     tracking: BTreeSet<Address>,
-    /// A map from addresses that were being tracked to the values of their fragments that have been
+    /// A map from addresses that were being tracked to the values of their ommers that have been
     /// discovered while scanning this bridge's range by adding leaves to the bridge's frontier.
-    fragments: BTreeMap<Address, H>,
+    ommers: BTreeMap<Address, H>,
     /// The leading edge of the bridge.
     frontier: NonEmptyFrontier<H>,
 }
@@ -278,7 +278,7 @@ impl<H> MerkleBridge<H> {
         Self {
             prior_position: None,
             tracking: BTreeSet::new(),
-            fragments: BTreeMap::new(),
+            ommers: BTreeMap::new(),
             frontier: NonEmptyFrontier::new(value),
         }
     }
@@ -287,13 +287,13 @@ impl<H> MerkleBridge<H> {
     pub fn from_parts(
         prior_position: Option<Position>,
         tracking: BTreeSet<Address>,
-        fragments: BTreeMap<Address, H>,
+        ommers: BTreeMap<Address, H>,
         frontier: NonEmptyFrontier<H>,
     ) -> Self {
         Self {
             prior_position,
             tracking,
-            fragments,
+            ommers,
             frontier,
         }
     }
@@ -311,15 +311,15 @@ impl<H> MerkleBridge<H> {
     }
 
     /// Returns the set of internal node addresses that we're searching
-    /// for the fragments for.
+    /// for the ommers for.
     pub fn tracking(&self) -> &BTreeSet<Address> {
         &self.tracking
     }
 
     /// Returns the set of internal node addresses that we're searching
-    /// for the fragments for.
-    pub fn fragments(&self) -> &BTreeMap<Address, H> {
-        &self.fragments
+    /// for the ommers for.
+    pub fn ommers(&self) -> &BTreeMap<Address, H> {
+        &self.ommers
     }
 
     /// Returns the non-empty frontier of this Merkle bridge.
@@ -356,7 +356,7 @@ impl<'a, H: Hashable + Ord + Clone + 'a> MerkleBridge<H> {
         let mut result = Self {
             prior_position: Some(self.frontier.position()),
             tracking: self.tracking.clone(),
-            fragments: BTreeMap::new(),
+            ommers: BTreeMap::new(),
             frontier: self.frontier.clone(),
         };
 
@@ -373,7 +373,7 @@ impl<'a, H: Hashable + Ord + Clone + 'a> MerkleBridge<H> {
     }
 
     /// Advances this bridge's frontier by appending the specified node,
-    /// and updates any auth path fragments being tracked if necessary.
+    /// and updates any auth path ommers being tracked if necessary.
     pub fn append(&mut self, value: H) {
         self.frontier.append(value);
 
@@ -390,7 +390,7 @@ impl<'a, H: Hashable + Ord + Clone + 'a> MerkleBridge<H> {
                 .is_complete_subtree(address.level())
             {
                 let digest = self.frontier.root(Some(address.level()));
-                self.fragments.insert(address.sibling(), digest);
+                self.ommers.insert(address.sibling(), digest);
                 found.push(*address);
             }
         }
@@ -401,7 +401,7 @@ impl<'a, H: Hashable + Ord + Clone + 'a> MerkleBridge<H> {
             // The address of the next incomplete parent note for which
             // we need to find a sibling.
             let parent = address.next_incomplete_parent();
-            assert!(!self.fragments.contains_key(&parent));
+            assert!(!self.ommers.contains_key(&parent));
             self.tracking.insert(parent);
         }
     }
@@ -416,10 +416,10 @@ impl<'a, H: Hashable + Ord + Clone + 'a> MerkleBridge<H> {
             let fused = Self {
                 prior_position: self.prior_position,
                 tracking: next.tracking.clone(),
-                fragments: self
-                    .fragments
+                ommers: self
+                    .ommers
                     .iter()
-                    .chain(next.fragments.iter())
+                    .chain(next.ommers.iter())
                     .map(|(k, v)| (*k, v.clone()))
                     .collect(),
                 frontier: next.frontier.clone(),
@@ -460,17 +460,16 @@ impl<'a, H: Hashable + Ord + Clone + 'a> MerkleBridge<H> {
                 // the frontier's position is after the end of the requested
                 // range, so the requested value should exist in a stored
                 // fragment
-                self.fragments.get(&addr).cloned()
+                self.ommers.get(&addr).cloned()
             }
         })
     }
 
-    fn retain(&mut self, witness_node_addrs: &BTreeSet<Address>) {
-        // Prune away any fragments & tracking addresses we don't need
+    fn retain(&mut self, ommer_addrs: &BTreeSet<Address>) {
+        // Prune away any ommers & tracking addresses we don't need
         self.tracking
-            .retain(|addr| witness_node_addrs.contains(&addr.sibling()));
-        self.fragments
-            .retain(|addr, _| witness_node_addrs.contains(addr));
+            .retain(|addr| ommer_addrs.contains(&addr.sibling()));
+        self.ommers.retain(|addr, _| ommer_addrs.contains(addr));
     }
 }
 
@@ -1039,7 +1038,7 @@ impl<H: Hashable + Ord + Clone, const DEPTH: u8> Tree<H> for BridgeTree<H, DEPTH
 
             let mut cur: Option<MerkleBridge<H>> = None;
             let mut merged = 0;
-            let mut witness_node_addrs: BTreeSet<Address> = BTreeSet::new();
+            let mut ommer_addrs: BTreeSet<Address> = BTreeSet::new();
             for (i, next_bridge) in std::mem::take(&mut self.prior_bridges)
                 .into_iter()
                 .enumerate()
@@ -1059,7 +1058,7 @@ impl<H: Hashable + Ord + Clone, const DEPTH: u8> Tree<H> for BridgeTree<H, DEPTH
                             cur_bridge.frontier.position().witness_addrs(Level(DEPTH))
                         {
                             if source == Source::Future {
-                                witness_node_addrs.insert(addr);
+                                ommer_addrs.insert(addr);
                             }
                         }
 
@@ -1072,7 +1071,7 @@ impl<H: Hashable + Ord + Clone, const DEPTH: u8> Tree<H> for BridgeTree<H, DEPTH
                         cur_bridge.fuse(&next_bridge).unwrap()
                     };
 
-                    new_cur.retain(&witness_node_addrs);
+                    new_cur.retain(&ommer_addrs);
                     cur = Some(new_cur);
                 } else {
                     // this case will only occur for the first bridge
