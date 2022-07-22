@@ -10,8 +10,8 @@
 //! ## Marking
 //!
 //! Merkle trees are typically used to show that a value exists in the tree via
-//! an authentication path. We need an API that allows us to identify the
-//! current leaf as a value we wish to compute authentication paths for even as
+//! a witness. We need an API that allows us to identify the
+//! current leaf as a value we wish to compute witnesss for even as
 //! the tree continues to be appended to in the future; this is called
 //! maintaining a witness. When we're later uninterested in such a leaf, we can
 //! prune a witness and remove all unnecessary information from the structure as
@@ -362,11 +362,11 @@ pub trait Tree<H> {
     fn current_leaf(&self) -> Option<&H>;
 
     /// Returns the leaf at the specified position if the tree can produce
-    /// an authentication path for it.
+    /// a witness for it.
     fn get_marked_leaf(&self, position: Position) -> Option<&H>;
 
     /// Marks the current leaf as one for which we're interested in producing
-    /// an authentication path. Returns an optional value containing the
+    /// a witness. Returns an optional value containing the
     /// current position if successful or if the current value was already
     /// marked, or None if the tree is empty.
     fn mark(&mut self) -> Option<Position>;
@@ -380,12 +380,12 @@ pub trait Tree<H> {
     /// requested checkpoint depth.
     fn root(&self, checkpoint_depth: usize) -> Option<H>;
 
-    /// Obtains an authentication path to the value at the specified position,
+    /// Obtains a witness to the value at the specified position,
     /// as of the tree state corresponding to the given root.
-    /// Returns `None` if there is no available authentication path to that
+    /// Returns `None` if there is no available witness to that
     /// position or if the root does not correspond to a checkpointed
     /// root of the tree.
-    fn authentication_path(&self, position: Position, as_of_root: &H) -> Option<Vec<H>>;
+    fn witness(&self, position: Position, as_of_root: &H) -> Option<Vec<H>>;
 
     /// Marks the value at the specified position as a value we're no longer
     /// interested in maintaining a mark for. Returns true if successful and
@@ -577,14 +577,14 @@ pub(crate) mod tests {
         assert_eq!(t.root(0).unwrap(), "aaaa____________");
     }
 
-    pub(crate) fn check_auth_paths<T: Tree<String> + std::fmt::Debug, F: Fn(usize) -> T>(
+    pub(crate) fn check_witnesss<T: Tree<String> + std::fmt::Debug, F: Fn(usize) -> T>(
         new_tree: F,
     ) {
         let mut tree = new_tree(100);
         tree.append(&"a".to_string());
         tree.mark();
         assert_eq!(
-            tree.authentication_path(Position(0), &tree.root(0).unwrap()),
+            tree.witness(Position(0), &tree.root(0).unwrap()),
             Some(vec![
                 "_".to_string(),
                 "__".to_string(),
@@ -595,7 +595,7 @@ pub(crate) mod tests {
 
         tree.append(&"b".to_string());
         assert_eq!(
-            tree.authentication_path(0.into(), &tree.root(0).unwrap()),
+            tree.witness(0.into(), &tree.root(0).unwrap()),
             Some(vec![
                 "b".to_string(),
                 "__".to_string(),
@@ -607,7 +607,7 @@ pub(crate) mod tests {
         tree.append(&"c".to_string());
         tree.mark();
         assert_eq!(
-            tree.authentication_path(Position(2), &tree.root(0).unwrap()),
+            tree.witness(Position(2), &tree.root(0).unwrap()),
             Some(vec![
                 "_".to_string(),
                 "ab".to_string(),
@@ -618,7 +618,7 @@ pub(crate) mod tests {
 
         tree.append(&"d".to_string());
         assert_eq!(
-            tree.authentication_path(Position(2), &tree.root(0).unwrap()),
+            tree.witness(Position(2), &tree.root(0).unwrap()),
             Some(vec![
                 "d".to_string(),
                 "ab".to_string(),
@@ -629,7 +629,7 @@ pub(crate) mod tests {
 
         tree.append(&"e".to_string());
         assert_eq!(
-            tree.authentication_path(Position(2), &tree.root(0).unwrap()),
+            tree.witness(Position(2), &tree.root(0).unwrap()),
             Some(vec![
                 "d".to_string(),
                 "ab".to_string(),
@@ -648,7 +648,7 @@ pub(crate) mod tests {
         tree.append(&"h".to_string());
 
         assert_eq!(
-            tree.authentication_path(0.into(), &tree.root(0).unwrap()),
+            tree.witness(0.into(), &tree.root(0).unwrap()),
             Some(vec![
                 "b".to_string(),
                 "cd".to_string(),
@@ -671,7 +671,7 @@ pub(crate) mod tests {
         tree.append(&"g".to_string());
 
         assert_eq!(
-            tree.authentication_path(Position(5), &tree.root(0).unwrap()),
+            tree.witness(Position(5), &tree.root(0).unwrap()),
             Some(vec![
                 "e".to_string(),
                 "g_".to_string(),
@@ -688,7 +688,7 @@ pub(crate) mod tests {
         tree.append(&'l'.to_string());
 
         assert_eq!(
-            tree.authentication_path(Position(10), &tree.root(0).unwrap()),
+            tree.witness(Position(10), &tree.root(0).unwrap()),
             Some(vec![
                 "l".to_string(),
                 "ij".to_string(),
@@ -711,7 +711,7 @@ pub(crate) mod tests {
         }
 
         assert_eq!(
-            tree.authentication_path(0.into(), &tree.root(0).unwrap()),
+            tree.witness(0.into(), &tree.root(0).unwrap()),
             Some(vec![
                 "b".to_string(),
                 "cd".to_string(),
@@ -735,7 +735,7 @@ pub(crate) mod tests {
         assert!(tree.rewind());
 
         assert_eq!(
-            tree.authentication_path(Position(2), &tree.root(0).unwrap()),
+            tree.witness(Position(2), &tree.root(0).unwrap()),
             Some(vec![
                 "d".to_string(),
                 "ab".to_string(),
@@ -748,10 +748,7 @@ pub(crate) mod tests {
         tree.append(&'a'.to_string());
         tree.append(&'b'.to_string());
         tree.mark();
-        assert_eq!(
-            tree.authentication_path(Position(0), &tree.root(0).unwrap()),
-            None
-        );
+        assert_eq!(tree.witness(Position(0), &tree.root(0).unwrap()), None);
 
         let mut tree = new_tree(100);
         for c in 'a'..'n' {
@@ -764,7 +761,7 @@ pub(crate) mod tests {
         tree.append(&'p'.to_string());
 
         assert_eq!(
-            tree.authentication_path(Position(12), &tree.root(0).unwrap()),
+            tree.witness(Position(12), &tree.root(0).unwrap()),
             Some(vec![
                 "n".to_string(),
                 "op".to_string(),
@@ -890,14 +887,7 @@ pub(crate) mod tests {
 
         let samples = vec![
             vec![append("x"), Checkpoint, Mark, Rewind, unmark(0)],
-            vec![
-                append("d"),
-                Checkpoint,
-                Mark,
-                unmark(0),
-                Rewind,
-                unmark(0),
-            ],
+            vec![append("d"), Checkpoint, Mark, unmark(0), Rewind, unmark(0)],
             vec![
                 append("o"),
                 Checkpoint,
@@ -1002,9 +992,9 @@ pub(crate) mod tests {
             a
         }
 
-        fn authentication_path(&self, position: Position, as_of_root: &H) -> Option<Vec<H>> {
-            let a = self.inefficient.authentication_path(position, as_of_root);
-            let b = self.efficient.authentication_path(position, as_of_root);
+        fn witness(&self, position: Position, as_of_root: &H) -> Option<Vec<H>> {
+            let a = self.inefficient.witness(position, as_of_root);
+            let b = self.efficient.witness(position, as_of_root);
             assert_eq!(a, b);
             a
         }
@@ -1096,7 +1086,7 @@ pub(crate) mod tests {
                 }
                 Authpath(p, d) => tree
                     .root(*d)
-                    .and_then(|root| tree.authentication_path(*p, &root))
+                    .and_then(|root| tree.witness(*p, &root))
                     .map(|xs| (*p, xs)),
                 GarbageCollect => None,
             }
@@ -1114,7 +1104,7 @@ pub(crate) mod tests {
         }
     }
 
-    pub(crate) fn compute_root_from_auth_path<H: Hashable>(
+    pub(crate) fn compute_root_from_witness<H: Hashable>(
         value: H,
         position: Position,
         path: &[H],
@@ -1137,7 +1127,7 @@ pub(crate) mod tests {
     }
 
     #[test]
-    fn test_compute_root_from_auth_path() {
+    fn test_compute_root_from_witness() {
         let expected = SipHashable::combine(
             <Level>::from(2),
             &SipHashable::combine(
@@ -1153,7 +1143,7 @@ pub(crate) mod tests {
         );
 
         assert_eq!(
-            compute_root_from_auth_path::<SipHashable>(
+            compute_root_from_witness::<SipHashable>(
                 SipHashable(0),
                 0.into(),
                 &[
@@ -1170,7 +1160,7 @@ pub(crate) mod tests {
         );
 
         assert_eq!(
-            compute_root_from_auth_path(
+            compute_root_from_witness(
                 SipHashable(4),
                 <Position>::from(4),
                 &[
@@ -1188,30 +1178,12 @@ pub(crate) mod tests {
     }
 
     #[test]
-    fn test_auth_path_consistency() {
+    fn test_witness_consistency() {
         let samples = vec![
             // Reduced examples
-            vec![
-                append("a"),
-                append("b"),
-                Checkpoint,
-                Mark,
-                authpath(0, 1),
-            ],
-            vec![
-                append("c"),
-                append("d"),
-                Mark,
-                Checkpoint,
-                authpath(1, 1),
-            ],
-            vec![
-                append("e"),
-                Checkpoint,
-                Mark,
-                append("f"),
-                authpath(0, 1),
-            ],
+            vec![append("a"), append("b"), Checkpoint, Mark, authpath(0, 1)],
+            vec![append("c"), append("d"), Mark, Checkpoint, authpath(1, 1)],
+            vec![append("e"), Checkpoint, Mark, append("f"), authpath(0, 1)],
             vec![
                 append("g"),
                 Mark,
@@ -1334,14 +1306,7 @@ pub(crate) mod tests {
     fn test_rewind_remove_mark_consistency() {
         let samples = vec![
             vec![append("x"), Checkpoint, Mark, Rewind, unmark(0)],
-            vec![
-                append("d"),
-                Checkpoint,
-                Mark,
-                unmark(0),
-                Rewind,
-                unmark(0),
-            ],
+            vec![append("d"), Checkpoint, Mark, unmark(0), Rewind, unmark(0)],
             vec![
                 append("o"),
                 Checkpoint,
@@ -1490,9 +1455,7 @@ pub(crate) mod tests {
                     }
                 }
                 Authpath(position, depth) => {
-                    if let Some(path) = tree
-                        .root(*depth)
-                        .and_then(|r| tree.authentication_path(*position, &r))
+                    if let Some(path) = tree.root(*depth).and_then(|r| tree.witness(*position, &r))
                     {
                         let value: H = tree_values[<usize>::from(*position)].clone();
                         let tree_root = tree.root(*depth);
@@ -1515,7 +1478,7 @@ pub(crate) mod tests {
                             prop_assert_eq!(&tree_root.unwrap(), &expected_root);
 
                             prop_assert_eq!(
-                                &compute_root_from_auth_path(value, *position, &path),
+                                &compute_root_from_witness(value, *position, &path),
                                 &expected_root
                             );
                         }

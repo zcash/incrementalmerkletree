@@ -56,7 +56,7 @@ impl<H: Hashable + PartialEq + Clone> TreeState<H> {
     }
 
     /// Returns the leaf at the specified position if the tree can produce
-    /// an authentication path for it.
+    /// a witness for it.
     fn get_marked_leaf(&self, position: Position) -> Option<&H> {
         if self.marks.contains(&position) {
             self.leaves.get(<usize>::from(position))
@@ -74,10 +74,10 @@ impl<H: Hashable + PartialEq + Clone> TreeState<H> {
         })
     }
 
-    /// Obtains an authentication path to the value at the specified position.
-    /// Returns `None` if there is no available authentication path to that
+    /// Obtains a witness to the value at the specified position.
+    /// Returns `None` if there is no available witness to that
     /// value.
-    fn authentication_path(&self, position: Position) -> Option<Vec<H>> {
+    fn witness(&self, position: Position) -> Option<Vec<H>> {
         if Some(position) <= self.current_position() {
             let mut path = vec![];
 
@@ -183,9 +183,9 @@ impl<H: Hashable + PartialEq + Clone + std::fmt::Debug> Tree<H> for CompleteTree
             .map(|s| s.root())
     }
 
-    fn authentication_path(&self, position: Position, root: &H) -> Option<Vec<H>> {
+    fn witness(&self, position: Position, root: &H) -> Option<Vec<H>> {
         // Search for the checkpointed state corresponding to the provided root, and if one is
-        // found, compute the authentication path as of that root.
+        // found, compute the witness as of that root.
         self.checkpoints
             .iter()
             .chain(Some(&self.tree_state))
@@ -193,7 +193,7 @@ impl<H: Hashable + PartialEq + Clone + std::fmt::Debug> Tree<H> for CompleteTree
             .skip_while(|c| !c.marks.contains(&position))
             .find_map(|c| {
                 if &c.root() == root {
-                    c.authentication_path(position)
+                    c.witness(position)
                 } else {
                     None
                 }
@@ -251,7 +251,7 @@ pub(crate) fn lazy_root<H: Hashable + Clone>(mut leaves: Vec<H>) -> H {
 
 #[cfg(test)]
 mod tests {
-    use crate::tests::{compute_root_from_auth_path, SipHashable};
+    use crate::tests::{compute_root_from_witness, SipHashable};
     use crate::{Hashable, Level, Position, Tree};
     use std::convert::TryFrom;
 
@@ -303,12 +303,12 @@ mod tests {
     }
 
     #[test]
-    fn auth_paths() {
-        crate::tests::check_auth_paths(|max_c| CompleteTree::<String>::new(4, max_c));
+    fn witnesss() {
+        crate::tests::check_witnesss(|max_c| CompleteTree::<String>::new(4, max_c));
     }
 
     #[test]
-    fn correct_auth_path() {
+    fn correct_witness() {
         const DEPTH: usize = 3;
         let values = (0..(1 << DEPTH)).into_iter().map(SipHashable);
 
@@ -337,11 +337,9 @@ mod tests {
 
         for i in 0u64..(1 << DEPTH) {
             let position = Position::try_from(i).unwrap();
-            let path = tree
-                .authentication_path(position, &tree.root(0).unwrap())
-                .unwrap();
+            let path = tree.witness(position, &tree.root(0).unwrap()).unwrap();
             assert_eq!(
-                compute_root_from_auth_path(SipHashable(i), position, &path),
+                compute_root_from_witness(SipHashable(i), position, &path),
                 expected
             );
         }

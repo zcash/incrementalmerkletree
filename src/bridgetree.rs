@@ -153,9 +153,9 @@ impl<H: Hashable + Clone> NonEmptyFrontier<H> {
             .0
     }
 
-    /// Constructs an authentication path for the leaf at the tip of this
+    /// Constructs a witness for the leaf at the tip of this
     /// frontier, given a source of node values that complement this frontier.
-    pub fn authentication_path<F>(&self, depth: u8, bridge_value_at: F) -> Result<Vec<H>, PathError>
+    pub fn witness<F>(&self, depth: u8, bridge_value_at: F) -> Result<Vec<H>, PathError>
     where
         F: Fn(Address) -> Option<H>,
     {
@@ -349,7 +349,7 @@ impl<H> MerkleBridge<H> {
 
 impl<'a, H: Hashable + Ord + Clone + 'a> MerkleBridge<H> {
     /// Constructs a new bridge to follow this one. If mark_current_leaf is true, the successor
-    /// will track the information necessary to create an authentication path for the leaf most
+    /// will track the information necessary to create a witness for the leaf most
     /// recently appended to this bridge's frontier.
     #[must_use]
     pub fn successor(&self, mark_current_leaf: bool) -> Self {
@@ -443,14 +443,14 @@ impl<'a, H: Hashable + Ord + Clone + 'a> MerkleBridge<H> {
     /// path for the specified position by interleaving with values from the prior frontier. This
     /// method will panic if the position of the prior frontier does not match this bridge's prior
     /// position.
-    fn authentication_path(
+    fn witness(
         &self,
         depth: u8,
         prior_frontier: &NonEmptyFrontier<H>,
     ) -> Result<Vec<H>, PathError> {
         assert!(Some(prior_frontier.position()) == self.prior_position);
 
-        prior_frontier.authentication_path(depth, |addr| {
+        prior_frontier.witness(depth, |addr| {
             let r = addr.position_range();
             if self.frontier.position() < r.start {
                 Some(H::empty_root(addr.level))
@@ -589,8 +589,8 @@ pub struct BridgeTree<H, const DEPTH: u8> {
     prior_bridges: Vec<MerkleBridge<H>>,
     /// The current (mutable) bridge at the tip of the tree.
     current_bridge: Option<MerkleBridge<H>>,
-    /// A map from positions for which we wish to be able to compute an
-    /// authentication path to index in the bridges vector.
+    /// A map from positions for which we wish to be able to compute a
+    /// witness to index in the bridges vector.
     saved: BTreeMap<Position, usize>,
     /// A stack of bridge indices to which it's possible to rewind directly.
     checkpoints: Vec<Checkpoint>,
@@ -774,11 +774,7 @@ impl<H: Hashable + Ord + Clone, const DEPTH: u8> BridgeTree<H, DEPTH> {
         )
     }
 
-    fn authentication_path_inner(
-        &self,
-        position: Position,
-        as_of_root: &H,
-    ) -> Result<Vec<H>, PathError> {
+    fn witness_inner(&self, position: Position, as_of_root: &H) -> Result<Vec<H>, PathError> {
         #[derive(Debug)]
         enum AuthBase<'a> {
             Current,
@@ -861,7 +857,7 @@ impl<H: Hashable + Ord + Clone, const DEPTH: u8> BridgeTree<H, DEPTH> {
         }
         .ok_or(PathError::BridgeFusionError)?;
 
-        successor.authentication_path(DEPTH, prior_frontier)
+        successor.witness(DEPTH, prior_frontier)
     }
 }
 
@@ -1021,8 +1017,8 @@ impl<H: Hashable + Ord + Clone, const DEPTH: u8> Tree<H> for BridgeTree<H, DEPTH
         }
     }
 
-    fn authentication_path(&self, position: Position, as_of_root: &H) -> Option<Vec<H>> {
-        self.authentication_path_inner(position, as_of_root).ok()
+    fn witness(&self, position: Position, as_of_root: &H) -> Option<Vec<H>> {
+        self.witness_inner(position, as_of_root).ok()
     }
 
     fn garbage_collect(&mut self) {
@@ -1149,7 +1145,7 @@ mod tests {
     }
 
     #[test]
-    fn frontier_auth_path() {
+    fn frontier_witness() {
         let mut frontier = NonEmptyFrontier::<String>::new("a".to_string());
         for c in 'b'..'h' {
             frontier.append(c.to_string());
@@ -1164,7 +1160,7 @@ mod tests {
             Ok(["h", "ef", "abcd", "xxxxxxxx"]
                 .map(|v| v.to_string())
                 .to_vec()),
-            frontier.authentication_path(4, bridge_value_at)
+            frontier.witness(4, bridge_value_at)
         );
     }
 
@@ -1228,8 +1224,8 @@ mod tests {
 
             for pos in tree.saved.keys() {
                 assert_eq!(
-                    tree.authentication_path(*pos, &tree.root(0).unwrap()),
-                    tree_mut.authentication_path(*pos, &tree.root(0).unwrap())
+                    tree.witness(*pos, &tree.root(0).unwrap()),
+                    tree_mut.witness(*pos, &tree.root(0).unwrap())
                 );
             }
         }
@@ -1256,8 +1252,8 @@ mod tests {
     }
 
     #[test]
-    fn auth_paths() {
-        crate::tests::check_auth_paths(BridgeTree::<String, 4>::new);
+    fn witnesss() {
+        crate::tests::check_witnesss(BridgeTree::<String, 4>::new);
     }
 
     #[test]
@@ -1274,7 +1270,7 @@ mod tests {
     fn garbage_collect() {
         let mut t = BridgeTree::<String, 7>::new(10);
         let mut to_unmark = vec![];
-        let mut has_auth_path = vec![];
+        let mut has_witness = vec![];
         for i in 0usize..100 {
             let elem: String = format!("{},", i);
             assert!(t.append(&elem), "Append should succeed.");
@@ -1286,7 +1282,7 @@ mod tests {
                 if i > 0 && i % 2 == 0 {
                     to_unmark.push(Position::from(i));
                 } else {
-                    has_auth_path.push(Position::from(i));
+                    has_witness.push(Position::from(i));
                 }
             }
             if i % 11 == 0 && !to_unmark.is_empty() {
@@ -1296,26 +1292,24 @@ mod tests {
         }
         // 32 = 20 (checkpointed) + 14 (marked) - 2 (marked & checkpointed)
         assert_eq!(t.prior_bridges().len(), 20 + 14 - 2);
-        let auth_paths = has_auth_path
+        let witnesss = has_witness
             .iter()
-            .map(
-                |pos| match t.authentication_path_inner(*pos, &t.root(0).unwrap()) {
-                    Ok(path) => path,
-                    Err(e) => panic!("Failed to get auth path: {:?}", e),
-                },
-            )
+            .map(|pos| match t.witness_inner(*pos, &t.root(0).unwrap()) {
+                Ok(path) => path,
+                Err(e) => panic!("Failed to get auth path: {:?}", e),
+            })
             .collect::<Vec<_>>();
         t.garbage_collect();
         // 20 = 32 - 10 (removed checkpoints) + 1 (not removed due to mark) - 3 (removed marks)
         assert_eq!(t.prior_bridges().len(), 32 - 10 + 1 - 3);
-        let retained_auth_paths = has_auth_path
+        let retained_witnesss = has_witness
             .iter()
             .map(|pos| {
-                t.authentication_path(*pos, &t.root(0).unwrap())
+                t.witness(*pos, &t.root(0).unwrap())
                     .expect("Must be able to get auth path")
             })
             .collect::<Vec<_>>();
-        assert_eq!(auth_paths, retained_auth_paths);
+        assert_eq!(witnesss, retained_witnesss);
     }
 
     #[test]
