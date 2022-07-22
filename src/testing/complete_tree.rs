@@ -1,5 +1,5 @@
 //! Sample implementation of the Tree interface.
-use super::{Frontier, Hashable, Level, Position, Tree};
+use crate::{Frontier, Hashable, Level, Position, Tree};
 use std::collections::BTreeSet;
 
 #[derive(Clone, Debug)]
@@ -255,7 +255,11 @@ mod tests {
 
     use super::CompleteTree;
     use crate::{
-        testing::SipHashable, tests::compute_root_from_witness, Hashable, Level, Position, Tree,
+        testing::{
+            tests::{self, compute_root_from_witness},
+            SipHashable,
+        },
+        Hashable, Level, Position, Tree,
     };
 
     #[test]
@@ -300,12 +304,12 @@ mod tests {
 
     #[test]
     fn root_hashes() {
-        crate::tests::check_root_hashes(|max_c| CompleteTree::<String>::new(4, max_c));
+        tests::check_root_hashes(|max_c| CompleteTree::<String>::new(4, max_c));
     }
 
     #[test]
     fn witnesss() {
-        crate::tests::check_witnesss(|max_c| CompleteTree::<String>::new(4, max_c));
+        tests::check_witnesss(|max_c| CompleteTree::<String>::new(4, max_c));
     }
 
     #[test]
@@ -348,11 +352,11 @@ mod tests {
 
     #[test]
     fn checkpoint_rewind() {
-        crate::tests::check_checkpoint_rewind(|max_c| CompleteTree::<String>::new(4, max_c));
+        tests::check_checkpoint_rewind(|max_c| CompleteTree::<String>::new(4, max_c));
     }
 
     #[test]
     fn rewind_remove_mark() {
-        crate::tests::check_rewind_remove_mark(|max_c| CompleteTree::<String>::new(4, max_c));
+        tests::check_rewind_remove_mark(|max_c| CompleteTree::<String>::new(4, max_c));
     }
 }

@@ -1106,7 +1106,7 @@ mod tests {
 
     use super::*;
     use crate::{
-        testing::{apply_operation, arb_operation},
+        testing::{apply_operation, arb_operation, tests},
         Frontier, Tree,
     };
 
@@ -1249,22 +1249,22 @@ mod tests {
 
     #[test]
     fn root_hashes() {
-        crate::tests::check_root_hashes(BridgeTree::<String, 4>::new);
+        tests::check_root_hashes(BridgeTree::<String, 4>::new);
     }
 
     #[test]
     fn witnesss() {
-        crate::tests::check_witnesss(BridgeTree::<String, 4>::new);
+        tests::check_witnesss(BridgeTree::<String, 4>::new);
     }
 
     #[test]
     fn checkpoint_rewind() {
-        crate::tests::check_checkpoint_rewind(BridgeTree::<String, 4>::new);
+        tests::check_checkpoint_rewind(BridgeTree::<String, 4>::new);
     }
 
     #[test]
     fn rewind_remove_mark() {
-        crate::tests::check_rewind_remove_mark(BridgeTree::<String, 4>::new);
+        tests::check_rewind_remove_mark(BridgeTree::<String, 4>::new);
     }
 
     #[test]
