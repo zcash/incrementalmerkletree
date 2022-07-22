@@ -1,10 +1,7 @@
-#![allow(deprecated)]
-
 mod complete_tree;
 
 use proptest::prelude::*;
 use std::collections::BTreeSet;
-use std::hash::{Hasher, SipHasher};
 
 use super::{
     hashing::Hashable,
@@ -99,6 +96,9 @@ impl Hashable for SipHashable {
     }
 
     fn combine(_level: Level, a: &Self, b: &Self) -> Self {
+        #![allow(deprecated)]
+        use std::hash::{Hasher, SipHasher};
+
         let mut hasher = SipHasher::new();
         hasher.write_u64(a.0);
         hasher.write_u64(b.0);
