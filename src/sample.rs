@@ -6,7 +6,7 @@ use std::collections::BTreeSet;
 pub struct TreeState<H: Hashable> {
     leaves: Vec<H>,
     current_offset: usize,
-    witnesses: BTreeSet<Position>,
+    marks: BTreeSet<Position>,
     depth: usize,
 }
 
@@ -17,7 +17,7 @@ impl<H: Hashable + Clone> TreeState<H> {
         Self {
             leaves: vec![H::empty_leaf(); 1 << depth],
             current_offset: 0,
-            witnesses: BTreeSet::new(),
+            marks: BTreeSet::new(),
             depth,
         }
     }
@@ -57,8 +57,8 @@ impl<H: Hashable + PartialEq + Clone> TreeState<H> {
 
     /// Returns the leaf at the specified position if the tree can produce
     /// an authentication path for it.
-    fn get_witnessed_leaf(&self, position: Position) -> Option<&H> {
-        if self.witnesses.contains(&position) {
+    fn get_marked_leaf(&self, position: Position) -> Option<&H> {
+        if self.marks.contains(&position) {
             self.leaves.get(<usize>::from(position))
         } else {
             None
@@ -66,10 +66,10 @@ impl<H: Hashable + PartialEq + Clone> TreeState<H> {
     }
 
     /// Marks the current tree state leaf as a value that we're interested in
-    /// witnessing. Returns the current position if the tree is non-empty.
-    fn witness(&mut self) -> Option<Position> {
+    /// marking. Returns the current position if the tree is non-empty.
+    fn mark(&mut self) -> Option<Position> {
         self.current_position().map(|pos| {
-            self.witnesses.insert(pos);
+            self.marks.insert(pos);
             pos
         })
     }
@@ -97,10 +97,10 @@ impl<H: Hashable + PartialEq + Clone> TreeState<H> {
     }
 
     /// Marks the value at the specified position as a value we're no longer
-    /// interested in maintaining a witness for. Returns true if successful and
-    /// false if we were already not maintaining a witness at this position.
-    fn remove_witness(&mut self, position: Position) -> bool {
-        self.witnesses.remove(&position)
+    /// interested in maintaining a mark for. Returns true if successful and
+    /// false if we were already not maintaining a mark at this position.
+    fn remove_mark(&mut self, position: Position) -> bool {
+        self.marks.remove(&position)
     }
 }
 
@@ -166,16 +166,16 @@ impl<H: Hashable + PartialEq + Clone + std::fmt::Debug> Tree<H> for CompleteTree
         self.tree_state.current_leaf()
     }
 
-    fn get_witnessed_leaf(&self, position: Position) -> Option<&H> {
-        self.tree_state.get_witnessed_leaf(position)
+    fn get_marked_leaf(&self, position: Position) -> Option<&H> {
+        self.tree_state.get_marked_leaf(position)
     }
 
-    fn witness(&mut self) -> Option<Position> {
-        self.tree_state.witness()
+    fn mark(&mut self) -> Option<Position> {
+        self.tree_state.mark()
     }
 
-    fn witnessed_positions(&self) -> BTreeSet<Position> {
-        self.tree_state.witnesses.clone()
+    fn marked_positions(&self) -> BTreeSet<Position> {
+        self.tree_state.marks.clone()
     }
 
     fn root(&self, checkpoint_depth: usize) -> Option<H> {
@@ -190,7 +190,7 @@ impl<H: Hashable + PartialEq + Clone + std::fmt::Debug> Tree<H> for CompleteTree
             .iter()
             .chain(Some(&self.tree_state))
             .rev()
-            .skip_while(|c| !c.witnesses.contains(&position))
+            .skip_while(|c| !c.marks.contains(&position))
             .find_map(|c| {
                 if &c.root() == root {
                     c.authentication_path(position)
@@ -200,8 +200,8 @@ impl<H: Hashable + PartialEq + Clone + std::fmt::Debug> Tree<H> for CompleteTree
             })
     }
 
-    fn remove_witness(&mut self, position: Position) -> bool {
-        self.tree_state.remove_witness(position)
+    fn remove_mark(&mut self, position: Position) -> bool {
+        self.tree_state.remove_mark(position)
     }
 
     fn checkpoint(&mut self) {
@@ -315,7 +315,7 @@ mod tests {
         let mut tree = CompleteTree::<SipHashable>::new(DEPTH, 100);
         for value in values {
             assert!(tree.append(&value));
-            tree.witness();
+            tree.mark();
         }
         assert!(!tree.append(&SipHashable(0)));
 
@@ -353,7 +353,7 @@ mod tests {
     }
 
     #[test]
-    fn rewind_remove_witness() {
-        crate::tests::check_rewind_remove_witness(|max_c| CompleteTree::<String>::new(4, max_c));
+    fn rewind_remove_mark() {
+        crate::tests::check_rewind_remove_mark(|max_c| CompleteTree::<String>::new(4, max_c));
     }
 }
