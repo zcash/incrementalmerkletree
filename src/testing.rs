@@ -5,7 +5,10 @@ mod complete_tree;
 use proptest::prelude::*;
 use std::hash::{Hasher, SipHasher};
 
-use super::{Hashable, Level, Position, Tree};
+use super::{
+    position::{Level, Position},
+    Hashable, Tree,
+};
 
 //
 // Types and utilities for shared example tests.
@@ -120,13 +123,15 @@ where
         Just(Operation::GarbageCollect),
         pos_gen
             .clone()
-            .prop_map(|i| Operation::MarkedLeaf(Position(i))),
-        pos_gen.clone().prop_map(|i| Operation::Unmark(Position(i))),
+            .prop_map(|i| Operation::MarkedLeaf(Position::from(i))),
+        pos_gen
+            .clone()
+            .prop_map(|i| Operation::Unmark(Position::from(i))),
         Just(Operation::Checkpoint),
         Just(Operation::Rewind),
-        pos_gen.prop_flat_map(
-            |i| (0usize..10).prop_map(move |depth| Operation::Authpath(Position(i), depth))
-        ),
+        pos_gen
+            .prop_flat_map(|i| (0usize..10)
+                .prop_map(move |depth| Operation::Authpath(Position::from(i), depth))),
     ]
 }
 
@@ -164,8 +169,9 @@ pub(crate) mod tests {
 
     use crate::{
         bridgetree::BridgeTree,
+        position::{Level, Position},
         testing::complete_tree::{lazy_root, CompleteTree},
-        Hashable, Level, Position, Tree,
+        Hashable, Tree,
     };
 
     use super::{arb_operation, Operation, Operation::*, SipHashable};
@@ -205,7 +211,7 @@ pub(crate) mod tests {
         tree.append(&"a".to_string());
         tree.mark();
         assert_eq!(
-            tree.witness(Position(0), &tree.root(0).unwrap()),
+            tree.witness(Position::from(0), &tree.root(0).unwrap()),
             Some(vec![
                 "_".to_string(),
                 "__".to_string(),
@@ -228,7 +234,7 @@ pub(crate) mod tests {
         tree.append(&"c".to_string());
         tree.mark();
         assert_eq!(
-            tree.witness(Position(2), &tree.root(0).unwrap()),
+            tree.witness(Position::from(2), &tree.root(0).unwrap()),
             Some(vec![
                 "_".to_string(),
                 "ab".to_string(),
@@ -239,7 +245,7 @@ pub(crate) mod tests {
 
         tree.append(&"d".to_string());
         assert_eq!(
-            tree.witness(Position(2), &tree.root(0).unwrap()),
+            tree.witness(Position::from(2), &tree.root(0).unwrap()),
             Some(vec![
                 "d".to_string(),
                 "ab".to_string(),
@@ -250,7 +256,7 @@ pub(crate) mod tests {
 
         tree.append(&"e".to_string());
         assert_eq!(
-            tree.witness(Position(2), &tree.root(0).unwrap()),
+            tree.witness(Position::from(2), &tree.root(0).unwrap()),
             Some(vec![
                 "d".to_string(),
                 "ab".to_string(),
@@ -292,7 +298,7 @@ pub(crate) mod tests {
         tree.append(&"g".to_string());
 
         assert_eq!(
-            tree.witness(Position(5), &tree.root(0).unwrap()),
+            tree.witness(Position::from(5), &tree.root(0).unwrap()),
             Some(vec![
                 "e".to_string(),
                 "g_".to_string(),
@@ -309,7 +315,7 @@ pub(crate) mod tests {
         tree.append(&'l'.to_string());
 
         assert_eq!(
-            tree.witness(Position(10), &tree.root(0).unwrap()),
+            tree.witness(Position::from(10), &tree.root(0).unwrap()),
             Some(vec![
                 "l".to_string(),
                 "ij".to_string(),
@@ -356,7 +362,7 @@ pub(crate) mod tests {
         assert!(tree.rewind());
 
         assert_eq!(
-            tree.witness(Position(2), &tree.root(0).unwrap()),
+            tree.witness(Position::from(2), &tree.root(0).unwrap()),
             Some(vec![
                 "d".to_string(),
                 "ab".to_string(),
@@ -369,7 +375,10 @@ pub(crate) mod tests {
         tree.append(&'a'.to_string());
         tree.append(&'b'.to_string());
         tree.mark();
-        assert_eq!(tree.witness(Position(0), &tree.root(0).unwrap()), None);
+        assert_eq!(
+            tree.witness(Position::from(0), &tree.root(0).unwrap()),
+            None
+        );
 
         let mut tree = new_tree(100);
         for c in 'a'..'n' {
@@ -382,7 +391,7 @@ pub(crate) mod tests {
         tree.append(&'p'.to_string());
 
         assert_eq!(
-            tree.witness(Position(12), &tree.root(0).unwrap()),
+            tree.witness(Position::from(12), &tree.root(0).unwrap()),
             Some(vec![
                 "n".to_string(),
                 "op".to_string(),
@@ -404,7 +413,7 @@ pub(crate) mod tests {
         assert_eq!(
             Operation::apply_all(&ops, &mut tree),
             Some((
-                Position(11),
+                Position::from(11),
                 vec![
                     "k".to_string(),
                     "ij".to_string(),
@@ -429,7 +438,7 @@ pub(crate) mod tests {
         t.append(&"b".to_string());
         t.mark();
         assert!(t.rewind());
-        assert_eq!(Some(Position(0)), t.current_position());
+        assert_eq!(Some(Position::from(0)), t.current_position());
 
         let mut t = new_tree(100);
         t.append(&"a".to_string());
@@ -443,7 +452,7 @@ pub(crate) mod tests {
         t.mark();
         t.append(&"a".to_string());
         assert!(t.rewind());
-        assert_eq!(Some(Position(0)), t.current_position());
+        assert_eq!(Some(Position::from(0)), t.current_position());
 
         let mut t = new_tree(100);
         t.append(&"a".to_string());
@@ -461,11 +470,11 @@ pub(crate) mod tests {
     }
 
     fn unmark(pos: usize) -> Operation<String> {
-        Operation::Unmark(Position(pos))
+        Operation::Unmark(Position::from(pos))
     }
 
     fn witness(pos: usize, depth: usize) -> Operation<String> {
-        Operation::Authpath(Position(pos), depth)
+        Operation::Authpath(Position::from(pos), depth)
     }
 
     pub(crate) fn check_rewind_remove_mark<T: Tree<String>, F: Fn(usize) -> T>(new_tree: F) {
@@ -684,12 +693,12 @@ pub(crate) mod tests {
         let expected = SipHashable::combine(
             <Level>::from(2),
             &SipHashable::combine(
-                Level(1),
+                Level::from(1),
                 &SipHashable::combine(0.into(), &SipHashable(0), &SipHashable(1)),
                 &SipHashable::combine(0.into(), &SipHashable(2), &SipHashable(3)),
             ),
             &SipHashable::combine(
-                Level(1),
+                Level::from(1),
                 &SipHashable::combine(0.into(), &SipHashable(4), &SipHashable(5)),
                 &SipHashable::combine(0.into(), &SipHashable(6), &SipHashable(7)),
             ),
@@ -703,7 +712,7 @@ pub(crate) mod tests {
                     SipHashable(1),
                     SipHashable::combine(0.into(), &SipHashable(2), &SipHashable(3)),
                     SipHashable::combine(
-                        Level(1),
+                        Level::from(1),
                         &SipHashable::combine(0.into(), &SipHashable(4), &SipHashable(5)),
                         &SipHashable::combine(0.into(), &SipHashable(6), &SipHashable(7))
                     )
@@ -715,12 +724,12 @@ pub(crate) mod tests {
         assert_eq!(
             compute_root_from_witness(
                 SipHashable(4),
-                <Position>::from(4),
+                Position::from(4),
                 &[
                     SipHashable(5),
                     SipHashable::combine(0.into(), &SipHashable(6), &SipHashable(7)),
                     SipHashable::combine(
-                        Level(1),
+                        Level::from(1),
                         &SipHashable::combine(0.into(), &SipHashable(0), &SipHashable(1)),
                         &SipHashable::combine(0.into(), &SipHashable(2), &SipHashable(3))
                     )

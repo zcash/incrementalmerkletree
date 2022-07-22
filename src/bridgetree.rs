@@ -10,7 +10,10 @@ use std::fmt::Debug;
 use std::mem::size_of;
 use std::ops::Range;
 
-use super::{Address, Hashable, Level, Position, Source, Tree};
+use super::{
+    position::{Address, Level, Position, Source},
+    Hashable, Tree,
+};
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum FrontierError {
@@ -147,7 +150,7 @@ impl<H: Hashable + Clone> NonEmptyFrontier<H> {
                         }
                     };
 
-                    (res_digest, addr.level + 1)
+                    (res_digest, addr.level() + 1)
                 },
             )
             .0
@@ -341,7 +344,7 @@ impl<H> MerkleBridge<H> {
     /// Returns the range of positions observed by this bridge.
     pub fn position_range(&self) -> Range<Position> {
         Range {
-            start: self.prior_position.unwrap_or(Position(0)),
+            start: self.prior_position.unwrap_or(Position::from(0)),
             end: self.position() + 1,
         }
     }
@@ -453,7 +456,7 @@ impl<'a, H: Hashable + Ord + Clone + 'a> MerkleBridge<H> {
         prior_frontier.witness(depth, |addr| {
             let r = addr.position_range();
             if self.frontier.position() < r.start {
-                Some(H::empty_root(addr.level))
+                Some(H::empty_root(addr.level()))
             } else if r.contains(&self.frontier.position()) {
                 Some(self.frontier.root(Some(addr.level())))
             } else {
@@ -781,7 +784,7 @@ impl<H: Hashable + Ord + Clone, const DEPTH: u8> BridgeTree<H, DEPTH> {
             NotFound,
         }
 
-        let max_alt = Level(DEPTH);
+        let max_alt = Level::from(DEPTH);
 
         // Find the earliest checkpoint having a matching root, or the current
         // root if it matches and there is no earlier matching checkpoint.
@@ -863,7 +866,11 @@ impl<H: Hashable + Ord + Clone, const DEPTH: u8> BridgeTree<H, DEPTH> {
 impl<H: Hashable + Ord + Clone, const DEPTH: u8> Tree<H> for BridgeTree<H, DEPTH> {
     fn append(&mut self, value: &H) -> bool {
         if let Some(bridge) = self.current_bridge.as_mut() {
-            if bridge.frontier.position().is_complete_subtree(Level(DEPTH)) {
+            if bridge
+                .frontier
+                .position()
+                .is_complete_subtree(Level::from(DEPTH))
+            {
                 false
             } else {
                 bridge.append(value.clone());
@@ -876,7 +883,7 @@ impl<H: Hashable + Ord + Clone, const DEPTH: u8> Tree<H> for BridgeTree<H, DEPTH
     }
 
     fn root(&self, checkpoint_depth: usize) -> Option<H> {
-        let root_level = Level(DEPTH);
+        let root_level = Level::from(DEPTH);
         if checkpoint_depth == 0 {
             Some(
                 self.current_bridge
@@ -1054,8 +1061,10 @@ impl<H: Hashable + Ord + Clone, const DEPTH: u8> Tree<H> for BridgeTree<H, DEPTH
 
                         // Add the elements of the auth path to the set of addresses we should
                         // continue to track and retain information for
-                        for (addr, source) in
-                            cur_bridge.frontier.position().witness_addrs(Level(DEPTH))
+                        for (addr, source) in cur_bridge
+                            .frontier
+                            .position()
+                            .witness_addrs(Level::from(DEPTH))
                         {
                             if source == Source::Future {
                                 ommer_addrs.insert(addr);
