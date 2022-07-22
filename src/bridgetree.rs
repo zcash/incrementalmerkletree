@@ -11,8 +11,9 @@ use std::mem::size_of;
 use std::ops::Range;
 
 use super::{
+    hashing::Hashable,
     position::{Address, Level, Position, Source},
-    Hashable, Tree,
+    Tree,
 };
 
 #[derive(Clone, Debug, PartialEq, Eq)]

@@ -6,8 +6,9 @@ use proptest::prelude::*;
 use std::hash::{Hasher, SipHasher};
 
 use super::{
+    hashing::Hashable,
     position::{Level, Position},
-    Hashable, Tree,
+    Tree,
 };
 
 //
@@ -169,9 +170,10 @@ pub(crate) mod tests {
 
     use crate::{
         bridgetree::BridgeTree,
+        hashing::Hashable,
         position::{Level, Position},
         testing::complete_tree::{lazy_root, CompleteTree},
-        Hashable, Tree,
+        Tree,
     };
 
     use super::{arb_operation, Operation, Operation::*, SipHashable};

@@ -1,7 +1,8 @@
 //! Sample implementation of the Tree interface.
 use crate::{
+    hashing::Hashable,
     position::{Level, Position},
-    Frontier, Hashable, Tree,
+    Frontier, Tree,
 };
 use std::collections::BTreeSet;
 
@@ -258,12 +259,13 @@ mod tests {
 
     use super::CompleteTree;
     use crate::{
+        hashing::Hashable,
         position::{Level, Position},
         testing::{
             tests::{self, compute_root_from_witness},
             SipHashable,
         },
-        Hashable, Tree,
+        Tree,
     };
 
     #[test]
