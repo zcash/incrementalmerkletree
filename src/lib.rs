@@ -31,59 +31,45 @@ use serde::{Deserialize, Serialize};
 use std::collections::BTreeSet;
 use std::convert::{TryFrom, TryInto};
 use std::num::TryFromIntError;
-use std::ops::{Add, AddAssign, Range, Sub};
+use std::ops::{Add, AddAssign, Range};
 
 /// A type-safe wrapper for indexing into "levels" of a binary tree, such that
-/// nodes at altitude `0` are leaves, nodes at altitude `1` are parents
-/// of nodes at altitude `0`, and so forth. This type is capable of
-/// representing altitudes in trees containing up to 2^255 leaves.
+/// nodes at level `0` are leaves, nodes at level `1` are parents of nodes at
+/// level `0`, and so forth. This type is capable of representing levels in
+/// trees containing up to 2^255 leaves.
 #[derive(Copy, Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 #[repr(transparent)]
-pub struct Altitude(u8);
+pub struct Level(u8);
 
-impl Altitude {
-    /// Convenience method for returning the zero altitude.
-    pub fn zero() -> Self {
-        Self(0)
-    }
-
-    pub fn one() -> Self {
-        Self(1)
-    }
-
-    pub fn iter_to(self, other: Altitude) -> impl Iterator<Item = Self> {
-        (self.0..other.0).into_iter().map(Altitude)
+impl Level {
+    // TODO: replace with an instance for `Step<Level>` once `step_trait`
+    // is stabilized
+    pub fn iter_to(self, other: Level) -> impl Iterator<Item = Self> {
+        (self.0..other.0).into_iter().map(Level)
     }
 }
 
-impl Add<u8> for Altitude {
+impl Add<u8> for Level {
     type Output = Self;
     fn add(self, value: u8) -> Self {
         Self(self.0 + value)
     }
 }
 
-impl Sub<u8> for Altitude {
-    type Output = Self;
-    fn sub(self, value: u8) -> Self {
-        Self(self.0 - value)
-    }
-}
-
-impl From<u8> for Altitude {
+impl From<u8> for Level {
     fn from(value: u8) -> Self {
         Self(value)
     }
 }
 
-impl From<Altitude> for u8 {
-    fn from(level: Altitude) -> u8 {
+impl From<Level> for u8 {
+    fn from(level: Level) -> u8 {
         level.0
     }
 }
 
-impl From<Altitude> for usize {
-    fn from(level: Altitude) -> usize {
+impl From<Level> for usize {
+    fn from(level: Level) -> usize {
         level.0 as usize
     }
 }
@@ -94,62 +80,44 @@ impl From<Altitude> for usize {
 pub struct Position(usize);
 
 impl Position {
-    /// Returns the position of the first leaf in the tree.
-    pub fn zero() -> Self {
-        Self(0)
+    /// Return whether the position is odd-valued.
+    pub fn is_odd(&self) -> bool {
+        self.0 & 0x1 == 1
     }
 
-    /// Returns the altitude of the top of a binary tree containing
-    /// a number of nodes equal to the next power of two greater than
-    /// or equal to `self + 1`.
-    fn max_altitude(&self) -> Altitude {
-        Altitude(if self.0 == 0 {
-            0
-        } else {
-            63 - self.0.leading_zeros() as u8
-        })
+    /// Returns the minimum possible level of the root of a binary tree containing at least
+    /// `self + 1` nodes.
+    pub fn root_level(&self) -> Level {
+        Level(64 - self.0.leading_zeros() as u8)
     }
 
-    /// Returns the altitude of each populated ommer.
-    pub fn ommer_altitudes(&self) -> impl Iterator<Item = Altitude> + '_ {
-        (0..=self.max_altitude().0)
-            .into_iter()
-            .filter_map(move |i| {
-                if i != 0 && self.0 & (1 << i) != 0 {
-                    Some(Altitude(i))
-                } else {
-                    None
-                }
-            })
-    }
-
-    /// Returns the number of cousins and/or ommers required to construct
-    /// an authentication path to the root of a merkle tree that has `self + 1`
-    /// nodes.
-    pub fn count_altitudes_required(&self) -> usize {
-        (0..=self.max_altitude().0)
-            .filter(|i| self.0 == 0 || self.0 & (1 << i) == 0)
+    /// Returns the number of cousins and/or ommers required to construct an authentication
+    /// path to the root of a merkle tree that has `self + 1` nodes.
+    pub fn past_ommer_count(&self) -> usize {
+        (0..self.root_level().0)
+            .filter(|i| (self.0 >> i) & 0x1 == 1)
             .count()
     }
 
-    /// Returns whether the binary tree having `self` as the position of the
-    /// rightmost leaf contains a perfect balanced tree of height
-    /// `to_altitude + 1` that contains the aforesaid leaf, without requiring
-    /// any empty leaves or internal nodes.
-    pub fn is_complete_subtree(&self, to_altitude: Altitude) -> bool {
-        !(0..(to_altitude.0)).any(|l| self.0 & (1 << l) == 0)
+    /// Returns whether the binary tree having `self` as the position of the rightmost leaf
+    /// contains a perfect balanced tree with a root at level `root_level` that contains the
+    /// aforesaid leaf.
+    pub fn is_complete_subtree(&self, root_level: Level) -> bool {
+        !(0..(root_level.0)).any(|l| self.0 & (1 << l) == 0)
     }
 
-    pub fn ommer_index(&self, level: Altitude) -> Option<usize> {
-        if self.0 & (1 << level.0) == 0 || level.0 == 0 {
-            // Ommers only exist where 1's appear in the binary representation of the position.
-            // Ommers don't exist at level 0 because of the design of the `bridgetree::Frontier`
-            // `Leaf` type. This is a problem with the design of `Frontier` though - we should
-            // actually capture level-0 left nodes (in the presence of a right node) in the ommers
-            // list instead, but that's too big of a refactor for right now
-            None
-        } else {
-            Some((1..=(level.0)).filter(|l| (self.0 >> l) & 0x1 == 1).count() - 1)
+    /// Returns an iterator over the addresses of nodes required to create a witness for this
+    /// position, beginning with the sibling of the leaf at this position and ending with the
+    /// sibling of the ancestor of the leaf at this position that is required to compute a root at
+    /// the specified level.
+    pub(crate) fn witness_addrs(
+        &self,
+        root_level: Level,
+    ) -> impl Iterator<Item = (Address, Source)> {
+        WitnessAddrsIter {
+            root_level,
+            current: Address::from(self),
+            ommer_count: 0,
         }
     }
 }
@@ -197,18 +165,22 @@ impl TryFrom<u64> for Position {
 /// position.
 #[derive(Copy, Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 pub struct Address {
-    level: Altitude,
+    level: Level,
     index: usize,
 }
 
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
 pub(crate) enum Source {
-    Past,
+    /// The sibling to the address can be derived from the incremental frontier
+    /// at the contained ommer index
+    Past(usize),
+    /// The sibling to the address must be obtained from values discovered by
+    /// the addition of more nodes to the tree
     Future,
 }
 
 impl Address {
-    pub fn from_parts(level: Altitude, index: usize) -> Self {
+    pub fn from_parts(level: Level, index: usize) -> Self {
         Address { level, index }
     }
 
@@ -219,7 +191,7 @@ impl Address {
         }
     }
 
-    pub fn level(&self) -> Altitude {
+    pub fn level(&self) -> Level {
         self.level
     }
 
@@ -257,7 +229,7 @@ impl Address {
                 index >>= 1;
             } else {
                 return Address {
-                    level: Altitude(level),
+                    level: Level(level),
                     index,
                 };
             }
@@ -277,25 +249,12 @@ impl Address {
             complete.current_incomplete()
         }
     }
-
-    /// Returns the authentication path for this address, beginning with the sibling
-    /// of this node and ending with the sibling of the ancestor of this node that
-    /// is required to compute a root at the specified altitude.
-    pub(crate) fn auth_path(
-        &self,
-        to_altitude: Altitude,
-    ) -> impl Iterator<Item = (Address, Source)> {
-        AuthPathIter {
-            to_altitude,
-            current: *self,
-        }
-    }
 }
 
 impl From<Position> for Address {
     fn from(p: Position) -> Self {
         Address {
-            level: Altitude::zero(),
+            level: 0.into(),
             index: p.into(),
         }
     }
@@ -304,7 +263,7 @@ impl From<Position> for Address {
 impl<'a> From<&'a Position> for Address {
     fn from(p: &'a Position) -> Self {
         Address {
-            level: Altitude::zero(),
+            level: 0.into(),
             index: (*p).into(),
         }
     }
@@ -312,7 +271,7 @@ impl<'a> From<&'a Position> for Address {
 
 impl From<Address> for Option<Position> {
     fn from(addr: Address) -> Self {
-        if addr.level == Altitude::zero() {
+        if addr.level == 0.into() {
             Some(addr.index.into())
         } else {
             None
@@ -322,7 +281,7 @@ impl From<Address> for Option<Position> {
 
 impl<'a> From<&'a Address> for Option<Position> {
     fn from(addr: &'a Address) -> Self {
-        if addr.level == Altitude::zero() {
+        if addr.level == 0.into() {
             Some(addr.index.into())
         } else {
             None
@@ -331,26 +290,30 @@ impl<'a> From<&'a Address> for Option<Position> {
 }
 
 #[must_use = "iterators are lazy and do nothing unless consumed"]
-pub(crate) struct AuthPathIter {
-    to_altitude: Altitude,
+pub(crate) struct WitnessAddrsIter {
+    root_level: Level,
     current: Address,
+    ommer_count: usize,
 }
 
-impl Iterator for AuthPathIter {
+impl Iterator for WitnessAddrsIter {
     type Item = (Address, Source);
 
     fn next(&mut self) -> Option<(Address, Source)> {
-        if self.current.level() < self.to_altitude {
+        if self.current.level() < self.root_level {
             let current = self.current;
+            let source = if current.is_complete_node() {
+                Source::Past(self.ommer_count)
+            } else {
+                Source::Future
+            };
+
             self.current = current.parent();
-            Some((
-                current.sibling(),
-                if current.is_complete_node() {
-                    Source::Past
-                } else {
-                    Source::Future
-                },
-            ))
+            if matches!(source, Source::Past(_)) {
+                self.ommer_count += 1;
+            }
+
+            Some((current.sibling(), source))
         } else {
             None
         }
@@ -362,10 +325,10 @@ impl Iterator for AuthPathIter {
 pub trait Hashable: Sized {
     fn empty_leaf() -> Self;
 
-    fn combine(level: Altitude, a: &Self, b: &Self) -> Self;
+    fn combine(level: Level, a: &Self, b: &Self) -> Self;
 
-    fn empty_root(level: Altitude) -> Self {
-        Altitude::zero()
+    fn empty_root(level: Level) -> Self {
+        Level(0)
             .iter_to(level)
             .fold(Self::empty_leaf(), |v, lvl| Self::combine(lvl, &v, &v))
     }
@@ -459,45 +422,45 @@ pub(crate) mod tests {
 
     use super::bridgetree::BridgeTree;
     use super::sample::{lazy_root, CompleteTree};
-    use super::{Address, Altitude, Hashable, Position, Source, Tree};
+    use super::{Address, Hashable, Level, Position, Source, Tree};
 
     #[test]
     fn position_is_complete_subtree() {
-        assert!(Position(0).is_complete_subtree(Altitude(0)));
-        assert!(Position(1).is_complete_subtree(Altitude(0)));
-        assert!(!Position(2).is_complete_subtree(Altitude(1)));
-        assert!(Position(3).is_complete_subtree(Altitude(1)));
-        assert!(!Position(4).is_complete_subtree(Altitude(2)));
-        assert!(Position(7).is_complete_subtree(Altitude(2)));
-        assert!(Position(u32::MAX as usize).is_complete_subtree(Altitude(32)));
+        assert!(Position(0).is_complete_subtree(Level(0)));
+        assert!(Position(1).is_complete_subtree(Level(1)));
+        assert!(!Position(2).is_complete_subtree(Level(1)));
+        assert!(!Position(2).is_complete_subtree(Level(2)));
+        assert!(Position(3).is_complete_subtree(Level(2)));
+        assert!(!Position(4).is_complete_subtree(Level(2)));
+        assert!(Position(7).is_complete_subtree(Level(3)));
+        assert!(Position(u32::MAX as usize).is_complete_subtree(Level(32)));
     }
 
     #[test]
-    fn position_altitudes() {
-        assert_eq!(Position(0).max_altitude(), Altitude(0));
-        assert_eq!(Position(1).max_altitude(), Altitude(0));
-        assert_eq!(Position(2).max_altitude(), Altitude(1));
-        assert_eq!(Position(3).max_altitude(), Altitude(1));
-        assert_eq!(Position(4).max_altitude(), Altitude(2));
-        assert_eq!(Position(7).max_altitude(), Altitude(2));
-        assert_eq!(Position(8).max_altitude(), Altitude(3));
+    fn position_past_ommer_count() {
+        assert_eq!(0, Position(0).past_ommer_count());
+        assert_eq!(1, Position(1).past_ommer_count());
+        assert_eq!(1, Position(2).past_ommer_count());
+        assert_eq!(2, Position(3).past_ommer_count());
+        assert_eq!(1, Position(4).past_ommer_count());
+        assert_eq!(3, Position(7).past_ommer_count());
+        assert_eq!(1, Position(8).past_ommer_count());
     }
 
     #[test]
-    fn position_ommer_index() {
-        assert_eq!(None, Position(3).ommer_index(0.into()));
-        assert_eq!(Some(0), Position(3).ommer_index(1.into()));
-        assert_eq!(None, Position(3).ommer_index(2.into()));
-
-        assert_eq!(Some(0), Position(6).ommer_index(1.into()));
-        assert_eq!(Some(1), Position(6).ommer_index(2.into()));
-        assert_eq!(None, Position(8).ommer_index(1.into()));
-        assert_eq!(Some(0), Position(10).ommer_index(1.into()));
+    fn position_root_level() {
+        assert_eq!(Level(0), Position(0).root_level());
+        assert_eq!(Level(1), Position(1).root_level());
+        assert_eq!(Level(2), Position(2).root_level());
+        assert_eq!(Level(2), Position(3).root_level());
+        assert_eq!(Level(3), Position(4).root_level());
+        assert_eq!(Level(3), Position(7).root_level());
+        assert_eq!(Level(4), Position(8).root_level());
     }
 
     #[test]
     fn current_incomplete() {
-        let addr = |l, i| Address::from_parts(Altitude(l), i);
+        let addr = |l, i| Address::from_parts(Level(l), i);
         assert_eq!(addr(0, 0), addr(0, 0).current_incomplete());
         assert_eq!(addr(1, 0), addr(0, 1).current_incomplete());
         assert_eq!(addr(0, 2), addr(0, 2).current_incomplete());
@@ -506,7 +469,7 @@ pub(crate) mod tests {
 
     #[test]
     fn next_incomplete_parent() {
-        let addr = |l, i| Address::from_parts(Altitude(l), i);
+        let addr = |l, i| Address::from_parts(Level(l), i);
         assert_eq!(addr(1, 0), addr(0, 0).next_incomplete_parent());
         assert_eq!(addr(1, 0), addr(0, 1).next_incomplete_parent());
         assert_eq!(addr(2, 0), addr(0, 2).next_incomplete_parent());
@@ -517,43 +480,42 @@ pub(crate) mod tests {
     }
 
     #[test]
-    fn address_auth_path() {
+    fn position_witness_addrs() {
         use Source::*;
-        let addr = |l, i| Address::from_parts(Altitude(l), i);
-        let path_elem = |l, i, s| (Address::from_parts(Altitude(l), i), s);
+        let path_elem = |l, i, s| (Address::from_parts(Level(l), i), s);
         assert_eq!(
             vec![path_elem(0, 1, Future), path_elem(1, 1, Future)],
-            addr(0, 0).auth_path(Altitude(2)).collect::<Vec<_>>()
+            Position(0).witness_addrs(Level(2)).collect::<Vec<_>>()
         );
         assert_eq!(
-            vec![path_elem(0, 3, Future), path_elem(1, 0, Past)],
-            addr(0, 2).auth_path(Altitude(2)).collect::<Vec<_>>()
+            vec![path_elem(0, 3, Future), path_elem(1, 0, Past(0))],
+            Position(2).witness_addrs(Level(2)).collect::<Vec<_>>()
         );
         assert_eq!(
             vec![
-                path_elem(0, 2, Past),
-                path_elem(1, 0, Past),
+                path_elem(0, 2, Past(0)),
+                path_elem(1, 0, Past(1)),
                 path_elem(2, 1, Future)
             ],
-            addr(0, 3).auth_path(Altitude(3)).collect::<Vec<_>>()
+            Position(3).witness_addrs(Level(3)).collect::<Vec<_>>()
         );
         assert_eq!(
             vec![
                 path_elem(0, 5, Future),
                 path_elem(1, 3, Future),
-                path_elem(2, 0, Past),
+                path_elem(2, 0, Past(0)),
                 path_elem(3, 1, Future)
             ],
-            addr(0, 4).auth_path(Altitude(4)).collect::<Vec<_>>()
+            Position(4).witness_addrs(Level(4)).collect::<Vec<_>>()
         );
         assert_eq!(
             vec![
                 path_elem(0, 7, Future),
-                path_elem(1, 2, Past),
-                path_elem(2, 0, Past),
+                path_elem(1, 2, Past(0)),
+                path_elem(2, 0, Past(1)),
                 path_elem(3, 1, Future)
             ],
-            addr(0, 6).auth_path(Altitude(4)).collect::<Vec<_>>()
+            Position(6).witness_addrs(Level(4)).collect::<Vec<_>>()
         );
     }
 
@@ -569,7 +531,7 @@ pub(crate) mod tests {
             SipHashable(0)
         }
 
-        fn combine(_level: Altitude, a: &Self, b: &Self) -> Self {
+        fn combine(_level: Level, a: &Self, b: &Self) -> Self {
             let mut hasher = SipHasher::new();
             hasher.write_u64(a.0);
             hasher.write_u64(b.0);
@@ -582,7 +544,7 @@ pub(crate) mod tests {
             "_".to_string()
         }
 
-        fn combine(_: Altitude, a: &Self, b: &Self) -> Self {
+        fn combine(_: Level, a: &Self, b: &Self) -> Self {
             a.to_string() + b
         }
     }
@@ -622,7 +584,7 @@ pub(crate) mod tests {
         tree.append(&"a".to_string());
         tree.witness();
         assert_eq!(
-            tree.authentication_path(Position::from(0), &tree.root(0).unwrap()),
+            tree.authentication_path(Position(0), &tree.root(0).unwrap()),
             Some(vec![
                 "_".to_string(),
                 "__".to_string(),
@@ -633,7 +595,7 @@ pub(crate) mod tests {
 
         tree.append(&"b".to_string());
         assert_eq!(
-            tree.authentication_path(Position::zero(), &tree.root(0).unwrap()),
+            tree.authentication_path(0.into(), &tree.root(0).unwrap()),
             Some(vec![
                 "b".to_string(),
                 "__".to_string(),
@@ -645,7 +607,7 @@ pub(crate) mod tests {
         tree.append(&"c".to_string());
         tree.witness();
         assert_eq!(
-            tree.authentication_path(Position::from(2), &tree.root(0).unwrap()),
+            tree.authentication_path(Position(2), &tree.root(0).unwrap()),
             Some(vec![
                 "_".to_string(),
                 "ab".to_string(),
@@ -656,7 +618,7 @@ pub(crate) mod tests {
 
         tree.append(&"d".to_string());
         assert_eq!(
-            tree.authentication_path(Position::from(2), &tree.root(0).unwrap()),
+            tree.authentication_path(Position(2), &tree.root(0).unwrap()),
             Some(vec![
                 "d".to_string(),
                 "ab".to_string(),
@@ -667,7 +629,7 @@ pub(crate) mod tests {
 
         tree.append(&"e".to_string());
         assert_eq!(
-            tree.authentication_path(Position::from(2), &tree.root(0).unwrap()),
+            tree.authentication_path(Position(2), &tree.root(0).unwrap()),
             Some(vec![
                 "d".to_string(),
                 "ab".to_string(),
@@ -686,7 +648,7 @@ pub(crate) mod tests {
         tree.append(&"h".to_string());
 
         assert_eq!(
-            tree.authentication_path(Position::zero(), &tree.root(0).unwrap()),
+            tree.authentication_path(0.into(), &tree.root(0).unwrap()),
             Some(vec![
                 "b".to_string(),
                 "cd".to_string(),
@@ -709,7 +671,7 @@ pub(crate) mod tests {
         tree.append(&"g".to_string());
 
         assert_eq!(
-            tree.authentication_path(Position::from(5), &tree.root(0).unwrap()),
+            tree.authentication_path(Position(5), &tree.root(0).unwrap()),
             Some(vec![
                 "e".to_string(),
                 "g_".to_string(),
@@ -726,7 +688,7 @@ pub(crate) mod tests {
         tree.append(&'l'.to_string());
 
         assert_eq!(
-            tree.authentication_path(Position::from(10), &tree.root(0).unwrap()),
+            tree.authentication_path(Position(10), &tree.root(0).unwrap()),
             Some(vec![
                 "l".to_string(),
                 "ij".to_string(),
@@ -749,7 +711,7 @@ pub(crate) mod tests {
         }
 
         assert_eq!(
-            tree.authentication_path(Position::zero(), &tree.root(0).unwrap()),
+            tree.authentication_path(0.into(), &tree.root(0).unwrap()),
             Some(vec![
                 "b".to_string(),
                 "cd".to_string(),
@@ -773,7 +735,7 @@ pub(crate) mod tests {
         assert!(tree.rewind());
 
         assert_eq!(
-            tree.authentication_path(Position::from(2), &tree.root(0).unwrap()),
+            tree.authentication_path(Position(2), &tree.root(0).unwrap()),
             Some(vec![
                 "d".to_string(),
                 "ab".to_string(),
@@ -787,7 +749,7 @@ pub(crate) mod tests {
         tree.append(&'b'.to_string());
         tree.witness();
         assert_eq!(
-            tree.authentication_path(Position::from(0), &tree.root(0).unwrap()),
+            tree.authentication_path(Position(0), &tree.root(0).unwrap()),
             None
         );
 
@@ -802,7 +764,7 @@ pub(crate) mod tests {
         tree.append(&'p'.to_string());
 
         assert_eq!(
-            tree.authentication_path(Position::from(12), &tree.root(0).unwrap()),
+            tree.authentication_path(Position(12), &tree.root(0).unwrap()),
             Some(vec![
                 "n".to_string(),
                 "op".to_string(),
@@ -824,7 +786,7 @@ pub(crate) mod tests {
         assert_eq!(
             Operation::apply_all(&ops, &mut tree),
             Some((
-                Position::from(11),
+                Position(11),
                 vec![
                     "k".to_string(),
                     "ij".to_string(),
@@ -849,7 +811,7 @@ pub(crate) mod tests {
         t.append(&"b".to_string());
         t.witness();
         assert!(t.rewind());
-        assert_eq!(Some(Position::from(0)), t.current_position());
+        assert_eq!(Some(Position(0)), t.current_position());
 
         let mut t = new_tree(100);
         t.append(&"a".to_string());
@@ -863,7 +825,7 @@ pub(crate) mod tests {
         t.witness();
         t.append(&"a".to_string());
         assert!(t.rewind());
-        assert_eq!(Some(Position::from(0)), t.current_position());
+        assert_eq!(Some(Position(0)), t.current_position());
 
         let mut t = new_tree(100);
         t.append(&"a".to_string());
@@ -1098,11 +1060,11 @@ pub(crate) mod tests {
     }
 
     fn unwitness(pos: usize) -> Operation<String> {
-        Operation::Unwitness(Position::from(pos))
+        Operation::Unwitness(Position(pos))
     }
 
     fn authpath(pos: usize, depth: usize) -> Operation<String> {
-        Operation::Authpath(Position::from(pos), depth)
+        Operation::Authpath(Position(pos), depth)
     }
 
     impl<H: Hashable> Operation<H> {
@@ -1158,7 +1120,7 @@ pub(crate) mod tests {
         path: &[H],
     ) -> H {
         let mut cur = value;
-        let mut lvl = Altitude::zero();
+        let mut lvl = 0.into();
         for (i, v) in path
             .iter()
             .enumerate()
@@ -1177,30 +1139,30 @@ pub(crate) mod tests {
     #[test]
     fn test_compute_root_from_auth_path() {
         let expected = SipHashable::combine(
-            <Altitude>::from(2),
+            <Level>::from(2),
             &SipHashable::combine(
-                Altitude::one(),
-                &SipHashable::combine(Altitude::zero(), &SipHashable(0), &SipHashable(1)),
-                &SipHashable::combine(Altitude::zero(), &SipHashable(2), &SipHashable(3)),
+                Level(1),
+                &SipHashable::combine(0.into(), &SipHashable(0), &SipHashable(1)),
+                &SipHashable::combine(0.into(), &SipHashable(2), &SipHashable(3)),
             ),
             &SipHashable::combine(
-                Altitude::one(),
-                &SipHashable::combine(Altitude::zero(), &SipHashable(4), &SipHashable(5)),
-                &SipHashable::combine(Altitude::zero(), &SipHashable(6), &SipHashable(7)),
+                Level(1),
+                &SipHashable::combine(0.into(), &SipHashable(4), &SipHashable(5)),
+                &SipHashable::combine(0.into(), &SipHashable(6), &SipHashable(7)),
             ),
         );
 
         assert_eq!(
             compute_root_from_auth_path::<SipHashable>(
                 SipHashable(0),
-                Position::zero(),
+                0.into(),
                 &[
                     SipHashable(1),
-                    SipHashable::combine(Altitude::zero(), &SipHashable(2), &SipHashable(3)),
+                    SipHashable::combine(0.into(), &SipHashable(2), &SipHashable(3)),
                     SipHashable::combine(
-                        Altitude::one(),
-                        &SipHashable::combine(Altitude::zero(), &SipHashable(4), &SipHashable(5)),
-                        &SipHashable::combine(Altitude::zero(), &SipHashable(6), &SipHashable(7))
+                        Level(1),
+                        &SipHashable::combine(0.into(), &SipHashable(4), &SipHashable(5)),
+                        &SipHashable::combine(0.into(), &SipHashable(6), &SipHashable(7))
                     )
                 ]
             ),
@@ -1213,11 +1175,11 @@ pub(crate) mod tests {
                 <Position>::from(4),
                 &[
                     SipHashable(5),
-                    SipHashable::combine(Altitude::zero(), &SipHashable(6), &SipHashable(7)),
+                    SipHashable::combine(0.into(), &SipHashable(6), &SipHashable(7)),
                     SipHashable::combine(
-                        Altitude::one(),
-                        &SipHashable::combine(Altitude::zero(), &SipHashable(0), &SipHashable(1)),
-                        &SipHashable::combine(Altitude::zero(), &SipHashable(2), &SipHashable(3))
+                        Level(1),
+                        &SipHashable::combine(0.into(), &SipHashable(0), &SipHashable(1)),
+                        &SipHashable::combine(0.into(), &SipHashable(2), &SipHashable(3))
                     )
                 ]
             ),
@@ -1431,14 +1393,15 @@ pub(crate) mod tests {
             Just(Operation::GarbageCollect),
             pos_gen
                 .clone()
-                .prop_map(|i| Operation::WitnessedLeaf(Position::from(i))),
+                .prop_map(|i| Operation::WitnessedLeaf(Position(i))),
             pos_gen
                 .clone()
-                .prop_map(|i| Operation::Unwitness(Position::from(i))),
+                .prop_map(|i| Operation::Unwitness(Position(i))),
             Just(Operation::Checkpoint),
             Just(Operation::Rewind),
-            pos_gen.prop_flat_map(|i| (0usize..10)
-                .prop_map(move |depth| Operation::Authpath(Position::from(i), depth))),
+            pos_gen.prop_flat_map(
+                |i| (0usize..10).prop_map(move |depth| Operation::Authpath(Position(i), depth))
+            ),
         ]
     }
 
