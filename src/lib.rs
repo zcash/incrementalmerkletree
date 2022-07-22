@@ -61,11 +61,25 @@ pub enum FrontierError {
     MaxDepthExceeded { depth: u8 },
 }
 
+/// Errors that can be discovered during checks that verify the compatibility of adjacent bridges.
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub enum PathError {
+pub enum ContinuityError {
+    /// Returned when a bridge with no prior position information is
+    PriorPositionNotFound,
+    /// Returned when the subsequent bridge's prior position does not match the position of the
+    /// prior bridge's frontier.
+    PositionMismatch(Position, Position),
+}
+
+/// Errors that can be discovered during the process of attempting to create
+/// the witness for a leaf node.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum WitnessingError {
+    AuthBaseNotFound,
+    CheckpointInvalid,
+    CheckpointTooDeep(usize),
     PositionNotMarked(Position),
-    BridgeFusionError,
-    FrontierAddressInvalid(Address),
+    BridgeFusionError(ContinuityError),
     BridgeAddressInvalid(Address),
 }
 
@@ -199,7 +213,7 @@ impl<H: Hashable + Clone> NonEmptyFrontier<H> {
 
     /// Constructs a witness for the leaf at the tip of this
     /// frontier, given a source of node values that complement this frontier.
-    pub fn witness<F>(&self, depth: u8, bridge_value_at: F) -> Result<Vec<H>, PathError>
+    pub fn witness<F>(&self, depth: u8, bridge_value_at: F) -> Result<Vec<H>, WitnessingError>
     where
         F: Fn(Address) -> Option<H>,
     {
@@ -217,7 +231,7 @@ impl<H: Hashable + Clone> NonEmptyFrontier<H> {
     }
 }
 
-/// A possibly-empty Merkle frontier. 
+/// A possibly-empty Merkle frontier.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Frontier<H, const DEPTH: u8> {
     frontier: Option<NonEmptyFrontier<H>>,
@@ -383,8 +397,19 @@ impl<H> MerkleBridge<H> {
 
     /// Checks whether this bridge is a valid successor for the specified
     /// bridge.
-    pub fn can_follow(&self, prev: &Self) -> bool {
-        self.prior_position == Some(prev.frontier.position())
+    pub fn check_continuity(&self, next: &Self) -> Result<(), ContinuityError> {
+        if let Some(pos) = next.prior_position {
+            if pos == self.frontier.position() {
+                Ok(())
+            } else {
+                Err(ContinuityError::PositionMismatch(
+                    self.frontier.position(),
+                    pos,
+                ))
+            }
+        } else {
+            Err(ContinuityError::PriorPositionNotFound)
+        }
     }
 
     /// Returns the range of positions observed by this bridge.
@@ -460,32 +485,34 @@ impl<'a, H: Hashable + Ord + Clone + 'a> MerkleBridge<H> {
     /// to this bridge. The resulting Bridge will have the same state as though
     /// `self` had had every leaf used to construct `next` appended to it
     /// directly.
-    fn fuse(&self, next: &Self) -> Option<Self> {
-        if next.can_follow(self) {
-            let fused = Self {
-                prior_position: self.prior_position,
-                tracking: next.tracking.clone(),
-                ommers: self
-                    .ommers
-                    .iter()
-                    .chain(next.ommers.iter())
-                    .map(|(k, v)| (*k, v.clone()))
-                    .collect(),
-                frontier: next.frontier.clone(),
-            };
+    fn fuse(&self, next: &Self) -> Result<Self, ContinuityError> {
+        self.check_continuity(next)?;
 
-            Some(fused)
-        } else {
-            None
-        }
+        Ok(Self {
+            prior_position: self.prior_position,
+            tracking: next.tracking.clone(),
+            ommers: self
+                .ommers
+                .iter()
+                .chain(next.ommers.iter())
+                .map(|(k, v)| (*k, v.clone()))
+                .collect(),
+            frontier: next.frontier.clone(),
+        })
     }
 
     /// Returns a single MerkleBridge that contains the aggregate information
     /// of all the provided bridges (discarding internal frontiers) or None
-    /// if any of the bridges are not valid successors to one another.
-    fn fuse_all<T: Iterator<Item = &'a Self>>(mut iter: T) -> Option<Self> {
-        let first = iter.next();
-        iter.fold(first.cloned(), |acc, b| acc?.fuse(b))
+    /// if the provided iterator is empty. Returns a continuity error if
+    /// any of the bridges are not valid successors to one another.
+    fn fuse_all<T: Iterator<Item = &'a Self>>(
+        mut iter: T,
+    ) -> Result<Option<Self>, ContinuityError> {
+        let mut fused = iter.next().cloned();
+        for next in iter {
+            fused = Some(fused.unwrap().fuse(next)?);
+        }
+        Ok(fused)
     }
 
     /// If this bridge contains sufficient auth fragment information, construct an authentication
@@ -496,7 +523,7 @@ impl<'a, H: Hashable + Ord + Clone + 'a> MerkleBridge<H> {
         &self,
         depth: u8,
         prior_frontier: &NonEmptyFrontier<H>,
-    ) -> Result<Vec<H>, PathError> {
+    ) -> Result<Vec<H>, WitnessingError> {
         assert!(Some(prior_frontier.position()) == self.prior_position);
 
         prior_frontier.witness(depth, |addr| {
@@ -658,15 +685,15 @@ impl<H: Hashable + Ord + Debug, const DEPTH: u8> Debug for BridgeTree<H, DEPTH> 
     }
 }
 
-/// Errors that can appear when validating the internal consistency of a `[MerkleBridge]`
-/// value when constructing a bridge from its constituent parts.
+/// Errors that can appear when validating the internal consistency of a `[BridgeTree]`
+/// value when constructing a tree from its constituent parts.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum BridgeTreeError {
     IncorrectIncompleteIndex,
     InvalidMarkIndex(usize),
     PositionMismatch { expected: Position, found: Position },
     InvalidSavePoints,
-    ContinuityError,
+    Discontinuity(ContinuityError),
     CheckpointMismatch,
 }
 
@@ -703,7 +730,7 @@ impl<H, const DEPTH: u8> BridgeTree<H, DEPTH> {
         &self.current_bridge
     }
 
-    /// Returns the map from leaf positions that have been marked to the index of 
+    /// Returns the map from leaf positions that have been marked to the index of
     /// the bridge whose tip is at that position in this tree's list of bridges.
     pub fn marked_indices(&self) -> &BTreeMap<Position, usize> {
         &self.saved
@@ -809,20 +836,14 @@ impl<H: Hashable + Ord + Clone, const DEPTH: u8> BridgeTree<H, DEPTH> {
             return Err(BridgeTreeError::CheckpointMismatch);
         }
 
-        if !prior_bridges
-            .iter()
-            .zip(prior_bridges.iter().skip(1))
-            .all(|(prev, next)| next.can_follow(prev))
-        {
-            return Err(BridgeTreeError::ContinuityError);
+        for (prev, next) in prior_bridges.iter().zip(prior_bridges.iter().skip(1)) {
+            prev.check_continuity(next)
+                .map_err(BridgeTreeError::Discontinuity)?;
         }
 
-        if !prior_bridges
-            .last()
-            .zip(current_bridge.as_ref())
-            .map_or(true, |(prev, next)| next.can_follow(prev))
-        {
-            return Err(BridgeTreeError::ContinuityError);
+        if let Some((prev, next)) = prior_bridges.last().zip(current_bridge.as_ref()) {
+            prev.check_continuity(next)
+                .map_err(BridgeTreeError::Discontinuity)?;
         }
 
         Ok(())
@@ -1023,7 +1044,7 @@ impl<H: Hashable + Ord + Clone, const DEPTH: u8> BridgeTree<H, DEPTH> {
         self.witness_inner(position, as_of_root).ok()
     }
 
-    fn witness_inner(&self, position: Position, as_of_root: &H) -> Result<Vec<H>, PathError> {
+    fn witness_inner(&self, position: Position, as_of_root: &H) -> Result<Vec<H>, WitnessingError> {
         #[derive(Debug)]
         enum AuthBase<'a> {
             Current,
@@ -1071,7 +1092,7 @@ impl<H: Hashable + Ord + Clone, const DEPTH: u8> BridgeTree<H, DEPTH> {
                     None
                 }
             })
-            .ok_or(PathError::PositionNotMarked(position))?;
+            .ok_or(WitnessingError::PositionNotMarked(position))?;
 
         let prior_frontier = &self.prior_bridges[*saved_idx].frontier;
 
@@ -1080,31 +1101,43 @@ impl<H: Hashable + Ord + Clone, const DEPTH: u8> BridgeTree<H, DEPTH> {
         // up to the specified checkpoint depth.
         let fuse_from = saved_idx + 1;
         let successor = match auth_base {
-            AuthBase::Current => MerkleBridge::fuse_all(
-                self.prior_bridges[fuse_from..]
-                    .iter()
-                    .chain(&self.current_bridge),
-            ),
+            AuthBase::Current => {
+                // fuse all the way up to the current tip
+                MerkleBridge::fuse_all(
+                    self.prior_bridges[fuse_from..]
+                        .iter()
+                        .chain(&self.current_bridge),
+                )
+                .map(|fused| fused.unwrap()) // safe as the iterator being fused is nonempty
+                .map_err(WitnessingError::BridgeFusionError)
+            }
             AuthBase::Checkpoint(_, checkpoint) if fuse_from < checkpoint.bridges_len => {
+                // fuse from the provided checkpoint
                 MerkleBridge::fuse_all(self.prior_bridges[fuse_from..checkpoint.bridges_len].iter())
+                    .map(|fused| fused.unwrap()) // safe as the iterator being fused is nonempty
+                    .map_err(WitnessingError::BridgeFusionError)
             }
             AuthBase::Checkpoint(_, checkpoint) if fuse_from == checkpoint.bridges_len => {
                 // The successor bridge should just be the empty successor to the
                 // checkpointed bridge.
                 if checkpoint.bridges_len > 0 {
-                    Some(self.prior_bridges[checkpoint.bridges_len - 1].successor(false))
+                    Ok(self.prior_bridges[checkpoint.bridges_len - 1].successor(false))
                 } else {
-                    None
+                    Err(WitnessingError::CheckpointInvalid)
                 }
             }
-            AuthBase::Checkpoint(_, _) => {
+            AuthBase::Checkpoint(_, checkpoint) => {
                 // if the saved index is after the checkpoint, we can't generate
                 // an auth path
-                None
+                Err(WitnessingError::CheckpointTooDeep(
+                    fuse_from - checkpoint.bridges_len,
+                ))
             }
-            AuthBase::NotFound => None,
-        }
-        .ok_or(PathError::BridgeFusionError)?;
+            AuthBase::NotFound => {
+                // we didn't find any suitable auth base
+                Err(WitnessingError::AuthBaseNotFound)
+            }
+        }?;
 
         successor.witness(DEPTH, prior_frontier)
     }
