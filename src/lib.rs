@@ -1,10 +1,18 @@
 //! # `bridgetree`
 //!
-//! Incremental Merkle Trees are fixed-depth Merkle trees with two primary capabilities: appending
-//! (assigning a value to the next unused leaf and advancing the tree) and obtaining the root of
-//! the tree. The data structure attempts to store the least amount of information necessary be
-//! able to produce witnesses for specific marked notes; other information is pruned to avoid waste
-//! when the tree state is encoded.
+//! This crate provides an implementation of an append-only Merkle tree structure. Individual
+//! leaves of the merkle tree may be marked such that witnesses will be maintained for the marked
+//! leaves as additional nodes are appended to the tree, but leaf and node data not specifically
+//! required to maintain these witnesses is not retained, for space efficiency. The data structure
+//! also supports checkpointing of the tree state such that the tree may be reset to a previously
+//! checkpointed state, up to a fixed number of checkpoints.
+//!
+//! The crate also supports using "bridges" containing the minimal possible amount of data to
+//! advance witnesses for marked leaves data up to recent checkpoints or the the latest state of
+//! the tree without having to append each intermediate leaf individually, given a bridge between
+//! the desired states computed by an outside source. The state of the tree is internally
+//! represented as a set of such bridges, and the data structure supports fusing and splitting of
+//! bridges.
 //!
 //! ## Marking
 //!
@@ -40,9 +48,16 @@ use crate::{
     position::{Address, Level, Position, Source},
 };
 
+/// Validation errors that can occur during reconstruction of a Merkle frontier from
+/// its constituent parts.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum FrontierError {
+    /// An error representing that the number of ommers provided in frontier construction does not
+    /// the expected length of the ommers list given the position.
     PositionMismatch { expected_ommers: usize },
+    /// An error representing that the position and/or list of ommers provided to frontier
+    /// construction would result in a frontier that exceeds the maximum statically allowed depth
+    /// of the tree.
     MaxDepthExceeded { depth: u8 },
 }
 
@@ -74,6 +89,7 @@ impl<H> NonEmptyFrontier<H> {
         }
     }
 
+    /// Constructs a new frontier from its constituent parts
     pub fn from_parts(position: Position, leaf: H, ommers: Vec<H>) -> Result<Self, FrontierError> {
         let expected_ommers = position.past_ommer_count();
         if ommers.len() == expected_ommers {
@@ -154,7 +170,7 @@ impl<H: Hashable + Clone> NonEmptyFrontier<H> {
         }
     }
 
-    /// Generate the root of the Merkle tree by hashing against empty branches.
+    /// Generate the root of the Merkle tree by hashing against empty subtree roots.
     pub fn root(&self, root_level: Option<Level>) -> H {
         let max_level = root_level.unwrap_or_else(|| self.position.root_level());
         self.position
@@ -194,15 +210,14 @@ impl<H: Hashable + Clone> NonEmptyFrontier<H> {
             .map(|(addr, source)| match source {
                 Source::Past(i) => Ok(self.ommers[i].clone()),
                 Source::Future => {
-                    bridge_value_at(addr).ok_or(PathError::BridgeAddressInvalid(addr))
+                    bridge_value_at(addr).ok_or(WitnessingError::BridgeAddressInvalid(addr))
                 }
             })
             .collect::<Result<Vec<_>, _>>()
     }
 }
 
-/// A possibly-empty Merkle frontier. Used when the
-/// full functionality of a Merkle bridge is not necessary.
+/// A possibly-empty Merkle frontier. 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Frontier<H, const DEPTH: u8> {
     frontier: Option<NonEmptyFrontier<H>>,
@@ -688,6 +703,8 @@ impl<H, const DEPTH: u8> BridgeTree<H, DEPTH> {
         &self.current_bridge
     }
 
+    /// Returns the map from leaf positions that have been marked to the index of 
+    /// the bridge whose tip is at that position in this tree's list of bridges.
     pub fn marked_indices(&self) -> &BTreeMap<Position, usize> {
         &self.saved
     }
@@ -704,6 +721,7 @@ impl<H, const DEPTH: u8> BridgeTree<H, DEPTH> {
         self.max_checkpoints
     }
 
+    /// Returns the bridge's frontier.
     pub fn frontier(&self) -> Option<&NonEmptyFrontier<H>> {
         self.current_bridge.as_ref().map(|b| b.frontier())
     }
