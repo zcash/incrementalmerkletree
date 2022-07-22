@@ -244,9 +244,9 @@ pub(crate) mod tests {
     use std::fmt::Debug;
 
     use crate::{
-        bridgetree::BridgeTree,
         hashing::Hashable,
         position::{Level, Position},
+        BridgeTree,
     };
 
     use super::{

@@ -1,15 +1,15 @@
 [package]
-name = "incrementalmerkletree"
-version = "0.3.0"
+name = "bridgetree"
+version = "0.1.0"
 authors = [
-    "Sean Bowe <ewillbefull@gmail.com>",
     "Kris Nuttycombe <kris@nutty.land>",
+    "Sean Bowe <ewillbefull@gmail.com>",
 ]
 edition = "2018"
 license = "MIT OR Apache-2.0"
-description = "Implementation of an Incremental Merkle Tree"
-homepage = "https://github.com/zcash/incrementalmerkletree"
-repository = "https://github.com/zcash/incrementalmerkletree"
+description = "A space-efficient Merkle tree with witnessing of marked leaves, checkpointing & state restoration."
+homepage = "https://github.com/zcash/bridgetree"
+repository = "https://github.com/zcash/bridgetree"
 categories = ["algorithms", "data-structures"]
 
 [dependencies]
