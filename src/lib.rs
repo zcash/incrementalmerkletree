@@ -84,9 +84,9 @@ pub enum WitnessingError {
     BridgeAddressInvalid(Address),
 }
 
-/// A `[NonEmptyFrontier]` is a reduced representation of a Merkle tree,
-/// having either one or two leaf values, and then a set of hashes produced
-/// by the reduction of previously appended leaf values.
+/// A [`NonEmptyFrontier`] is a reduced representation of a Merkle tree, containing a single leaf
+/// value, along with the vector of hashes produced by the reduction of previously appended leaf
+/// values that will be required when producing a witness for the current leaf.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct NonEmptyFrontier<H> {
     position: Position,
@@ -311,6 +311,20 @@ impl<H: Hashable + Clone, const DEPTH: u8> Frontier<H, DEPTH> {
     }
 }
 
+/// The information required to "update" witnesses from one state of a Merkle tree to another.
+///
+/// The witness for a particular leaf of a Merkle tree consists of the siblings of that leaf, plus
+/// the siblings of the parents of that leaf in a path to the root of the tree. When considering a
+/// Merkle tree where leaves are appended to the tree in a linear fashion (rather than being
+/// inserted at arbitrary positions), we often wish to produce a witness for a leaf that was
+/// appended to the tree at some point in the past. A [`MerkleBridge`] from one position in the
+/// tree to another position in the tree contains the minimal amount of information necessary to
+/// produce a witness for the leaf at the former position, given that leaves have been subsequently
+/// appended to reach the current position.
+///
+/// [`MerkleBridge`] values have a semigroup, such that the sum (`fuse`d) value of two successive
+/// bridges, along with a [`NonEmptyFrontier`] with its tip at the prior position of the first bridge
+/// being fused, can be used to produce a witness for the leaf at the tip of the prior frontier.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct MerkleBridge<H> {
     /// The position of the final leaf in the frontier of the bridge that this bridge is the
@@ -423,7 +437,7 @@ impl<H> MerkleBridge<H> {
 }
 
 impl<'a, H: Hashable + Ord + Clone + 'a> MerkleBridge<H> {
-    /// Constructs a new bridge to follow this one. If mark_current_leaf is true, the successor
+    /// Constructs a new bridge to follow this one. If `mark_current_leaf` is true, the successor
     /// will track the information necessary to create a witness for the leaf most
     /// recently appended to this bridge's frontier.
     #[must_use]
@@ -550,6 +564,13 @@ impl<'a, H: Hashable + Ord + Clone + 'a> MerkleBridge<H> {
     }
 }
 
+/// A data structure used to store the information necessary to "rewind" the state of a
+/// [`BridgeTree`] to a particular leaf position.
+///
+/// This is needed because the [`BridgeTree::marked_indices`] map is a cache of information that
+/// crosses [`MerkleBridge`] boundaries, and so it is not sufficient to just truncate the list of
+/// bridges; instead, we use [`Checkpoint`] values to be able to rapidly restore the cache to its
+/// previous state.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Checkpoint {
     /// The number of bridges that will be retained in a rewind.
@@ -594,8 +615,8 @@ impl Checkpoint {
         }
     }
 
-    /// Returns the length of the [`prior_bridges`] vector of the [`BridgeTree`] to which
-    /// this checkpoint refers.
+    /// Returns the length of the [`BridgeTree::prior_bridges`] vector of the [`BridgeTree`] to
+    /// which this checkpoint refers.
     ///
     /// This is the number of bridges that will be retained in the event of a rewind to this
     /// checkpoint.
@@ -658,6 +679,8 @@ impl Checkpoint {
     }
 }
 
+/// A sparse representation of a Merkle tree with linear appending of leaves that contains enough
+/// information to produce a witness for any `mark`ed leaf.
 #[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct BridgeTree<H, const DEPTH: u8> {
     /// The ordered list of Merkle bridges representing the history
