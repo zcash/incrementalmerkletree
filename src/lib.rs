@@ -30,8 +30,8 @@
 //! reset the state to.
 //!
 //! In this module, the term "ommer" is used as for the sibling of a parent node in a binary tree.
-pub mod hashing;
-pub mod position;
+mod hashing;
+mod position;
 
 #[cfg(any(bench, test, feature = "test-dependencies"))]
 pub mod testing;
@@ -43,9 +43,10 @@ use std::fmt::Debug;
 use std::mem::size_of;
 use std::ops::Range;
 
-use crate::{
+use crate::position::Source;
+pub use crate::{
     hashing::Hashable,
-    position::{Address, Level, Position, Source},
+    position::{Address, Level, Position},
 };
 
 /// Validation errors that can occur during reconstruction of a Merkle frontier from
