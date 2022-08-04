@@ -1,12 +1,17 @@
 //! Sample implementation of the Tree interface.
-use super::{Frontier, Hashable, Level, Position, Tree};
 use std::collections::BTreeSet;
+
+use super::{Frontier, Tree};
+use crate::{
+    hashing::Hashable,
+    position::{Level, Position},
+};
 
 #[derive(Clone, Debug)]
 pub struct TreeState<H: Hashable> {
     leaves: Vec<H>,
     current_offset: usize,
-    witnesses: BTreeSet<Position>,
+    marks: BTreeSet<Position>,
     depth: usize,
 }
 
@@ -17,7 +22,7 @@ impl<H: Hashable + Clone> TreeState<H> {
         Self {
             leaves: vec![H::empty_leaf(); 1 << depth],
             current_offset: 0,
-            witnesses: BTreeSet::new(),
+            marks: BTreeSet::new(),
             depth,
         }
     }
@@ -56,9 +61,9 @@ impl<H: Hashable + PartialEq + Clone> TreeState<H> {
     }
 
     /// Returns the leaf at the specified position if the tree can produce
-    /// an authentication path for it.
-    fn get_witnessed_leaf(&self, position: Position) -> Option<&H> {
-        if self.witnesses.contains(&position) {
+    /// a witness for it.
+    fn get_marked_leaf(&self, position: Position) -> Option<&H> {
+        if self.marks.contains(&position) {
             self.leaves.get(<usize>::from(position))
         } else {
             None
@@ -66,18 +71,18 @@ impl<H: Hashable + PartialEq + Clone> TreeState<H> {
     }
 
     /// Marks the current tree state leaf as a value that we're interested in
-    /// witnessing. Returns the current position if the tree is non-empty.
-    fn witness(&mut self) -> Option<Position> {
+    /// marking. Returns the current position if the tree is non-empty.
+    fn mark(&mut self) -> Option<Position> {
         self.current_position().map(|pos| {
-            self.witnesses.insert(pos);
+            self.marks.insert(pos);
             pos
         })
     }
 
-    /// Obtains an authentication path to the value at the specified position.
-    /// Returns `None` if there is no available authentication path to that
+    /// Obtains a witness to the value at the specified position.
+    /// Returns `None` if there is no available witness to that
     /// value.
-    fn authentication_path(&self, position: Position) -> Option<Vec<H>> {
+    fn witness(&self, position: Position) -> Option<Vec<H>> {
         if Some(position) <= self.current_position() {
             let mut path = vec![];
 
@@ -97,10 +102,10 @@ impl<H: Hashable + PartialEq + Clone> TreeState<H> {
     }
 
     /// Marks the value at the specified position as a value we're no longer
-    /// interested in maintaining a witness for. Returns true if successful and
-    /// false if we were already not maintaining a witness at this position.
-    fn remove_witness(&mut self, position: Position) -> bool {
-        self.witnesses.remove(&position)
+    /// interested in maintaining a mark for. Returns true if successful and
+    /// false if we were already not maintaining a mark at this position.
+    fn remove_mark(&mut self, position: Position) -> bool {
+        self.marks.remove(&position)
     }
 }
 
@@ -166,16 +171,16 @@ impl<H: Hashable + PartialEq + Clone + std::fmt::Debug> Tree<H> for CompleteTree
         self.tree_state.current_leaf()
     }
 
-    fn get_witnessed_leaf(&self, position: Position) -> Option<&H> {
-        self.tree_state.get_witnessed_leaf(position)
+    fn get_marked_leaf(&self, position: Position) -> Option<&H> {
+        self.tree_state.get_marked_leaf(position)
     }
 
-    fn witness(&mut self) -> Option<Position> {
-        self.tree_state.witness()
+    fn mark(&mut self) -> Option<Position> {
+        self.tree_state.mark()
     }
 
-    fn witnessed_positions(&self) -> BTreeSet<Position> {
-        self.tree_state.witnesses.clone()
+    fn marked_positions(&self) -> BTreeSet<Position> {
+        self.tree_state.marks.clone()
     }
 
     fn root(&self, checkpoint_depth: usize) -> Option<H> {
@@ -183,25 +188,25 @@ impl<H: Hashable + PartialEq + Clone + std::fmt::Debug> Tree<H> for CompleteTree
             .map(|s| s.root())
     }
 
-    fn authentication_path(&self, position: Position, root: &H) -> Option<Vec<H>> {
+    fn witness(&self, position: Position, root: &H) -> Option<Vec<H>> {
         // Search for the checkpointed state corresponding to the provided root, and if one is
-        // found, compute the authentication path as of that root.
+        // found, compute the witness as of that root.
         self.checkpoints
             .iter()
             .chain(Some(&self.tree_state))
             .rev()
-            .skip_while(|c| !c.witnesses.contains(&position))
+            .skip_while(|c| !c.marks.contains(&position))
             .find_map(|c| {
                 if &c.root() == root {
-                    c.authentication_path(position)
+                    c.witness(position)
                 } else {
                     None
                 }
             })
     }
 
-    fn remove_witness(&mut self, position: Position) -> bool {
-        self.tree_state.remove_witness(position)
+    fn remove_mark(&mut self, position: Position) -> bool {
+        self.tree_state.remove_mark(position)
     }
 
     fn checkpoint(&mut self) {
@@ -218,10 +223,6 @@ impl<H: Hashable + PartialEq + Clone + std::fmt::Debug> Tree<H> for CompleteTree
         } else {
             false
         }
-    }
-
-    fn garbage_collect(&mut self) {
-        // Garbage collection of the sample tree is a no-op.
     }
 }
 
@@ -251,11 +252,17 @@ pub(crate) fn lazy_root<H: Hashable + Clone>(mut leaves: Vec<H>) -> H {
 
 #[cfg(test)]
 mod tests {
-    use crate::tests::{compute_root_from_auth_path, SipHashable};
-    use crate::{Hashable, Level, Position, Tree};
     use std::convert::TryFrom;
 
     use super::CompleteTree;
+    use crate::{
+        hashing::Hashable,
+        position::{Level, Position},
+        testing::{
+            tests::{self, compute_root_from_witness},
+            SipHashable, Tree,
+        },
+    };
 
     #[test]
     fn correct_empty_root() {
@@ -299,23 +306,23 @@ mod tests {
 
     #[test]
     fn root_hashes() {
-        crate::tests::check_root_hashes(|max_c| CompleteTree::<String>::new(4, max_c));
+        tests::check_root_hashes(|max_c| CompleteTree::<String>::new(4, max_c));
     }
 
     #[test]
-    fn auth_paths() {
-        crate::tests::check_auth_paths(|max_c| CompleteTree::<String>::new(4, max_c));
+    fn witnesss() {
+        tests::check_witnesss(|max_c| CompleteTree::<String>::new(4, max_c));
     }
 
     #[test]
-    fn correct_auth_path() {
+    fn correct_witness() {
         const DEPTH: usize = 3;
         let values = (0..(1 << DEPTH)).into_iter().map(SipHashable);
 
         let mut tree = CompleteTree::<SipHashable>::new(DEPTH, 100);
         for value in values {
             assert!(tree.append(&value));
-            tree.witness();
+            tree.mark();
         }
         assert!(!tree.append(&SipHashable(0)));
 
@@ -337,11 +344,9 @@ mod tests {
 
         for i in 0u64..(1 << DEPTH) {
             let position = Position::try_from(i).unwrap();
-            let path = tree
-                .authentication_path(position, &tree.root(0).unwrap())
-                .unwrap();
+            let path = tree.witness(position, &tree.root(0).unwrap()).unwrap();
             assert_eq!(
-                compute_root_from_auth_path(SipHashable(i), position, &path),
+                compute_root_from_witness(SipHashable(i), position, &path),
                 expected
             );
         }
@@ -349,11 +354,11 @@ mod tests {
 
     #[test]
     fn checkpoint_rewind() {
-        crate::tests::check_checkpoint_rewind(|max_c| CompleteTree::<String>::new(4, max_c));
+        tests::check_checkpoint_rewind(|max_c| CompleteTree::<String>::new(4, max_c));
     }
 
     #[test]
-    fn rewind_remove_witness() {
-        crate::tests::check_rewind_remove_witness(|max_c| CompleteTree::<String>::new(4, max_c));
+    fn rewind_remove_mark() {
+        tests::check_rewind_remove_mark(|max_c| CompleteTree::<String>::new(4, max_c));
     }
 }
