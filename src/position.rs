@@ -35,14 +35,28 @@ impl From<u8> for Level {
 }
 
 impl From<Level> for u8 {
-    fn from(level: Level) -> u8 {
+    fn from(level: Level) -> Self {
         level.0
     }
 }
 
 impl From<Level> for usize {
-    fn from(level: Level) -> usize {
+    fn from(level: Level) -> Self {
         level.0 as usize
+    }
+}
+
+#[cfg(feature = "incrementalmerkletree-compat")]
+impl From<Level> for incrementalmerkletree::Altitude {
+    fn from(level: Level) -> Self {
+        incrementalmerkletree::Altitude::from(level.0)
+    }
+}
+
+#[cfg(feature = "incrementalmerkletree-compat")]
+impl From<incrementalmerkletree::Altitude> for Level {
+    fn from(altitude: incrementalmerkletree::Altitude) -> Self {
+        Level(altitude.into())
     }
 }
 
@@ -95,7 +109,7 @@ impl Position {
 }
 
 impl From<Position> for usize {
-    fn from(p: Position) -> usize {
+    fn from(p: Position) -> Self {
         p.0
     }
 }
@@ -129,6 +143,13 @@ impl TryFrom<u64> for Position {
     type Error = TryFromIntError;
     fn try_from(sz: u64) -> Result<Self, Self::Error> {
         <usize>::try_from(sz).map(Self)
+    }
+}
+
+#[cfg(feature = "incrementalmerkletree-compat")]
+impl From<incrementalmerkletree::Position> for Position {
+    fn from(position: incrementalmerkletree::Position) -> Self {
+        Self(position.into())
     }
 }
 

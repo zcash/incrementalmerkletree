@@ -135,6 +135,28 @@ impl<H> NonEmptyFrontier<H> {
     }
 }
 
+#[cfg(feature = "incrementalmerkletree-compat")]
+impl<H: Clone> From<&incrementalmerkletree::bridgetree::NonEmptyFrontier<H>>
+    for NonEmptyFrontier<H>
+{
+    fn from(f: &incrementalmerkletree::bridgetree::NonEmptyFrontier<H>) -> Self {
+        use incrementalmerkletree::bridgetree::Leaf;
+        let (ommer0, leaf) = match f.leaf() {
+            Leaf::Left(a) => (None, a),
+            Leaf::Right(o, a) => (Some(o.clone()), a),
+        };
+
+        Self {
+            position: f.position().into(),
+            leaf: leaf.clone(),
+            ommers: ommer0
+                .into_iter()
+                .chain(f.ommers().iter().cloned())
+                .collect(),
+        }
+    }
+}
+
 impl<H: Hashable + Clone> NonEmptyFrontier<H> {
     /// Append a new leaf to the frontier, and recompute recompute ommers by hashing together full
     /// subtrees until an empty ommer slot is found.
@@ -690,6 +712,22 @@ impl<C> Checkpoint<C> {
         self.bridges_len = f(self.bridges_len);
         for v in self.forgotten.values_mut() {
             *v = f(*v)
+        }
+    }
+}
+
+#[cfg(feature = "incrementalmerkletree-compat")]
+impl From<&incrementalmerkletree::bridgetree::Checkpoint> for Checkpoint {
+    fn from(c: &incrementalmerkletree::bridgetree::Checkpoint) -> Self {
+        Checkpoint {
+            bridges_len: c.bridges_len(),
+            is_marked: c.is_witnessed(),
+            marked: c.witnessed().iter().map(|p| Position::from(*p)).collect(),
+            forgotten: c
+                .forgotten()
+                .iter()
+                .map(|(k, v)| (Position::from(*k), *v))
+                .collect(),
         }
     }
 }
@@ -1271,6 +1309,57 @@ impl<H: Hashable + Ord + Clone, C, const DEPTH: u8> BridgeTree<H, C, DEPTH> {
                 "Consistency check failed after garbage collection with {:?}",
                 e
             );
+        }
+    }
+}
+
+#[cfg(feature = "incrementalmerkletree-compat")]
+impl<H: Ord + Clone, const DEPTH: u8> From<&incrementalmerkletree::bridgetree::BridgeTree<H, DEPTH>>
+    for BridgeTree<H, DEPTH>
+{
+    fn from(t: &incrementalmerkletree::bridgetree::BridgeTree<H, DEPTH>) -> Self {
+        let mut tracking: BTreeMap<incrementalmerkletree::Position, Address> = BTreeMap::new();
+        let mut to_merkle_bridge = |bridge: &incrementalmerkletree::bridgetree::MerkleBridge<H>| {
+            let mut ommers = BTreeMap::new();
+            for (pos, fragment) in bridge.auth_fragments().iter() {
+                if !tracking.contains_key(pos) {
+                    tracking.insert(*pos, Address::from(Position::from(*pos)));
+                }
+
+                for value in fragment.values() {
+                    let addr = *tracking.get(pos).unwrap();
+                    ommers.insert(addr, value.clone());
+                    tracking.insert(*pos, addr.next_incomplete_parent());
+                }
+            }
+
+            MerkleBridge {
+                prior_position: bridge.prior_position().map(|p| p.into()),
+                tracking: tracking.values().copied().collect(),
+                ommers,
+                frontier: bridge.frontier().into(),
+            }
+        };
+
+        // These invocations of `map` are impure, but we can't use `scan` as we'd like
+        // because there's no way to get the tracking state back out.
+        let prior_bridges = t
+            .prior_bridges()
+            .iter()
+            .map(&mut to_merkle_bridge)
+            .collect();
+        let current_bridge = t.current_bridge().as_ref().map(&mut to_merkle_bridge);
+
+        BridgeTree {
+            prior_bridges,
+            current_bridge,
+            saved: t
+                .witnessed_indices()
+                .iter()
+                .map(|(k, v)| (Position::from(*k), *v))
+                .collect(),
+            checkpoints: t.checkpoints().iter().map(Checkpoint::from).collect(),
+            max_checkpoints: t.max_checkpoints(),
         }
     }
 }
