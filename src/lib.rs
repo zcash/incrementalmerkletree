@@ -16,7 +16,7 @@
 //!
 //! ## Marking
 //!
-//! Merkle trees are typically used to show that a value exists in the tree by providing a witness
+//! Merkle trees can be used to show that a value exists in the tree by providing a witness
 //! to a leaf value. We provide an API that allows us to mark the current leaf as a value we wish
 //! to compute witnesss for even after the tree has been appended to in the future; this is called
 //! maintaining a witness. When we're later no longer in a leaf, we can remove the mark and drop
