@@ -1554,4 +1554,15 @@ mod tests {
         tree.rewind();
         assert!(tree.root(0) != empty_root);
     }
+
+    #[test]
+    fn checkpoint_ids() {
+        let mut tree: BridgeTree<String, u32, 7> = BridgeTree::new(100);
+        tree.append(&"a".to_string());
+        for i in 0u32..100 {
+            assert!(tree.append(&format!("{}", i)));
+            tree.checkpoint(i);
+        }
+        assert_eq!(tree.last_checkpoint_id(), Some(&99));
+    }
 }
