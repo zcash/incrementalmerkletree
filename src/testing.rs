@@ -650,7 +650,7 @@ pub(crate) mod tests {
     #[derive(Clone)]
     pub struct CombinedTree<H: Hashable + Ord, const DEPTH: u8> {
         inefficient: CompleteTree<H>,
-        efficient: BridgeTree<H, DEPTH>,
+        efficient: BridgeTree<H, (), DEPTH>,
     }
 
     impl<H: Hashable + Ord + Clone, const DEPTH: u8> CombinedTree<H, DEPTH> {
@@ -731,7 +731,7 @@ pub(crate) mod tests {
 
         fn checkpoint(&mut self) {
             self.inefficient.checkpoint();
-            self.efficient.checkpoint();
+            self.efficient.checkpoint(());
         }
 
         fn rewind(&mut self) -> bool {
