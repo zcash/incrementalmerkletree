@@ -1,0 +1,12 @@
+[package]
+name = "shardtree"
+version = "0.0.0"
+authors = [
+    "Kris Nuttycombe <kris@nutty.land>",
+]
+edition = "2018"
+license = "MIT OR Apache-2.0"
+description = "A space-efficient Merkle tree with witnessing of marked leaves, checkpointing & state restoration."
+homepage = "https://github.com/zcash/incrementalmerkletree"
+repository = "https://github.com/zcash/incrementalmerkletree"
+categories = ["algorithms", "data-structures"]
