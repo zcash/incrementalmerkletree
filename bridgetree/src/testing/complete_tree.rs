@@ -1,8 +1,10 @@
 //! Sample implementation of the Tree interface.
 use std::collections::BTreeSet;
 
-use super::{Frontier, Tree};
-use incrementalmerkletree::{Hashable, Level, Position};
+use incrementalmerkletree::{
+    testing::{Frontier, Tree},
+    Hashable, Level, Position,
+};
 
 #[derive(Clone, Debug)]
 pub struct TreeState<H: Hashable> {
@@ -252,11 +254,11 @@ mod tests {
     use std::convert::TryFrom;
 
     use super::CompleteTree;
-    use crate::testing::{
-        tests::{self, compute_root_from_witness},
-        SipHashable, Tree,
+    use crate::testing::tests::{self, compute_root_from_witness};
+    use incrementalmerkletree::{
+        testing::{SipHashable, Tree},
+        Hashable, Level, Position,
     };
-    use incrementalmerkletree::{Hashable, Level, Position};
 
     #[test]
     fn correct_empty_root() {

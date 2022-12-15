@@ -1299,7 +1299,8 @@ mod tests {
     use proptest::prelude::*;
 
     use super::*;
-    use crate::testing::{apply_operation, arb_operation, tests, Frontier, Tree};
+    use crate::testing::{apply_operation, arb_operation, tests};
+    use incrementalmerkletree::testing::{Frontier, Tree};
 
     impl<H: Hashable + Clone, const DEPTH: u8> Frontier<H> for super::Frontier<H, DEPTH> {
         fn append(&mut self, value: &H) -> bool {
