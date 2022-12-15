@@ -10,6 +10,28 @@ use std::ops::{Add, AddAssign, Range, Sub};
 #[cfg(feature = "test-dependencies")]
 pub mod testing;
 
+/// A type for metadata that is used to determine when and how a leaf can be pruned from a tree.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
+pub enum Retention<C> {
+    Ephemeral,
+    Checkpoint { id: C, is_marked: bool },
+    Marked,
+}
+
+impl<C> Retention<C> {
+    pub fn is_checkpoint(&self) -> bool {
+        matches!(self, Retention::Checkpoint { .. })
+    }
+
+    pub fn is_marked(&self) -> bool {
+        match self {
+            Retention::Ephemeral => false,
+            Retention::Checkpoint { is_marked, .. } => *is_marked,
+            Retention::Marked => true,
+        }
+    }
+}
+
 /// A type representing the position of a leaf in a Merkle tree.
 #[derive(Copy, Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 #[repr(transparent)]
