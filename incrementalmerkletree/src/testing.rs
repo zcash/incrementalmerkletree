@@ -1,5 +1,7 @@
-use crate::{Hashable, Level, Position};
+use proptest::prelude::*;
 use std::collections::BTreeSet;
+
+use crate::{Hashable, Level, Position};
 
 //
 // Traits used to permit comparison testing between tree implementations.
@@ -74,6 +76,131 @@ pub trait Tree<H> {
     /// at that tree state have been removed using `rewind`. This function
     /// return false and leave the tree unmodified if no checkpoints exist.
     fn rewind(&mut self) -> bool;
+}
+
+//
+// Types and utilities for shared example tests.
+//
+
+//
+// Operations
+//
+
+#[derive(Clone, Debug)]
+pub enum Operation<A> {
+    Append(A),
+    CurrentPosition,
+    CurrentLeaf,
+    Mark,
+    MarkedLeaf(Position),
+    MarkedPositions,
+    Unmark(Position),
+    Checkpoint,
+    Rewind,
+    Authpath(Position, usize),
+    GarbageCollect,
+}
+
+use Operation::*;
+
+impl<H: Hashable> Operation<H> {
+    pub fn apply<T: Tree<H>>(&self, tree: &mut T) -> Option<(Position, Vec<H>)> {
+        match self {
+            Append(a) => {
+                assert!(tree.append(a), "append failed");
+                None
+            }
+            CurrentPosition => None,
+            CurrentLeaf => None,
+            Mark => {
+                assert!(tree.mark().is_some(), "mark failed");
+                None
+            }
+            MarkedLeaf(_) => None,
+            MarkedPositions => None,
+            Unmark(p) => {
+                assert!(tree.remove_mark(*p), "remove mark failed");
+                None
+            }
+            Checkpoint => {
+                tree.checkpoint();
+                None
+            }
+            Rewind => {
+                assert!(tree.rewind(), "rewind failed");
+                None
+            }
+            Authpath(p, d) => tree
+                .root(*d)
+                .and_then(|root| tree.witness(*p, &root))
+                .map(|xs| (*p, xs)),
+            GarbageCollect => None,
+        }
+    }
+
+    pub fn apply_all<T: Tree<H>>(ops: &[Operation<H>], tree: &mut T) -> Option<(Position, Vec<H>)> {
+        let mut result = None;
+        for op in ops {
+            result = op.apply(tree);
+        }
+        result
+    }
+}
+
+pub fn arb_operation<G: Strategy + Clone>(
+    item_gen: G,
+    pos_gen: impl Strategy<Value = usize> + Clone,
+) -> impl Strategy<Value = Operation<G::Value>>
+where
+    G::Value: Clone + 'static,
+{
+    prop_oneof![
+        item_gen.prop_map(Operation::Append),
+        Just(Operation::Mark),
+        prop_oneof![
+            Just(Operation::CurrentLeaf),
+            Just(Operation::CurrentPosition),
+            Just(Operation::MarkedPositions),
+        ],
+        Just(Operation::GarbageCollect),
+        pos_gen
+            .clone()
+            .prop_map(|i| Operation::MarkedLeaf(Position::from(i))),
+        pos_gen
+            .clone()
+            .prop_map(|i| Operation::Unmark(Position::from(i))),
+        Just(Operation::Checkpoint),
+        Just(Operation::Rewind),
+        pos_gen
+            .prop_flat_map(|i| (0usize..10)
+                .prop_map(move |depth| Operation::Authpath(Position::from(i), depth))),
+    ]
+}
+
+pub fn apply_operation<H, T: Tree<H>>(tree: &mut T, op: Operation<H>) {
+    match op {
+        Append(value) => {
+            tree.append(&value);
+        }
+        Mark => {
+            tree.mark();
+        }
+        Unmark(position) => {
+            tree.remove_mark(position);
+        }
+        Checkpoint => {
+            tree.checkpoint();
+        }
+        Rewind => {
+            tree.rewind();
+        }
+        CurrentPosition => {}
+        CurrentLeaf => {}
+        Authpath(_, _) => {}
+        MarkedLeaf(_) => {}
+        MarkedPositions => {}
+        GarbageCollect => {}
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
