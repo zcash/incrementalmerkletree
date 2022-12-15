@@ -1300,7 +1300,10 @@ mod tests {
 
     use super::*;
     use crate::testing::tests;
-    use incrementalmerkletree::testing::{apply_operation, arb_operation, Frontier, Tree};
+    use incrementalmerkletree::testing::{
+        apply_operation, arb_operation, check_checkpoint_rewind, check_root_hashes,
+        check_witnesses, Frontier, Tree,
+    };
 
     impl<H: Hashable + Clone, const DEPTH: u8> Frontier<H> for super::Frontier<H, DEPTH> {
         fn append(&mut self, value: &H) -> bool {
@@ -1537,17 +1540,17 @@ mod tests {
 
     #[test]
     fn root_hashes() {
-        tests::check_root_hashes(BridgeTree::<String, 4>::new);
+        check_root_hashes(BridgeTree::<String, 4>::new);
     }
 
     #[test]
     fn witnesss() {
-        tests::check_witnesss(BridgeTree::<String, 4>::new);
+        check_witnesses(BridgeTree::<String, 4>::new);
     }
 
     #[test]
     fn checkpoint_rewind() {
-        tests::check_checkpoint_rewind(BridgeTree::<String, 4>::new);
+        check_checkpoint_rewind(BridgeTree::<String, 4>::new);
     }
 
     #[test]

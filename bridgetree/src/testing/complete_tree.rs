@@ -256,7 +256,7 @@ mod tests {
     use super::CompleteTree;
     use crate::testing::tests::{self, compute_root_from_witness};
     use incrementalmerkletree::{
-        testing::{SipHashable, Tree},
+        testing::{check_checkpoint_rewind, check_root_hashes, check_witnesses, SipHashable, Tree},
         Hashable, Level, Position,
     };
 
@@ -302,12 +302,12 @@ mod tests {
 
     #[test]
     fn root_hashes() {
-        tests::check_root_hashes(|max_c| CompleteTree::<String>::new(4, max_c));
+        check_root_hashes(|max_c| CompleteTree::<String>::new(4, max_c));
     }
 
     #[test]
     fn witnesss() {
-        tests::check_witnesss(|max_c| CompleteTree::<String>::new(4, max_c));
+        check_witnesses(|max_c| CompleteTree::<String>::new(4, max_c));
     }
 
     #[test]
@@ -350,7 +350,7 @@ mod tests {
 
     #[test]
     fn checkpoint_rewind() {
-        tests::check_checkpoint_rewind(|max_c| CompleteTree::<String>::new(4, max_c));
+        check_checkpoint_rewind(|max_c| CompleteTree::<String>::new(4, max_c));
     }
 
     #[test]

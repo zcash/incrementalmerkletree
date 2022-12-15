@@ -18,9 +18,9 @@ and this project adheres to Rust's notion of
 A `test-dependencies` feature has been added. This makes available a `testing`
 module to users of this crate, which contains `proptest` generators for types
 from this crate as well as a number of tools for comparison testing between
-`Tree` implementations.  The `Frontier` and `Tree` traits have been moved to
-the `testing` module, as there is not another good use case for polymorphism
-over tree implementations.
+`Tree` implementations and a number of generalized example tests. The
+`Frontier` and `Tree` traits have been moved to the `testing` module, as there
+is not another good use case for polymorphism over tree implementations.
 
 ### Changed
 

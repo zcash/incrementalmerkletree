@@ -231,3 +231,290 @@ impl Hashable for String {
         a.to_string() + b
     }
 }
+
+//
+// Shared example tests
+//
+
+pub fn check_root_hashes<T: Tree<String>, F: Fn(usize) -> T>(new_tree: F) {
+    let mut tree = new_tree(100);
+    assert_eq!(tree.root(0).unwrap(), "________________");
+
+    tree.append(&"a".to_string());
+    assert_eq!(tree.root(0).unwrap().len(), 16);
+    assert_eq!(tree.root(0).unwrap(), "a_______________");
+
+    tree.append(&"b".to_string());
+    assert_eq!(tree.root(0).unwrap(), "ab______________");
+
+    tree.append(&"c".to_string());
+    assert_eq!(tree.root(0).unwrap(), "abc_____________");
+
+    let mut t = new_tree(100);
+    t.append(&"a".to_string());
+    t.checkpoint();
+    t.mark();
+    t.append(&"a".to_string());
+    t.append(&"a".to_string());
+    t.append(&"a".to_string());
+    assert_eq!(t.root(0).unwrap(), "aaaa____________");
+}
+
+pub fn check_witnesses<T: Tree<String> + std::fmt::Debug, F: Fn(usize) -> T>(new_tree: F) {
+    let mut tree = new_tree(100);
+    tree.append(&"a".to_string());
+    tree.mark();
+    assert_eq!(
+        tree.witness(Position::from(0), &tree.root(0).unwrap()),
+        Some(vec![
+            "_".to_string(),
+            "__".to_string(),
+            "____".to_string(),
+            "________".to_string()
+        ])
+    );
+
+    tree.append(&"b".to_string());
+    assert_eq!(
+        tree.witness(0.into(), &tree.root(0).unwrap()),
+        Some(vec![
+            "b".to_string(),
+            "__".to_string(),
+            "____".to_string(),
+            "________".to_string()
+        ])
+    );
+
+    tree.append(&"c".to_string());
+    tree.mark();
+    assert_eq!(
+        tree.witness(Position::from(2), &tree.root(0).unwrap()),
+        Some(vec![
+            "_".to_string(),
+            "ab".to_string(),
+            "____".to_string(),
+            "________".to_string()
+        ])
+    );
+
+    tree.append(&"d".to_string());
+    assert_eq!(
+        tree.witness(Position::from(2), &tree.root(0).unwrap()),
+        Some(vec![
+            "d".to_string(),
+            "ab".to_string(),
+            "____".to_string(),
+            "________".to_string()
+        ])
+    );
+
+    tree.append(&"e".to_string());
+    assert_eq!(
+        tree.witness(Position::from(2), &tree.root(0).unwrap()),
+        Some(vec![
+            "d".to_string(),
+            "ab".to_string(),
+            "e___".to_string(),
+            "________".to_string()
+        ])
+    );
+
+    let mut tree = new_tree(100);
+    tree.append(&"a".to_string());
+    tree.mark();
+    for c in 'b'..'h' {
+        tree.append(&c.to_string());
+    }
+    tree.mark();
+    tree.append(&"h".to_string());
+
+    assert_eq!(
+        tree.witness(0.into(), &tree.root(0).unwrap()),
+        Some(vec![
+            "b".to_string(),
+            "cd".to_string(),
+            "efgh".to_string(),
+            "________".to_string()
+        ])
+    );
+
+    let mut tree = new_tree(100);
+    tree.append(&"a".to_string());
+    tree.mark();
+    tree.append(&"b".to_string());
+    tree.append(&"c".to_string());
+    tree.append(&"d".to_string());
+    tree.mark();
+    tree.append(&"e".to_string());
+    tree.mark();
+    tree.append(&"f".to_string());
+    tree.mark();
+    tree.append(&"g".to_string());
+
+    assert_eq!(
+        tree.witness(Position::from(5), &tree.root(0).unwrap()),
+        Some(vec![
+            "e".to_string(),
+            "g_".to_string(),
+            "abcd".to_string(),
+            "________".to_string()
+        ])
+    );
+
+    let mut tree = new_tree(100);
+    for c in 'a'..'l' {
+        tree.append(&c.to_string());
+    }
+    tree.mark();
+    tree.append(&'l'.to_string());
+
+    assert_eq!(
+        tree.witness(Position::from(10), &tree.root(0).unwrap()),
+        Some(vec![
+            "l".to_string(),
+            "ij".to_string(),
+            "____".to_string(),
+            "abcdefgh".to_string()
+        ])
+    );
+
+    let mut tree = new_tree(100);
+    tree.append(&'a'.to_string());
+    tree.mark();
+    tree.checkpoint();
+    assert!(tree.rewind());
+    for c in 'b'..'f' {
+        tree.append(&c.to_string());
+    }
+    tree.mark();
+    for c in 'f'..'i' {
+        tree.append(&c.to_string());
+    }
+
+    assert_eq!(
+        tree.witness(0.into(), &tree.root(0).unwrap()),
+        Some(vec![
+            "b".to_string(),
+            "cd".to_string(),
+            "efgh".to_string(),
+            "________".to_string()
+        ])
+    );
+
+    let mut tree = new_tree(100);
+    tree.append(&'a'.to_string());
+    tree.append(&'b'.to_string());
+    tree.append(&'c'.to_string());
+    tree.mark();
+    tree.append(&'d'.to_string());
+    tree.append(&'e'.to_string());
+    tree.append(&'f'.to_string());
+    tree.append(&'g'.to_string());
+    tree.mark();
+    tree.checkpoint();
+    tree.append(&'h'.to_string());
+    assert!(tree.rewind());
+
+    assert_eq!(
+        tree.witness(Position::from(2), &tree.root(0).unwrap()),
+        Some(vec![
+            "d".to_string(),
+            "ab".to_string(),
+            "efg_".to_string(),
+            "________".to_string()
+        ])
+    );
+
+    let mut tree = new_tree(100);
+    tree.append(&'a'.to_string());
+    tree.append(&'b'.to_string());
+    tree.mark();
+    assert_eq!(
+        tree.witness(Position::from(0), &tree.root(0).unwrap()),
+        None
+    );
+
+    let mut tree = new_tree(100);
+    for c in 'a'..'n' {
+        tree.append(&c.to_string());
+    }
+    tree.mark();
+    tree.append(&'n'.to_string());
+    tree.mark();
+    tree.append(&'o'.to_string());
+    tree.append(&'p'.to_string());
+
+    assert_eq!(
+        tree.witness(Position::from(12), &tree.root(0).unwrap()),
+        Some(vec![
+            "n".to_string(),
+            "op".to_string(),
+            "ijkl".to_string(),
+            "abcdefgh".to_string()
+        ])
+    );
+
+    let ops = ('a'..='l')
+        .into_iter()
+        .map(|c| Append(c.to_string()))
+        .chain(Some(Mark))
+        .chain(Some(Append('m'.to_string())))
+        .chain(Some(Append('n'.to_string())))
+        .chain(Some(Authpath(11usize.into(), 0)))
+        .collect::<Vec<_>>();
+
+    let mut tree = new_tree(100);
+    assert_eq!(
+        Operation::apply_all(&ops, &mut tree),
+        Some((
+            Position::from(11),
+            vec![
+                "k".to_string(),
+                "ij".to_string(),
+                "mn__".to_string(),
+                "abcdefgh".to_string()
+            ]
+        ))
+    );
+}
+
+pub fn check_checkpoint_rewind<T: Tree<String>, F: Fn(usize) -> T>(new_tree: F) {
+    let mut t = new_tree(100);
+    assert!(!t.rewind());
+
+    let mut t = new_tree(100);
+    t.checkpoint();
+    assert!(t.rewind());
+
+    let mut t = new_tree(100);
+    t.append(&"a".to_string());
+    t.checkpoint();
+    t.append(&"b".to_string());
+    t.mark();
+    assert!(t.rewind());
+    assert_eq!(Some(Position::from(0)), t.current_position());
+
+    let mut t = new_tree(100);
+    t.append(&"a".to_string());
+    t.mark();
+    t.checkpoint();
+    assert!(t.rewind());
+
+    let mut t = new_tree(100);
+    t.append(&"a".to_string());
+    t.checkpoint();
+    t.mark();
+    t.append(&"a".to_string());
+    assert!(t.rewind());
+    assert_eq!(Some(Position::from(0)), t.current_position());
+
+    let mut t = new_tree(100);
+    t.append(&"a".to_string());
+    t.checkpoint();
+    t.checkpoint();
+    assert!(t.rewind());
+    t.append(&"b".to_string());
+    assert!(t.rewind());
+    t.append(&"b".to_string());
+    assert_eq!(t.root(0).unwrap(), "ab______________");
+}
