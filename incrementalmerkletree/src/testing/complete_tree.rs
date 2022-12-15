@@ -1,8 +1,8 @@
 //! Sample implementation of the Tree interface.
 use std::cmp::min;
-use std::collections::{BTreeSet, VecDeque};
+use std::collections::{BTreeMap, BTreeSet};
 
-use crate::{testing::Tree, Hashable, Level, Position};
+use crate::{testing::Tree, Hashable, Level, Position, Retention};
 
 pub(crate) fn root<H: Hashable + Clone>(leaves: &[H], depth: u8) -> H {
     let empty_leaf = H::empty_leaf();
@@ -38,7 +38,7 @@ pub(crate) fn root<H: Hashable + Clone>(leaves: &[H], depth: u8) -> H {
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Checkpoint {
-    /// The number of leaves that will be retained
+    /// The number of leaves in the tree when the checkpoint was created.
     leaves_len: usize,
     /// A set of the positions that have been marked during the period that this
     /// checkpoint is the current checkpoint.
@@ -50,7 +50,7 @@ pub struct Checkpoint {
 }
 
 impl Checkpoint {
-    pub fn at_length(leaves_len: usize) -> Self {
+    fn at_length(leaves_len: usize) -> Self {
         Checkpoint {
             leaves_len,
             marked: BTreeSet::new(),
@@ -60,71 +60,69 @@ impl Checkpoint {
 }
 
 #[derive(Clone, Debug)]
-pub struct CompleteTree<H, const DEPTH: u8> {
+pub struct CompleteTree<H, C: Ord, const DEPTH: u8> {
     leaves: Vec<Option<H>>,
     marks: BTreeSet<Position>,
-    checkpoints: VecDeque<Checkpoint>,
+    checkpoints: BTreeMap<C, Checkpoint>,
     max_checkpoints: usize,
 }
 
-impl<H: Hashable, const DEPTH: u8> CompleteTree<H, DEPTH> {
+impl<H: Hashable, C: Clone + Ord + core::fmt::Debug, const DEPTH: u8> CompleteTree<H, C, DEPTH> {
     /// Creates a new, empty binary tree
-    pub fn new(max_checkpoints: usize) -> Self {
+    pub fn new(max_checkpoints: usize, initial_checkpoint_id: C) -> Self {
         Self {
             leaves: vec![],
             marks: BTreeSet::new(),
-            checkpoints: VecDeque::from(vec![Checkpoint::at_length(0)]),
+            checkpoints: BTreeMap::from([(initial_checkpoint_id, Checkpoint::at_length(0))]),
             max_checkpoints,
         }
     }
 
-    fn append(&mut self, value: H) -> bool {
-        if self.leaves.len() == (1 << DEPTH) {
-            false
-        } else {
-            self.leaves.push(Some(value));
-            true
-        }
-    }
-
-    fn leaves_at_checkpoint_depth(&self, checkpoint_depth: usize) -> Option<usize> {
-        if checkpoint_depth == 0 {
-            Some(self.leaves.len())
-        } else if checkpoint_depth <= self.checkpoints.len() {
-            self.checkpoints
-                .get(self.checkpoints.len() - checkpoint_depth)
-                .map(|c| c.leaves_len)
-        } else {
-            None
-        }
-    }
-}
-
-impl<H: Hashable + PartialEq + Clone, const DEPTH: u8> CompleteTree<H, DEPTH> {
-    /// Removes the oldest checkpoint. Returns true if successful and false if
-    /// there are fewer than `self.max_checkpoints` checkpoints.
-    fn drop_oldest_checkpoint(&mut self) -> bool {
-        if self.checkpoints.len() > self.max_checkpoints {
-            let c = self.checkpoints.pop_front().unwrap();
-            for pos in c.forgotten.iter() {
-                self.marks.remove(pos);
+    /// Appends a new value to the tree at the next available slot.
+    ///
+    /// Returns true if successful and false if the tree is full or, for values with `Checkpoint`
+    /// retention, if a checkpoint id would be introduced that is less than or equal to the current
+    /// maximum checkpoint id.
+    fn append(&mut self, value: H, retention: Retention<C>) -> Result<(), AppendError<C>> {
+        fn append<H, C>(
+            leaves: &mut Vec<Option<H>>,
+            value: H,
+            depth: u8,
+        ) -> Result<(), AppendError<C>> {
+            if leaves.len() < (1 << depth) {
+                leaves.push(Some(value));
+                Ok(())
+            } else {
+                Err(AppendError::TreeFull)
             }
-            true
-        } else {
-            false
         }
-    }
-}
 
-impl<H: Hashable + PartialEq + Clone + std::fmt::Debug, const DEPTH: u8> Tree<H>
-    for CompleteTree<H, DEPTH>
-{
-    fn depth(&self) -> u8 {
-        DEPTH
-    }
+        match retention {
+            Retention::Marked => {
+                append(&mut self.leaves, value, DEPTH)?;
+                self.mark();
+            }
+            Retention::Checkpoint { id, is_marked } => {
+                let latest_checkpoint = self.checkpoints.keys().rev().next();
+                if Some(&id) > latest_checkpoint {
+                    append(&mut self.leaves, value, DEPTH)?;
+                    if is_marked {
+                        self.mark();
+                    }
+                    self.checkpoint(id, self.current_position());
+                } else {
+                    return Err(AppendError::CheckpointOutOfOrder {
+                        current_max: latest_checkpoint.cloned(),
+                        checkpoint: id,
+                    });
+                }
+            }
+            Retention::Ephemeral => {
+                append(&mut self.leaves, value, DEPTH)?;
+            }
+        }
 
-    fn append(&mut self, value: H) -> bool {
-        Self::append(self, value)
+        Ok(())
     }
 
     fn current_position(&self) -> Option<Position> {
@@ -133,6 +131,90 @@ impl<H: Hashable + PartialEq + Clone + std::fmt::Debug, const DEPTH: u8> Tree<H>
         } else {
             Some((self.leaves.len() - 1).into())
         }
+    }
+
+    fn mark(&mut self) -> Option<Position> {
+        match self.current_position() {
+            Some(pos) => {
+                if !self.marks.contains(&pos) {
+                    self.marks.insert(pos);
+                    self.checkpoints
+                        .iter_mut()
+                        .rev()
+                        .next()
+                        .unwrap()
+                        .1
+                        .marked
+                        .insert(pos);
+                }
+                Some(pos)
+            }
+            None => None,
+        }
+    }
+
+    fn checkpoint(&mut self, id: C, pos: Option<Position>) {
+        self.checkpoints.insert(
+            id,
+            Checkpoint::at_length(pos.map_or_else(|| 0, |p| usize::from(p) + 1)),
+        );
+        if self.checkpoints.len() > self.max_checkpoints {
+            self.drop_oldest_checkpoint();
+        }
+    }
+
+    fn leaves_at_checkpoint_depth(&self, checkpoint_depth: usize) -> Option<usize> {
+        if checkpoint_depth == 0 {
+            Some(self.leaves.len())
+        } else {
+            self.checkpoints
+                .iter()
+                .rev()
+                .skip(checkpoint_depth - 1)
+                .map(|(_, c)| c.leaves_len)
+                .next()
+        }
+    }
+
+    /// Removes the oldest checkpoint. Returns true if successful and false if
+    /// there are fewer than `self.max_checkpoints` checkpoints.
+    fn drop_oldest_checkpoint(&mut self) -> bool {
+        if self.checkpoints.len() > self.max_checkpoints {
+            let (id, c) = self.checkpoints.iter().next().unwrap();
+            for pos in c.forgotten.iter() {
+                self.marks.remove(pos);
+            }
+            let id = id.clone(); // needed to avoid mutable/immutable borrow conflict
+            self.checkpoints.remove(&id);
+            true
+        } else {
+            false
+        }
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+enum AppendError<C> {
+    TreeFull,
+    CheckpointOutOfOrder {
+        current_max: Option<C>,
+        checkpoint: C,
+    },
+}
+
+impl<H: Hashable + PartialEq + Clone, C: Ord + Clone + core::fmt::Debug, const DEPTH: u8> Tree<H, C>
+    for CompleteTree<H, C, DEPTH>
+{
+    fn depth(&self) -> u8 {
+        DEPTH
+    }
+
+    fn append(&mut self, value: H, retention: Retention<C>) -> bool {
+        Self::append(self, value, retention).is_ok()
+    }
+
+    fn current_position(&self) -> Option<Position> {
+        Self::current_position(self)
     }
 
     fn current_leaf(&self) -> Option<&H> {
@@ -149,19 +231,6 @@ impl<H: Hashable + PartialEq + Clone + std::fmt::Debug, const DEPTH: u8> Tree<H>
         }
     }
 
-    fn mark(&mut self) -> Option<Position> {
-        match self.current_position() {
-            Some(pos) => {
-                if !self.marks.contains(&pos) {
-                    self.marks.insert(pos);
-                    self.checkpoints.back_mut().unwrap().marked.insert(pos);
-                }
-                Some(pos)
-            }
-            None => None,
-        }
-    }
-
     fn marked_positions(&self) -> BTreeSet<Position> {
         self.marks.clone()
     }
@@ -173,18 +242,13 @@ impl<H: Hashable + PartialEq + Clone + std::fmt::Debug, const DEPTH: u8> Tree<H>
 
     fn witness(&self, position: Position, checkpoint_depth: usize) -> Option<Vec<H>> {
         if self.marks.contains(&position) && checkpoint_depth <= self.checkpoints.len() {
-            let checkpoint_idx = self.checkpoints.len() - checkpoint_depth;
-            let len = if checkpoint_depth == 0 {
-                self.leaves.len()
-            } else {
-                self.checkpoints[checkpoint_idx].leaves_len
-            };
-
+            let leaves_len = self.leaves_at_checkpoint_depth(checkpoint_depth)?;
+            let c_idx = self.checkpoints.len() - checkpoint_depth;
             if self
                 .checkpoints
                 .iter()
-                .skip(checkpoint_idx)
-                .any(|c| c.marked.contains(&position))
+                .skip(c_idx)
+                .any(|(_, c)| c.marked.contains(&position))
             {
                 // The requested position was marked after the checkpoint was created, so we
                 // cannot create a witness.
@@ -195,8 +259,8 @@ impl<H: Hashable + PartialEq + Clone + std::fmt::Debug, const DEPTH: u8> Tree<H>
                 let mut leaf_idx: usize = position.into();
                 for bit in 0..DEPTH {
                     leaf_idx ^= 1 << bit;
-                    path.push(if leaf_idx < len {
-                        let subtree_end = min(leaf_idx + (1 << bit), len);
+                    path.push(if leaf_idx < leaves_len {
+                        let subtree_end = min(leaf_idx + (1 << bit), leaves_len);
                         root(&self.leaves[leaf_idx..subtree_end], bit)?
                     } else {
                         H::empty_root(Level::from(bit))
@@ -214,8 +278,11 @@ impl<H: Hashable + PartialEq + Clone + std::fmt::Debug, const DEPTH: u8> Tree<H>
     fn remove_mark(&mut self, position: Position) -> bool {
         if self.marks.contains(&position) {
             self.checkpoints
-                .back_mut()
+                .iter_mut()
+                .rev()
+                .next()
                 .unwrap()
+                .1
                 .forgotten
                 .insert(position);
             true
@@ -224,21 +291,24 @@ impl<H: Hashable + PartialEq + Clone + std::fmt::Debug, const DEPTH: u8> Tree<H>
         }
     }
 
-    fn checkpoint(&mut self) {
-        self.checkpoints
-            .push_back(Checkpoint::at_length(self.leaves.len()));
-        if self.checkpoints.len() > self.max_checkpoints {
-            self.drop_oldest_checkpoint();
+    fn checkpoint(&mut self, id: C) -> bool {
+        if Some(&id) > self.checkpoints.iter().rev().next().map(|(id, _)| id) {
+            Self::checkpoint(self, id, self.current_position());
+            true
+        } else {
+            false
         }
     }
 
     fn rewind(&mut self) -> bool {
         if self.checkpoints.len() > 1 {
-            let c = self.checkpoints.pop_back().unwrap();
+            let (id, c) = self.checkpoints.iter().rev().next().unwrap();
             self.leaves.truncate(c.leaves_len);
             for pos in c.marked.iter() {
                 self.marks.remove(pos);
             }
+            let id = id.clone(); // needed to avoid mutable/immutable borrow conflict
+            self.checkpoints.remove(&id);
             true
         } else {
             false
@@ -256,7 +326,7 @@ mod tests {
             check_checkpoint_rewind, check_rewind_remove_mark, check_root_hashes, check_witnesses,
             compute_root_from_witness, SipHashable, Tree,
         },
-        Hashable, Level, Position,
+        Hashable, Level, Position, Retention,
     };
 
     #[test]
@@ -267,7 +337,7 @@ mod tests {
             expected = SipHashable::combine(lvl.into(), &expected, &expected);
         }
 
-        let tree = CompleteTree::<SipHashable, DEPTH>::new(100);
+        let tree = CompleteTree::<SipHashable, (), DEPTH>::new(100, ());
         assert_eq!(tree.root(0).unwrap(), expected);
     }
 
@@ -276,11 +346,11 @@ mod tests {
         const DEPTH: u8 = 3;
         let values = (0..(1 << DEPTH)).into_iter().map(SipHashable);
 
-        let mut tree = CompleteTree::<SipHashable, DEPTH>::new(100);
+        let mut tree = CompleteTree::<SipHashable, (), DEPTH>::new(100, ());
         for value in values {
-            assert!(tree.append(value));
+            assert!(tree.append(value, Retention::Ephemeral).is_ok());
         }
-        assert!(!tree.append(SipHashable(0)));
+        assert!(tree.append(SipHashable(0), Retention::Ephemeral).is_err());
 
         let expected = SipHashable::combine(
             Level::from(2),
@@ -301,25 +371,30 @@ mod tests {
 
     #[test]
     fn root_hashes() {
-        check_root_hashes(CompleteTree::<String, 4>::new);
+        check_root_hashes(|max_checkpoints| {
+            CompleteTree::<String, usize, 4>::new(max_checkpoints, 0)
+        });
     }
 
     #[test]
     fn witness() {
-        check_witnesses(CompleteTree::<String, 4>::new);
+        check_witnesses(|max_checkpoints| {
+            CompleteTree::<String, usize, 4>::new(max_checkpoints, 0)
+        });
     }
 
     #[test]
     fn correct_witness() {
+        use crate::{testing::Tree, Retention};
+
         const DEPTH: u8 = 3;
         let values = (0..(1 << DEPTH)).into_iter().map(SipHashable);
 
-        let mut tree = CompleteTree::<SipHashable, DEPTH>::new(100);
+        let mut tree = CompleteTree::<SipHashable, (), DEPTH>::new(100, ());
         for value in values {
-            assert!(tree.append(value));
-            tree.mark();
+            assert!(Tree::append(&mut tree, value, Retention::Marked));
         }
-        assert!(!tree.append(SipHashable(0)));
+        assert!(tree.append(SipHashable(0), Retention::Ephemeral).is_err());
 
         let expected = SipHashable::combine(
             <Level>::from(2),
@@ -349,11 +424,15 @@ mod tests {
 
     #[test]
     fn checkpoint_rewind() {
-        check_checkpoint_rewind(CompleteTree::<String, 4>::new);
+        check_checkpoint_rewind(|max_checkpoints| {
+            CompleteTree::<String, usize, 4>::new(max_checkpoints, 0)
+        });
     }
 
     #[test]
     fn rewind_remove_mark() {
-        check_rewind_remove_mark(CompleteTree::<String, 4>::new);
+        check_rewind_remove_mark(|max_checkpoints| {
+            CompleteTree::<String, usize, 4>::new(max_checkpoints, 0)
+        });
     }
 }

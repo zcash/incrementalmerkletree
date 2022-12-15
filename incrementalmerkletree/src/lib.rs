@@ -30,6 +30,17 @@ impl<C> Retention<C> {
             Retention::Marked => true,
         }
     }
+
+    pub fn map<'a, D, F: Fn(&'a C) -> D>(&'a self, f: F) -> Retention<D> {
+        match self {
+            Retention::Ephemeral => Retention::Ephemeral,
+            Retention::Checkpoint { id, is_marked } => Retention::Checkpoint {
+                id: f(id),
+                is_marked: *is_marked,
+            },
+            Retention::Marked => Retention::Marked,
+        }
+    }
 }
 
 /// A type representing the position of a leaf in a Merkle tree.

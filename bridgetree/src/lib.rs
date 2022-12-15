@@ -37,7 +37,7 @@ use std::fmt::Debug;
 use std::mem::size_of;
 use std::ops::Range;
 
-pub use incrementalmerkletree::{Address, Hashable, Level, Position};
+pub use incrementalmerkletree::{Address, Hashable, Level, Position, Retention};
 
 /// Validation errors that can occur during reconstruction of a Merkle frontier from
 /// its constituent parts.
@@ -614,6 +614,8 @@ impl<'a, H: Hashable + Ord + Clone + 'a> MerkleBridge<H> {
 /// previous state.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Checkpoint {
+    /// The unique identifier for this checkpoint.
+    id: usize,
     /// The number of bridges that will be retained in a rewind.
     bridges_len: usize,
     /// A set of the positions that have been marked during the period that this
@@ -628,11 +630,13 @@ pub struct Checkpoint {
 impl Checkpoint {
     /// Creates a new checkpoint from its constituent parts.
     pub fn from_parts(
+        id: usize,
         bridges_len: usize,
         marked: BTreeSet<Position>,
         forgotten: BTreeSet<Position>,
     ) -> Self {
         Self {
+            id,
             bridges_len,
             marked,
             forgotten,
@@ -640,12 +644,19 @@ impl Checkpoint {
     }
 
     /// Creates a new empty checkpoint for the specified [`BridgeTree`] state.
-    pub fn at_length(bridges_len: usize) -> Self {
+    pub fn at_length(bridges_len: usize, id: usize) -> Self {
         Checkpoint {
+            id,
             bridges_len,
             marked: BTreeSet::new(),
             forgotten: BTreeSet::new(),
         }
+    }
+
+    /// The unique identifier for the checkpoint, which is simply an automatically incrementing
+    /// index over all checkpoints that have ever been created in the history of the tree.
+    pub fn id(&self) -> usize {
+        self.id
     }
 
     /// Returns the length of the [`BridgeTree::prior_bridges`] vector of the [`BridgeTree`] to
@@ -750,13 +761,13 @@ impl<H, const DEPTH: u8> BridgeTree<H, DEPTH> {
     ///
     /// Panics if `max_checkpoints < 1` because mark/rewind logic depends upon the presence
     /// of checkpoints to function.
-    pub fn new(max_checkpoints: usize) -> Self {
+    pub fn new(max_checkpoints: usize, initial_checkpoint_id: usize) -> Self {
         assert!(max_checkpoints >= 1);
         Self {
             prior_bridges: vec![],
             current_bridge: None,
             saved: BTreeMap::new(),
-            checkpoints: VecDeque::from(vec![Checkpoint::at_length(0)]),
+            checkpoints: VecDeque::from(vec![Checkpoint::at_length(0, initial_checkpoint_id)]),
             max_checkpoints,
         }
     }
@@ -1033,34 +1044,42 @@ impl<H: Hashable + Ord + Clone, const DEPTH: u8> BridgeTree<H, DEPTH> {
         }
     }
 
-    /// Creates a new checkpoint for the current tree state. It is valid to
-    /// have multiple checkpoints for the same tree state, and each `rewind`
-    /// call will remove a single checkpoint.
-    pub fn checkpoint(&mut self) {
-        match self.current_bridge.take() {
-            Some(cur_b) => {
-                // Do not create a duplicate bridge
-                if self
-                    .prior_bridges
-                    .last()
-                    .map_or(false, |pb| pb.position() == cur_b.position())
-                {
-                    self.current_bridge = Some(cur_b);
-                } else {
-                    self.current_bridge = Some(cur_b.successor(false));
-                    self.prior_bridges.push(cur_b);
+    /// Creates a new checkpoint for the current tree state, with the given identifier.
+    ///
+    /// It is valid to have multiple checkpoints for the same tree state, and each `rewind` call
+    /// will remove a single checkpoint. Successive checkpoint identifiers must always be provided
+    /// in increasing order.
+    pub fn checkpoint(&mut self, id: usize) -> bool {
+        if Some(id) > self.checkpoints.back().map(|c| c.id) {
+            match self.current_bridge.take() {
+                Some(cur_b) => {
+                    // Do not create a duplicate bridge
+                    if self
+                        .prior_bridges
+                        .last()
+                        .map_or(false, |pb| pb.position() == cur_b.position())
+                    {
+                        self.current_bridge = Some(cur_b);
+                    } else {
+                        self.current_bridge = Some(cur_b.successor(false));
+                        self.prior_bridges.push(cur_b);
+                    }
+
+                    self.checkpoints
+                        .push_back(Checkpoint::at_length(self.prior_bridges.len(), id));
                 }
-
-                self.checkpoints
-                    .push_back(Checkpoint::at_length(self.prior_bridges.len()));
+                None => {
+                    self.checkpoints.push_back(Checkpoint::at_length(0, id));
+                }
             }
-            None => {
-                self.checkpoints.push_back(Checkpoint::at_length(0));
-            }
-        }
 
-        if self.checkpoints.len() > self.max_checkpoints {
-            self.drop_oldest_checkpoint();
+            if self.checkpoints.len() > self.max_checkpoints {
+                self.drop_oldest_checkpoint();
+            }
+
+            true
+        } else {
+            false
         }
     }
 
@@ -1283,9 +1302,18 @@ mod tests {
         }
     }
 
-    impl<H: Hashable + Ord + Clone, const DEPTH: u8> Tree<H> for BridgeTree<H, DEPTH> {
-        fn append(&mut self, value: H) -> bool {
-            BridgeTree::append(self, value)
+    impl<H: Hashable + Ord + Clone, const DEPTH: u8> Tree<H, usize> for BridgeTree<H, DEPTH> {
+        fn append(&mut self, value: H, retention: Retention<usize>) -> bool {
+            let appended = BridgeTree::append(self, value);
+            if appended {
+                if retention.is_marked() {
+                    BridgeTree::mark(self);
+                }
+                if let Retention::Checkpoint { id, .. } = retention {
+                    BridgeTree::checkpoint(self, id);
+                }
+            }
+            appended
         }
 
         fn depth(&self) -> u8 {
@@ -1304,10 +1332,6 @@ mod tests {
             BridgeTree::get_marked_leaf(self, position)
         }
 
-        fn mark(&mut self) -> Option<Position> {
-            BridgeTree::mark(self)
-        }
-
         fn marked_positions(&self) -> BTreeSet<Position> {
             BridgeTree::marked_positions(self)
         }
@@ -1324,8 +1348,8 @@ mod tests {
             BridgeTree::remove_mark(self, position)
         }
 
-        fn checkpoint(&mut self) {
-            BridgeTree::checkpoint(self)
+        fn checkpoint(&mut self, id: usize) -> bool {
+            BridgeTree::checkpoint(self, id)
         }
 
         fn rewind(&mut self) -> bool {
@@ -1430,7 +1454,7 @@ mod tests {
 
     #[test]
     fn tree_depth() {
-        let mut tree = BridgeTree::<String, 3>::new(100);
+        let mut tree = BridgeTree::<String, 3>::new(100, 0);
         for c in 'a'..'i' {
             assert!(tree.append(c.to_string()))
         }
@@ -1441,8 +1465,8 @@ mod tests {
         mut tree: BridgeTree<H, DEPTH>,
     ) {
         // Add checkpoints until we're sure everything that can be gc'ed will be gc'ed
-        for _ in 0..tree.max_checkpoints {
-            tree.checkpoint();
+        for i in 0..tree.max_checkpoints {
+            tree.checkpoint(i + 1);
         }
 
         let mut tree_mut = tree.clone();
@@ -1462,9 +1486,9 @@ mod tests {
     {
         proptest::collection::vec(arb_operation(item_gen, 0..max_count), 0..max_count).prop_map(
             |ops| {
-                let mut tree: BridgeTree<G::Value, 8> = BridgeTree::new(10);
-                for op in ops {
-                    apply_operation(&mut tree, op);
+                let mut tree: BridgeTree<G::Value, 8> = BridgeTree::new(10, 0);
+                for (i, op) in ops.into_iter().enumerate() {
+                    apply_operation(&mut tree, op.map_checkpoint_id(|_| i));
                 }
                 tree
             },
@@ -1498,45 +1522,47 @@ mod tests {
 
     #[test]
     fn root_hashes() {
-        check_root_hashes(BridgeTree::<String, 4>::new);
+        check_root_hashes(|max_checkpoints| BridgeTree::<String, 4>::new(max_checkpoints, 0));
     }
 
     #[test]
-    fn witnesss() {
-        check_witnesses(BridgeTree::<String, 4>::new);
+    fn witness() {
+        check_witnesses(|max_checkpoints| BridgeTree::<String, 4>::new(max_checkpoints, 0));
     }
 
     #[test]
     fn checkpoint_rewind() {
-        check_checkpoint_rewind(BridgeTree::<String, 4>::new);
+        check_checkpoint_rewind(|max_checkpoints| BridgeTree::<String, 4>::new(max_checkpoints, 0));
     }
 
     #[test]
     fn rewind_remove_mark() {
-        check_rewind_remove_mark(BridgeTree::<String, 4>::new);
+        check_rewind_remove_mark(|max_checkpoints| {
+            BridgeTree::<String, 4>::new(max_checkpoints, 0)
+        });
     }
 
     #[test]
     fn garbage_collect() {
-        let mut tree: BridgeTree<String, 7> = BridgeTree::new(100);
+        let mut tree: BridgeTree<String, 7> = BridgeTree::new(1000, 0);
         let empty_root = tree.root(0);
         tree.append("a".to_string());
-        for _ in 0..100 {
-            tree.checkpoint();
+        for i in 0..100 {
+            tree.checkpoint(i + 1);
         }
         tree.garbage_collect();
         assert!(tree.root(0) != empty_root);
         tree.rewind();
         assert!(tree.root(0) != empty_root);
 
-        let mut t = BridgeTree::<String, 7>::new(10);
+        let mut t = BridgeTree::<String, 7>::new(10, 0);
         let mut to_unmark = vec![];
         let mut has_witness = vec![];
         for i in 0usize..100 {
             let elem: String = format!("{},", i);
             assert!(t.append(elem), "Append should succeed.");
             if i % 5 == 0 {
-                t.checkpoint();
+                t.checkpoint(i + 1);
             }
             if i % 7 == 0 {
                 t.mark();
@@ -1553,7 +1579,7 @@ mod tests {
         }
         // 32 = 20 (checkpointed) + 14 (marked) - 2 (marked & checkpointed)
         assert_eq!(t.prior_bridges().len(), 20 + 14 - 2);
-        let witnesss = has_witness
+        let witness = has_witness
             .iter()
             .map(|pos| match t.witness(*pos, 0) {
                 Ok(path) => path,
@@ -1563,20 +1589,20 @@ mod tests {
         t.garbage_collect();
         // 20 = 32 - 10 (removed checkpoints) + 1 (not removed due to mark) - 3 (removed marks)
         assert_eq!(t.prior_bridges().len(), 32 - 10 + 1 - 3);
-        let retained_witnesss = has_witness
+        let retained_witness = has_witness
             .iter()
             .map(|pos| t.witness(*pos, 0).expect("Must be able to get auth path"))
             .collect::<Vec<_>>();
-        assert_eq!(witnesss, retained_witnesss);
+        assert_eq!(witness, retained_witness);
     }
 
     // Combined tree tests
     fn new_combined_tree<H: Hashable + Ord + Clone + Debug>(
         max_checkpoints: usize,
-    ) -> CombinedTree<H, CompleteTree<H, 4>, BridgeTree<H, 4>> {
+    ) -> CombinedTree<H, usize, CompleteTree<H, usize, 4>, BridgeTree<H, 4>> {
         CombinedTree::new(
-            CompleteTree::<H, 4>::new(max_checkpoints),
-            BridgeTree::<H, 4>::new(max_checkpoints),
+            CompleteTree::<H, usize, 4>::new(max_checkpoints, 0),
+            BridgeTree::<H, 4>::new(max_checkpoints, 0),
         )
     }
 
@@ -1601,7 +1627,8 @@ mod tests {
             )
         ) {
             let tree = new_combined_tree(100);
-            check_operations(tree, &ops)?;
+            let indexed_ops = ops.iter().enumerate().map(|(i, op)| op.map_checkpoint_id(|_| i + 1)).collect::<Vec<_>>();
+            check_operations(tree, &indexed_ops)?;
         }
 
         #[test]
@@ -1612,7 +1639,8 @@ mod tests {
             )
         ) {
             let tree = new_combined_tree(100);
-            check_operations(tree, &ops)?;
+            let indexed_ops = ops.iter().enumerate().map(|(i, op)| op.map_checkpoint_id(|_| i + 1)).collect::<Vec<_>>();
+            check_operations(tree, &indexed_ops)?;
         }
     }
 }
