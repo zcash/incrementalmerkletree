@@ -2,8 +2,8 @@
 use std::collections::BTreeSet;
 
 use incrementalmerkletree::{
-    testing::{Frontier, Tree},
-    Hashable, Level, Position,
+    testing::{lazy_root, Frontier, Tree},
+    Hashable, Position,
 };
 
 #[derive(Clone, Debug)]
@@ -225,38 +225,17 @@ impl<H: Hashable + PartialEq + Clone + std::fmt::Debug> Tree<H> for CompleteTree
     }
 }
 
-pub(crate) fn lazy_root<H: Hashable + Clone>(mut leaves: Vec<H>) -> H {
-    //leaves are always at level zero, so we start there.
-    let mut level = Level::from(0);
-    while leaves.len() != 1 {
-        leaves = leaves
-            .iter()
-            .enumerate()
-            .filter(|(i, _)| (i % 2) == 0)
-            .map(|(_, a)| a)
-            .zip(
-                leaves
-                    .iter()
-                    .enumerate()
-                    .filter(|(i, _)| (i % 2) == 1)
-                    .map(|(_, b)| b),
-            )
-            .map(|(a, b)| H::combine(level, a, b))
-            .collect();
-        level = level + 1;
-    }
-
-    leaves[0].clone()
-}
-
 #[cfg(test)]
 mod tests {
     use std::convert::TryFrom;
 
     use super::CompleteTree;
-    use crate::testing::tests::{self, compute_root_from_witness};
+    use crate::testing::tests;
     use incrementalmerkletree::{
-        testing::{check_checkpoint_rewind, check_root_hashes, check_witnesses, SipHashable, Tree},
+        testing::{
+            check_checkpoint_rewind, check_root_hashes, check_witnesses, compute_root_from_witness,
+            SipHashable, Tree,
+        },
         Hashable, Level, Position,
     };
 

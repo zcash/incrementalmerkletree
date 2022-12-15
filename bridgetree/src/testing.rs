@@ -8,11 +8,11 @@ pub(crate) mod tests {
 
     use crate::BridgeTree;
     use incrementalmerkletree::{
-        testing::{arb_operation, Operation, Operation::*, SipHashable, Tree},
-        Hashable, Level, Position,
+        testing::{arb_operation, check_operations, Operation, Operation::*, SipHashable, Tree},
+        Hashable, Position,
     };
 
-    use super::complete_tree::{lazy_root, CompleteTree};
+    use super::complete_tree::CompleteTree;
 
     fn append(x: &str) -> Operation<String> {
         Operation::Append(x.to_string())
@@ -211,79 +211,6 @@ pub(crate) mod tests {
         }
     }
 
-    pub(crate) fn compute_root_from_witness<H: Hashable>(
-        value: H,
-        position: Position,
-        path: &[H],
-    ) -> H {
-        let mut cur = value;
-        let mut lvl = 0.into();
-        for (i, v) in path
-            .iter()
-            .enumerate()
-            .map(|(i, v)| (((<usize>::from(position) >> i) & 1) == 1, v))
-        {
-            if i {
-                cur = H::combine(lvl, v, &cur);
-            } else {
-                cur = H::combine(lvl, &cur, v);
-            }
-            lvl = lvl + 1;
-        }
-        cur
-    }
-
-    #[test]
-    fn test_compute_root_from_witness() {
-        let expected = SipHashable::combine(
-            <Level>::from(2),
-            &SipHashable::combine(
-                Level::from(1),
-                &SipHashable::combine(0.into(), &SipHashable(0), &SipHashable(1)),
-                &SipHashable::combine(0.into(), &SipHashable(2), &SipHashable(3)),
-            ),
-            &SipHashable::combine(
-                Level::from(1),
-                &SipHashable::combine(0.into(), &SipHashable(4), &SipHashable(5)),
-                &SipHashable::combine(0.into(), &SipHashable(6), &SipHashable(7)),
-            ),
-        );
-
-        assert_eq!(
-            compute_root_from_witness::<SipHashable>(
-                SipHashable(0),
-                0.into(),
-                &[
-                    SipHashable(1),
-                    SipHashable::combine(0.into(), &SipHashable(2), &SipHashable(3)),
-                    SipHashable::combine(
-                        Level::from(1),
-                        &SipHashable::combine(0.into(), &SipHashable(4), &SipHashable(5)),
-                        &SipHashable::combine(0.into(), &SipHashable(6), &SipHashable(7))
-                    )
-                ]
-            ),
-            expected
-        );
-
-        assert_eq!(
-            compute_root_from_witness(
-                SipHashable(4),
-                Position::from(4),
-                &[
-                    SipHashable(5),
-                    SipHashable::combine(0.into(), &SipHashable(6), &SipHashable(7)),
-                    SipHashable::combine(
-                        Level::from(1),
-                        &SipHashable::combine(0.into(), &SipHashable(0), &SipHashable(1)),
-                        &SipHashable::combine(0.into(), &SipHashable(2), &SipHashable(3))
-                    )
-                ]
-            ),
-            expected
-        );
-    }
-
     #[test]
     fn test_witness_consistency() {
         let samples = vec![
@@ -445,102 +372,6 @@ pub(crate) mod tests {
                 result
             );
         }
-    }
-
-    fn check_operations<H: Hashable + Ord + Clone + Debug, T: Tree<H>>(
-        mut tree: T,
-        tree_depth: u8,
-        ops: &[Operation<H>],
-    ) -> Result<(), TestCaseError> {
-        let mut tree_size = 0;
-        let mut tree_values: Vec<H> = vec![];
-        // the number of leaves in the tree at the time that a checkpoint is made
-        let mut tree_checkpoints: Vec<usize> = vec![];
-
-        for op in ops {
-            prop_assert_eq!(tree_size, tree_values.len());
-            match op {
-                Append(value) => {
-                    if tree.append(value) {
-                        prop_assert!(tree_size < (1 << tree_depth));
-                        tree_size += 1;
-                        tree_values.push(value.clone());
-                    } else {
-                        prop_assert_eq!(tree_size, 1 << tree_depth);
-                    }
-                }
-                CurrentPosition => {
-                    if let Some(pos) = tree.current_position() {
-                        prop_assert!(tree_size > 0);
-                        prop_assert_eq!(tree_size - 1, pos.into());
-                    }
-                }
-                CurrentLeaf => {
-                    prop_assert_eq!(tree_values.last(), tree.current_leaf());
-                }
-                Mark => {
-                    if tree.mark().is_some() {
-                        prop_assert!(tree_size != 0);
-                    } else {
-                        prop_assert_eq!(tree_size, 0);
-                    }
-                }
-                MarkedLeaf(position) => {
-                    if tree.get_marked_leaf(*position).is_some() {
-                        prop_assert!(<usize>::from(*position) < tree_size);
-                    }
-                }
-                Unmark(position) => {
-                    tree.remove_mark(*position);
-                }
-                MarkedPositions => {}
-                Checkpoint => {
-                    tree_checkpoints.push(tree_size);
-                    tree.checkpoint();
-                }
-                Rewind => {
-                    if tree.rewind() {
-                        prop_assert!(!tree_checkpoints.is_empty());
-                        let checkpointed_tree_size = tree_checkpoints.pop().unwrap();
-                        tree_values.truncate(checkpointed_tree_size);
-                        tree_size = checkpointed_tree_size;
-                    }
-                }
-                Authpath(position, depth) => {
-                    if let Some(path) = tree.root(*depth).and_then(|r| tree.witness(*position, &r))
-                    {
-                        let value: H = tree_values[<usize>::from(*position)].clone();
-                        let tree_root = tree.root(*depth);
-
-                        if tree_checkpoints.len() >= *depth {
-                            let mut extended_tree_values = tree_values.clone();
-                            if *depth > 0 {
-                                // prune the tree back to the checkpointed size.
-                                if let Some(checkpointed_tree_size) =
-                                    tree_checkpoints.get(tree_checkpoints.len() - depth)
-                                {
-                                    extended_tree_values.truncate(*checkpointed_tree_size);
-                                }
-                            }
-                            // extend the tree with empty leaves until it is full
-                            extended_tree_values.resize(1 << tree_depth, H::empty_leaf());
-
-                            // compute the root
-                            let expected_root = lazy_root::<H>(extended_tree_values);
-                            prop_assert_eq!(&tree_root.unwrap(), &expected_root);
-
-                            prop_assert_eq!(
-                                &compute_root_from_witness(value, *position, &path),
-                                &expected_root
-                            );
-                        }
-                    }
-                }
-                GarbageCollect => {}
-            }
-        }
-
-        Ok(())
     }
 
     proptest! {
