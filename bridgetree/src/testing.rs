@@ -1,5 +1,3 @@
-mod complete_tree;
-
 #[cfg(test)]
 pub(crate) mod tests {
     use proptest::prelude::*;
@@ -8,109 +6,12 @@ pub(crate) mod tests {
 
     use crate::BridgeTree;
     use incrementalmerkletree::{
-        testing::{arb_operation, check_operations, Operation, Operation::*, SipHashable, Tree},
+        testing::{
+            append_str, arb_operation, check_operations, complete_tree::CompleteTree, unmark,
+            witness, Operation::*, SipHashable, Tree,
+        },
         Hashable, Position,
     };
-
-    use super::complete_tree::CompleteTree;
-
-    fn append(x: &str) -> Operation<String> {
-        Operation::Append(x.to_string())
-    }
-
-    fn unmark(pos: usize) -> Operation<String> {
-        Operation::Unmark(Position::from(pos))
-    }
-
-    fn witness(pos: usize, depth: usize) -> Operation<String> {
-        Operation::Authpath(Position::from(pos), depth)
-    }
-
-    pub(crate) fn check_rewind_remove_mark<T: Tree<String>, F: Fn(usize) -> T>(new_tree: F) {
-        let mut tree = new_tree(100);
-        tree.append(&"e".to_string());
-        tree.mark();
-        tree.checkpoint();
-        assert!(tree.rewind());
-        assert!(tree.remove_mark(0usize.into()));
-
-        let mut tree = new_tree(100);
-        tree.append(&"e".to_string());
-        tree.checkpoint();
-        tree.mark();
-        assert!(tree.rewind());
-        assert!(!tree.remove_mark(0usize.into()));
-
-        let mut tree = new_tree(100);
-        tree.append(&"e".to_string());
-        tree.mark();
-        tree.checkpoint();
-        assert!(tree.remove_mark(0usize.into()));
-        assert!(tree.rewind());
-        assert!(tree.remove_mark(0usize.into()));
-
-        let mut tree = new_tree(100);
-        tree.append(&"e".to_string());
-        tree.mark();
-        assert!(tree.remove_mark(0usize.into()));
-        tree.checkpoint();
-        assert!(tree.rewind());
-        assert!(!tree.remove_mark(0usize.into()));
-
-        let mut tree = new_tree(100);
-        tree.append(&"a".to_string());
-        assert!(!tree.remove_mark(0usize.into()));
-        tree.checkpoint();
-        assert!(tree.mark().is_some());
-        assert!(tree.rewind());
-
-        let mut tree = new_tree(100);
-        tree.append(&"a".to_string());
-        tree.checkpoint();
-        assert!(tree.mark().is_some());
-        assert!(tree.remove_mark(0usize.into()));
-        assert!(tree.rewind());
-        assert!(!tree.remove_mark(0usize.into()));
-
-        // The following check_operations tests cover errors where the
-        // test framework itself previously did not correctly handle
-        // chain state restoration.
-
-        let samples = vec![
-            vec![append("x"), Checkpoint, Mark, Rewind, unmark(0)],
-            vec![append("d"), Checkpoint, Mark, unmark(0), Rewind, unmark(0)],
-            vec![
-                append("o"),
-                Checkpoint,
-                Mark,
-                Checkpoint,
-                unmark(0),
-                Rewind,
-                Rewind,
-            ],
-            vec![
-                append("s"),
-                Mark,
-                append("m"),
-                Checkpoint,
-                unmark(0),
-                Rewind,
-                unmark(0),
-                unmark(0),
-            ],
-        ];
-
-        for (i, sample) in samples.iter().enumerate() {
-            let tree = CombinedTree::<String, 4>::new();
-            let result = check_operations(tree, 4, sample);
-            assert!(
-                matches!(result, Ok(())),
-                "Reference/Test mismatch at index {}: {:?}",
-                i,
-                result
-            );
-        }
-    }
 
     //
     // Types and utilities for cross-verification property tests
@@ -215,94 +116,112 @@ pub(crate) mod tests {
     fn test_witness_consistency() {
         let samples = vec![
             // Reduced examples
-            vec![append("a"), append("b"), Checkpoint, Mark, witness(0, 1)],
-            vec![append("c"), append("d"), Mark, Checkpoint, witness(1, 1)],
-            vec![append("e"), Checkpoint, Mark, append("f"), witness(0, 1)],
             vec![
-                append("g"),
-                Mark,
-                Checkpoint,
-                unmark(0),
-                append("h"),
-                witness(0, 0),
-            ],
-            vec![
-                append("i"),
+                append_str("a"),
+                append_str("b"),
                 Checkpoint,
                 Mark,
-                unmark(0),
-                append("j"),
-                witness(0, 0),
-            ],
-            vec![
-                append("i"),
-                Mark,
-                append("j"),
-                Checkpoint,
-                append("k"),
                 witness(0, 1),
             ],
             vec![
-                append("l"),
+                append_str("c"),
+                append_str("d"),
+                Mark,
+                Checkpoint,
+                witness(1, 1),
+            ],
+            vec![
+                append_str("e"),
+                Checkpoint,
+                Mark,
+                append_str("f"),
+                witness(0, 1),
+            ],
+            vec![
+                append_str("g"),
+                Mark,
+                Checkpoint,
+                unmark(0),
+                append_str("h"),
+                witness(0, 0),
+            ],
+            vec![
+                append_str("i"),
+                Checkpoint,
+                Mark,
+                unmark(0),
+                append_str("j"),
+                witness(0, 0),
+            ],
+            vec![
+                append_str("i"),
+                Mark,
+                append_str("j"),
+                Checkpoint,
+                append_str("k"),
+                witness(0, 1),
+            ],
+            vec![
+                append_str("l"),
                 Checkpoint,
                 Mark,
                 Checkpoint,
-                append("m"),
+                append_str("m"),
                 Checkpoint,
                 witness(0, 2),
             ],
-            vec![Checkpoint, append("n"), Mark, witness(0, 1)],
+            vec![Checkpoint, append_str("n"), Mark, witness(0, 1)],
             vec![
-                append("a"),
+                append_str("a"),
                 Mark,
                 Checkpoint,
                 unmark(0),
                 Checkpoint,
-                append("b"),
+                append_str("b"),
                 witness(0, 1),
             ],
             vec![
-                append("a"),
+                append_str("a"),
                 Mark,
-                append("b"),
+                append_str("b"),
                 unmark(0),
                 Checkpoint,
                 witness(0, 0),
             ],
             vec![
-                append("a"),
+                append_str("a"),
                 Mark,
                 Checkpoint,
                 unmark(0),
                 Checkpoint,
                 Rewind,
-                append("b"),
+                append_str("b"),
                 witness(0, 0),
             ],
             vec![
-                append("a"),
+                append_str("a"),
                 Mark,
                 Checkpoint,
                 Checkpoint,
                 Rewind,
-                append("a"),
+                append_str("a"),
                 unmark(0),
                 witness(0, 1),
             ],
             // Unreduced examples
             vec![
-                append("o"),
-                append("p"),
+                append_str("o"),
+                append_str("p"),
                 Mark,
-                append("q"),
+                append_str("q"),
                 Checkpoint,
                 unmark(1),
                 witness(1, 1),
             ],
             vec![
-                append("r"),
-                append("s"),
-                append("t"),
+                append_str("r"),
+                append_str("s"),
+                append_str("t"),
                 Mark,
                 Checkpoint,
                 unmark(2),
@@ -310,13 +229,13 @@ pub(crate) mod tests {
                 witness(2, 2),
             ],
             vec![
-                append("u"),
+                append_str("u"),
                 Mark,
-                append("v"),
-                append("w"),
+                append_str("v"),
+                append_str("w"),
                 Checkpoint,
                 unmark(0),
-                append("x"),
+                append_str("x"),
                 Checkpoint,
                 Checkpoint,
                 witness(0, 3),
@@ -340,10 +259,17 @@ pub(crate) mod tests {
     #[test]
     fn test_rewind_remove_mark_consistency() {
         let samples = vec![
-            vec![append("x"), Checkpoint, Mark, Rewind, unmark(0)],
-            vec![append("d"), Checkpoint, Mark, unmark(0), Rewind, unmark(0)],
+            vec![append_str("x"), Checkpoint, Mark, Rewind, unmark(0)],
             vec![
-                append("o"),
+                append_str("d"),
+                Checkpoint,
+                Mark,
+                unmark(0),
+                Rewind,
+                unmark(0),
+            ],
+            vec![
+                append_str("o"),
                 Checkpoint,
                 Mark,
                 Checkpoint,
@@ -352,9 +278,9 @@ pub(crate) mod tests {
                 Rewind,
             ],
             vec![
-                append("s"),
+                append_str("s"),
                 Mark,
-                append("m"),
+                append_str("m"),
                 Checkpoint,
                 unmark(0),
                 Rewind,

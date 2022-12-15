@@ -1299,10 +1299,9 @@ mod tests {
     use proptest::prelude::*;
 
     use super::*;
-    use crate::testing::tests;
     use incrementalmerkletree::testing::{
-        apply_operation, arb_operation, check_checkpoint_rewind, check_root_hashes,
-        check_witnesses, Frontier, Tree,
+        apply_operation, arb_operation, check_checkpoint_rewind, check_rewind_remove_mark,
+        check_root_hashes, check_witnesses, Frontier, Tree,
     };
 
     impl<H: Hashable + Clone, const DEPTH: u8> Frontier<H> for super::Frontier<H, DEPTH> {
@@ -1555,7 +1554,7 @@ mod tests {
 
     #[test]
     fn rewind_remove_mark() {
-        tests::check_rewind_remove_mark(BridgeTree::<String, 4>::new);
+        check_rewind_remove_mark(BridgeTree::<String, 4>::new);
     }
 
     #[test]

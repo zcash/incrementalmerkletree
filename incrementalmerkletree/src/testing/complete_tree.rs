@@ -1,7 +1,7 @@
 //! Sample implementation of the Tree interface.
 use std::collections::BTreeSet;
 
-use incrementalmerkletree::{
+use crate::{
     testing::{lazy_root, Frontier, Tree},
     Hashable, Position,
 };
@@ -16,7 +16,6 @@ pub struct TreeState<H: Hashable> {
 
 impl<H: Hashable + Clone> TreeState<H> {
     /// Creates a new, empty binary tree of specified depth.
-    #[cfg(test)]
     pub fn new(depth: usize) -> Self {
         Self {
             leaves: vec![H::empty_leaf(); 1 << depth],
@@ -117,7 +116,6 @@ pub struct CompleteTree<H: Hashable> {
 
 impl<H: Hashable + Clone> CompleteTree<H> {
     /// Creates a new, empty binary tree of specified depth.
-    #[cfg(test)]
     pub fn new(depth: usize, max_checkpoints: usize) -> Self {
         Self {
             tree_state: TreeState::new(depth),
@@ -230,11 +228,10 @@ mod tests {
     use std::convert::TryFrom;
 
     use super::CompleteTree;
-    use crate::testing::tests;
-    use incrementalmerkletree::{
+    use crate::{
         testing::{
-            check_checkpoint_rewind, check_root_hashes, check_witnesses, compute_root_from_witness,
-            SipHashable, Tree,
+            check_checkpoint_rewind, check_rewind_remove_mark, check_root_hashes, check_witnesses,
+            compute_root_from_witness, SipHashable, Tree,
         },
         Hashable, Level, Position,
     };
@@ -334,6 +331,6 @@ mod tests {
 
     #[test]
     fn rewind_remove_mark() {
-        tests::check_rewind_remove_mark(|max_c| CompleteTree::<String>::new(4, max_c));
+        check_rewind_remove_mark(|max_c| CompleteTree::<String>::new(4, max_c));
     }
 }

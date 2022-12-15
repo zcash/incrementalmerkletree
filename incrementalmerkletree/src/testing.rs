@@ -4,6 +4,8 @@ use std::collections::BTreeSet;
 
 use crate::{Hashable, Level, Position};
 
+pub mod complete_tree;
+
 //
 // Traits used to permit comparison testing between tree implementations.
 //
@@ -132,6 +134,18 @@ pub enum Operation<A> {
 }
 
 use Operation::*;
+
+pub fn append_str(x: &str) -> Operation<String> {
+    Operation::Append(x.to_string())
+}
+
+pub fn unmark<T>(pos: usize) -> Operation<T> {
+    Operation::Unmark(Position::from(pos))
+}
+
+pub fn witness<T>(pos: usize, depth: usize) -> Operation<T> {
+    Operation::Authpath(Position::from(pos), depth)
+}
 
 impl<H: Hashable> Operation<H> {
     pub fn apply<T: Tree<H>>(&self, tree: &mut T) -> Option<(Position, Vec<H>)> {
@@ -655,6 +669,98 @@ pub fn check_checkpoint_rewind<T: Tree<String>, F: Fn(usize) -> T>(new_tree: F) 
     assert!(t.rewind());
     t.append(&"b".to_string());
     assert_eq!(t.root(0).unwrap(), "ab______________");
+}
+
+pub fn check_rewind_remove_mark<T: Tree<String>, F: Fn(usize) -> T>(new_tree: F) {
+    let mut tree = new_tree(100);
+    tree.append(&"e".to_string());
+    tree.mark();
+    tree.checkpoint();
+    assert!(tree.rewind());
+    assert!(tree.remove_mark(0usize.into()));
+
+    let mut tree = new_tree(100);
+    tree.append(&"e".to_string());
+    tree.checkpoint();
+    tree.mark();
+    assert!(tree.rewind());
+    assert!(!tree.remove_mark(0usize.into()));
+
+    let mut tree = new_tree(100);
+    tree.append(&"e".to_string());
+    tree.mark();
+    tree.checkpoint();
+    assert!(tree.remove_mark(0usize.into()));
+    assert!(tree.rewind());
+    assert!(tree.remove_mark(0usize.into()));
+
+    let mut tree = new_tree(100);
+    tree.append(&"e".to_string());
+    tree.mark();
+    assert!(tree.remove_mark(0usize.into()));
+    tree.checkpoint();
+    assert!(tree.rewind());
+    assert!(!tree.remove_mark(0usize.into()));
+
+    let mut tree = new_tree(100);
+    tree.append(&"a".to_string());
+    assert!(!tree.remove_mark(0usize.into()));
+    tree.checkpoint();
+    assert!(tree.mark().is_some());
+    assert!(tree.rewind());
+
+    let mut tree = new_tree(100);
+    tree.append(&"a".to_string());
+    tree.checkpoint();
+    assert!(tree.mark().is_some());
+    assert!(tree.remove_mark(0usize.into()));
+    assert!(tree.rewind());
+    assert!(!tree.remove_mark(0usize.into()));
+
+    // The following check_operations tests cover errors where the
+    // test framework itself previously did not correctly handle
+    // chain state restoration.
+
+    let samples = vec![
+        vec![append_str("x"), Checkpoint, Mark, Rewind, unmark(0)],
+        vec![
+            append_str("d"),
+            Checkpoint,
+            Mark,
+            unmark(0),
+            Rewind,
+            unmark(0),
+        ],
+        vec![
+            append_str("o"),
+            Checkpoint,
+            Mark,
+            Checkpoint,
+            unmark(0),
+            Rewind,
+            Rewind,
+        ],
+        vec![
+            append_str("s"),
+            Mark,
+            append_str("m"),
+            Checkpoint,
+            unmark(0),
+            Rewind,
+            unmark(0),
+            unmark(0),
+        ],
+    ];
+
+    for (i, sample) in samples.iter().enumerate() {
+        let result = check_operations(new_tree(100), 4, sample);
+        assert!(
+            matches!(result, Ok(())),
+            "Reference/Test mismatch at index {}: {:?}",
+            i,
+            result
+        );
+    }
 }
 
 #[cfg(test)]
