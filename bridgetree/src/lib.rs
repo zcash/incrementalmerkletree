@@ -30,9 +30,6 @@
 //! reset the state to.
 //!
 //! In this module, the term "ommer" is used as for the sibling of a parent node in a binary tree.
-#[cfg(any(bench, test, feature = "test-dependencies"))]
-pub mod testing;
-
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
 use std::convert::TryFrom;
@@ -1297,11 +1294,17 @@ impl<H: Hashable + Ord + Clone, const DEPTH: u8> BridgeTree<H, DEPTH> {
 #[cfg(test)]
 mod tests {
     use proptest::prelude::*;
+    use std::fmt::Debug;
 
     use super::*;
-    use incrementalmerkletree::testing::{
-        apply_operation, arb_operation, check_checkpoint_rewind, check_rewind_remove_mark,
-        check_root_hashes, check_witnesses, Frontier, Tree,
+    use incrementalmerkletree::{
+        testing::{
+            apply_operation, arb_operation, check_checkpoint_rewind, check_operations,
+            check_rewind_remove_mark, check_rewind_remove_mark_consistency, check_root_hashes,
+            check_witnesses, complete_tree::CompleteTree, CombinedTree, Frontier, SipHashable,
+            Tree,
+        },
+        Hashable,
     };
 
     impl<H: Hashable + Clone, const DEPTH: u8> Frontier<H> for super::Frontier<H, DEPTH> {
@@ -1615,5 +1618,51 @@ mod tests {
         assert!(tree.root(0) != empty_root);
         tree.rewind();
         assert!(tree.root(0) != empty_root);
+    }
+
+    // Combined tree tests
+    fn new_combined_tree<H: Hashable + Ord + Clone + Debug>(
+        max_checkpoints: usize,
+    ) -> CombinedTree<H, CompleteTree<H>, BridgeTree<H, 4>> {
+        CombinedTree::new(
+            CompleteTree::new(4, max_checkpoints),
+            BridgeTree::<H, 4>::new(max_checkpoints),
+        )
+    }
+
+    #[test]
+    fn test_rewind_remove_mark() {
+        check_rewind_remove_mark(new_combined_tree);
+    }
+
+    #[test]
+    fn test_rewind_remove_mark_consistency() {
+        check_rewind_remove_mark_consistency(new_combined_tree);
+    }
+
+    proptest! {
+        #![proptest_config(ProptestConfig::with_cases(100000))]
+
+        #[test]
+        fn check_randomized_u64_ops(
+            ops in proptest::collection::vec(
+                arb_operation((0..32u64).prop_map(SipHashable), 0usize..100),
+                1..100
+            )
+        ) {
+            let tree = new_combined_tree(100);
+            check_operations(tree, 4, &ops)?;
+        }
+
+        #[test]
+        fn check_randomized_str_ops(
+            ops in proptest::collection::vec(
+                arb_operation((97u8..123).prop_map(|c| char::from(c).to_string()), 0usize..100),
+                1..100
+            )
+        ) {
+            let tree = new_combined_tree(100);
+            check_operations(tree, 4, &ops)?;
+        }
     }
 }
