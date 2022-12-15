@@ -101,7 +101,8 @@ pub(crate) mod tests {
         ];
 
         for (i, sample) in samples.iter().enumerate() {
-            let result = check_operations(sample);
+            let tree = CombinedTree::<String, 4>::new();
+            let result = check_operations(tree, 4, sample);
             assert!(
                 matches!(result, Ok(())),
                 "Reference/Test mismatch at index {}: {:?}",
@@ -396,7 +397,8 @@ pub(crate) mod tests {
         ];
 
         for (i, sample) in samples.iter().enumerate() {
-            let result = check_operations(sample);
+            let tree = CombinedTree::<String, 4>::new();
+            let result = check_operations(tree, 4, sample);
             assert!(
                 matches!(result, Ok(())),
                 "Reference/Test mismatch at index {}: {:?}",
@@ -434,7 +436,8 @@ pub(crate) mod tests {
             ],
         ];
         for (i, sample) in samples.iter().enumerate() {
-            let result = check_operations(sample);
+            let tree = CombinedTree::<String, 4>::new();
+            let result = check_operations(tree, 4, sample);
             assert!(
                 matches!(result, Ok(())),
                 "Reference/Test mismatch at index {}: {:?}",
@@ -444,12 +447,11 @@ pub(crate) mod tests {
         }
     }
 
-    fn check_operations<H: Hashable + Ord + Clone + Debug>(
+    fn check_operations<H: Hashable + Ord + Clone + Debug, T: Tree<H>>(
+        mut tree: T,
+        tree_depth: u8,
         ops: &[Operation<H>],
     ) -> Result<(), TestCaseError> {
-        const DEPTH: u8 = 4;
-        let mut tree = CombinedTree::<H, DEPTH>::new();
-
         let mut tree_size = 0;
         let mut tree_values: Vec<H> = vec![];
         // the number of leaves in the tree at the time that a checkpoint is made
@@ -460,11 +462,11 @@ pub(crate) mod tests {
             match op {
                 Append(value) => {
                     if tree.append(value) {
-                        prop_assert!(tree_size < (1 << DEPTH));
+                        prop_assert!(tree_size < (1 << tree_depth));
                         tree_size += 1;
                         tree_values.push(value.clone());
                     } else {
-                        prop_assert_eq!(tree_size, 1 << DEPTH);
+                        prop_assert_eq!(tree_size, 1 << tree_depth);
                     }
                 }
                 CurrentPosition => {
@@ -521,7 +523,7 @@ pub(crate) mod tests {
                                 }
                             }
                             // extend the tree with empty leaves until it is full
-                            extended_tree_values.resize(1 << DEPTH, H::empty_leaf());
+                            extended_tree_values.resize(1 << tree_depth, H::empty_leaf());
 
                             // compute the root
                             let expected_root = lazy_root::<H>(extended_tree_values);
@@ -551,7 +553,8 @@ pub(crate) mod tests {
                 1..100
             )
         ) {
-            check_operations(&ops)?;
+            let tree = CombinedTree::<SipHashable, 4>::new();
+            check_operations(tree, 4, &ops)?;
         }
 
         #[test]
@@ -561,7 +564,8 @@ pub(crate) mod tests {
                 1..100
             )
         ) {
-            check_operations::<String>(&ops)?;
+            let tree = CombinedTree::<String, 4>::new();
+            check_operations(tree, 4, &ops)?;
         }
     }
 }
