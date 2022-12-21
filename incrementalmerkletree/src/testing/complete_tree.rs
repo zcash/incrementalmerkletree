@@ -2,9 +2,35 @@
 use std::collections::BTreeSet;
 
 use crate::{
-    testing::{lazy_root, Frontier, Tree},
-    Hashable, Position,
+    testing::{Frontier, Tree},
+    Hashable, Level, Position,
 };
+
+pub(crate) fn root<H: Hashable + Clone>(mut leaves: Vec<H>) -> H {
+    leaves.resize(leaves.len().next_power_of_two(), H::empty_leaf());
+
+    //leaves are always at level zero, so we start there.
+    let mut level = Level::from(0);
+    while leaves.len() != 1 {
+        leaves = leaves
+            .iter()
+            .enumerate()
+            .filter(|(i, _)| (i % 2) == 0)
+            .map(|(_, a)| a)
+            .zip(
+                leaves
+                    .iter()
+                    .enumerate()
+                    .filter(|(i, _)| (i % 2) == 1)
+                    .map(|(_, b)| b),
+            )
+            .map(|(a, b)| H::combine(level, a, b))
+            .collect();
+        level = level + 1;
+    }
+
+    leaves[0].clone()
+}
 
 #[derive(Clone, Debug)]
 pub struct TreeState<H: Hashable> {
@@ -39,7 +65,7 @@ impl<H: Hashable + Clone> Frontier<H> for TreeState<H> {
 
     /// Obtains the current root of this Merkle tree.
     fn root(&self) -> H {
-        lazy_root(self.leaves.clone())
+        root(self.leaves.clone())
     }
 }
 
@@ -87,9 +113,7 @@ impl<H: Hashable + PartialEq + Clone> TreeState<H> {
             let mut leaf_idx: usize = position.into();
             for bit in 0..self.depth {
                 leaf_idx ^= 1 << bit;
-                path.push(lazy_root::<H>(
-                    self.leaves[leaf_idx..][0..(1 << bit)].to_vec(),
-                ));
+                path.push(root::<H>(self.leaves[leaf_idx..][0..(1 << bit)].to_vec()));
                 leaf_idx &= usize::MAX << (bit + 1);
             }
 

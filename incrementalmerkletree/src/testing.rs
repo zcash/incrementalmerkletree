@@ -328,7 +328,7 @@ pub fn check_operations<H: Hashable + Ord + Clone + Debug, T: Tree<H>>(
                         extended_tree_values.resize(1 << tree_depth, H::empty_leaf());
 
                         // compute the root
-                        let expected_root = lazy_root::<H>(extended_tree_values);
+                        let expected_root = complete_tree::root::<H>(extended_tree_values);
                         prop_assert_eq!(&tree_root.unwrap(), &expected_root);
 
                         prop_assert_eq!(
@@ -343,30 +343,6 @@ pub fn check_operations<H: Hashable + Ord + Clone + Debug, T: Tree<H>>(
     }
 
     Ok(())
-}
-
-pub fn lazy_root<H: Hashable + Clone>(mut leaves: Vec<H>) -> H {
-    //leaves are always at level zero, so we start there.
-    let mut level = Level::from(0);
-    while leaves.len() != 1 {
-        leaves = leaves
-            .iter()
-            .enumerate()
-            .filter(|(i, _)| (i % 2) == 0)
-            .map(|(_, a)| a)
-            .zip(
-                leaves
-                    .iter()
-                    .enumerate()
-                    .filter(|(i, _)| (i % 2) == 1)
-                    .map(|(_, b)| b),
-            )
-            .map(|(a, b)| H::combine(level, a, b))
-            .collect();
-        level = level + 1;
-    }
-
-    leaves[0].clone()
 }
 
 pub fn compute_root_from_witness<H: Hashable>(value: H, position: Position, path: &[H]) -> H {
