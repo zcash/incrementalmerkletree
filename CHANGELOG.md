@@ -7,6 +7,10 @@ and this project adheres to Rust's notion of
 
 ## [Unreleased]
 
+### Removed
+
+- The `bridgetree` module has been moved out a to a separate `bridgetree` crate.
+
 ## [0.3.0] - 2022-05-10
 
 ### Added
