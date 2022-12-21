@@ -2,10 +2,7 @@
 use std::collections::BTreeSet;
 
 use super::{Frontier, Tree};
-use crate::{
-    hashing::Hashable,
-    position::{Level, Position},
-};
+use incrementalmerkletree::{Hashable, Level, Position};
 
 #[derive(Clone, Debug)]
 pub struct TreeState<H: Hashable> {
@@ -255,14 +252,11 @@ mod tests {
     use std::convert::TryFrom;
 
     use super::CompleteTree;
-    use crate::{
-        hashing::Hashable,
-        position::{Level, Position},
-        testing::{
-            tests::{self, compute_root_from_witness},
-            SipHashable, Tree,
-        },
+    use crate::testing::{
+        tests::{self, compute_root_from_witness},
+        SipHashable, Tree,
     };
+    use incrementalmerkletree::{Hashable, Level, Position};
 
     #[test]
     fn correct_empty_root() {

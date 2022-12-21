@@ -3,10 +3,7 @@ mod complete_tree;
 use proptest::prelude::*;
 use std::collections::BTreeSet;
 
-use super::{
-    hashing::Hashable,
-    position::{Level, Position},
-};
+use incrementalmerkletree::{testing::SipHashable, Hashable, Position};
 
 //
 // Traits used to permit comparison testing between tree implementations.
@@ -86,35 +83,6 @@ pub trait Tree<H> {
 //
 // Types and utilities for shared example tests.
 //
-
-#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
-pub(crate) struct SipHashable(pub(crate) u64);
-
-impl Hashable for SipHashable {
-    fn empty_leaf() -> Self {
-        SipHashable(0)
-    }
-
-    fn combine(_level: Level, a: &Self, b: &Self) -> Self {
-        #![allow(deprecated)]
-        use std::hash::{Hasher, SipHasher};
-
-        let mut hasher = SipHasher::new();
-        hasher.write_u64(a.0);
-        hasher.write_u64(b.0);
-        SipHashable(hasher.finish())
-    }
-}
-
-impl Hashable for String {
-    fn empty_leaf() -> Self {
-        "_".to_string()
-    }
-
-    fn combine(_: Level, a: &Self, b: &Self) -> Self {
-        a.to_string() + b
-    }
-}
 
 //
 // Operations
@@ -243,11 +211,8 @@ pub(crate) mod tests {
     use std::collections::BTreeSet;
     use std::fmt::Debug;
 
-    use crate::{
-        hashing::Hashable,
-        position::{Level, Position},
-        BridgeTree,
-    };
+    use crate::BridgeTree;
+    use incrementalmerkletree::{Hashable, Level, Position};
 
     use super::{
         arb_operation,

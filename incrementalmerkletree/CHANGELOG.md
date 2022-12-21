@@ -10,6 +10,7 @@ and this project adheres to Rust's notion of
 ### Removed
 
 - The `bridgetree` module has been moved out a to a separate `bridgetree` crate.
+- `Position::witness_addrs` has been removed.
 
 ## [0.3.0] - 2022-05-10
 

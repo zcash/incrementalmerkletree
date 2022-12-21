@@ -1,9 +1,83 @@
-//! Types that describe positions within a Merkle tree
+//! Common types and utilities used in incremental Merkle tree implementations.
 
 use serde::{Deserialize, Serialize};
 use std::convert::{TryFrom, TryInto};
 use std::num::TryFromIntError;
 use std::ops::{Add, AddAssign, Range};
+
+#[cfg(feature = "test-dependencies")]
+pub mod testing;
+
+/// A type representing the position of a leaf in a Merkle tree.
+#[derive(Copy, Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[repr(transparent)]
+pub struct Position(usize);
+
+impl Position {
+    /// Return whether the position is odd-valued.
+    pub fn is_odd(&self) -> bool {
+        self.0 & 0x1 == 1
+    }
+
+    /// Returns the minimum possible level of the root of a binary tree containing at least
+    /// `self + 1` nodes.
+    pub fn root_level(&self) -> Level {
+        Level(64 - self.0.leading_zeros() as u8)
+    }
+
+    /// Returns the number of cousins and/or ommers required to construct an authentication
+    /// path to the root of a merkle tree that has `self + 1` nodes.
+    pub fn past_ommer_count(&self) -> usize {
+        (0..self.root_level().0)
+            .filter(|i| (self.0 >> i) & 0x1 == 1)
+            .count()
+    }
+
+    /// Returns whether the binary tree having `self` as the position of the rightmost leaf
+    /// contains a perfect balanced tree with a root at level `root_level` that contains the
+    /// aforesaid leaf.
+    pub fn is_complete_subtree(&self, root_level: Level) -> bool {
+        !(0..(root_level.0)).any(|l| self.0 & (1 << l) == 0)
+    }
+}
+
+impl From<Position> for usize {
+    fn from(p: Position) -> usize {
+        p.0
+    }
+}
+
+impl From<Position> for u64 {
+    fn from(p: Position) -> Self {
+        p.0 as u64
+    }
+}
+
+impl Add<usize> for Position {
+    type Output = Position;
+    fn add(self, other: usize) -> Self {
+        Position(self.0 + other)
+    }
+}
+
+impl AddAssign<usize> for Position {
+    fn add_assign(&mut self, other: usize) {
+        self.0 += other
+    }
+}
+
+impl From<usize> for Position {
+    fn from(sz: usize) -> Self {
+        Self(sz)
+    }
+}
+
+impl TryFrom<u64> for Position {
+    type Error = TryFromIntError;
+    fn try_from(sz: u64) -> Result<Self, Self::Error> {
+        <usize>::try_from(sz).map(Self)
+    }
+}
 
 /// A type-safe wrapper for indexing into "levels" of a binary tree, such that
 /// nodes at level `0` are leaves, nodes at level `1` are parents of nodes at
@@ -46,92 +120,6 @@ impl From<Level> for usize {
     }
 }
 
-/// A type representing the position of a leaf in a Merkle tree.
-#[derive(Copy, Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
-#[repr(transparent)]
-pub struct Position(usize);
-
-impl Position {
-    /// Return whether the position is odd-valued.
-    pub fn is_odd(&self) -> bool {
-        self.0 & 0x1 == 1
-    }
-
-    /// Returns the minimum possible level of the root of a binary tree containing at least
-    /// `self + 1` nodes.
-    pub fn root_level(&self) -> Level {
-        Level(64 - self.0.leading_zeros() as u8)
-    }
-
-    /// Returns the number of cousins and/or ommers required to construct an authentication
-    /// path to the root of a merkle tree that has `self + 1` nodes.
-    pub fn past_ommer_count(&self) -> usize {
-        (0..self.root_level().0)
-            .filter(|i| (self.0 >> i) & 0x1 == 1)
-            .count()
-    }
-
-    /// Returns whether the binary tree having `self` as the position of the rightmost leaf
-    /// contains a perfect balanced tree with a root at level `root_level` that contains the
-    /// aforesaid leaf.
-    pub fn is_complete_subtree(&self, root_level: Level) -> bool {
-        !(0..(root_level.0)).any(|l| self.0 & (1 << l) == 0)
-    }
-
-    /// Returns an iterator over the addresses of nodes required to create a witness for this
-    /// position, beginning with the sibling of the leaf at this position and ending with the
-    /// sibling of the ancestor of the leaf at this position that is required to compute a root at
-    /// the specified level.
-    pub(crate) fn witness_addrs(
-        &self,
-        root_level: Level,
-    ) -> impl Iterator<Item = (Address, Source)> {
-        WitnessAddrsIter {
-            root_level,
-            current: Address::from(self),
-            ommer_count: 0,
-        }
-    }
-}
-
-impl From<Position> for usize {
-    fn from(p: Position) -> usize {
-        p.0
-    }
-}
-
-impl From<Position> for u64 {
-    fn from(p: Position) -> Self {
-        p.0 as u64
-    }
-}
-
-impl Add<usize> for Position {
-    type Output = Position;
-    fn add(self, other: usize) -> Self {
-        Position(self.0 + other)
-    }
-}
-
-impl AddAssign<usize> for Position {
-    fn add_assign(&mut self, other: usize) {
-        self.0 += other
-    }
-}
-
-impl From<usize> for Position {
-    fn from(sz: usize) -> Self {
-        Self(sz)
-    }
-}
-
-impl TryFrom<u64> for Position {
-    type Error = TryFromIntError;
-    fn try_from(sz: u64) -> Result<Self, Self::Error> {
-        <usize>::try_from(sz).map(Self)
-    }
-}
-
 /// The address of an internal node of the Merkle tree.
 /// When `level == 0`, the index has the same value as the
 /// position.
@@ -139,16 +127,6 @@ impl TryFrom<u64> for Position {
 pub struct Address {
     level: Level,
     index: usize,
-}
-
-#[derive(Copy, Clone, Debug, PartialEq, Eq)]
-pub(crate) enum Source {
-    /// The sibling to the address can be derived from the incremental frontier
-    /// at the contained ommer index
-    Past(usize),
-    /// The sibling to the address must be obtained from values discovered by
-    /// the addition of more nodes to the tree
-    Future,
 }
 
 impl Address {
@@ -261,40 +239,23 @@ impl<'a> From<&'a Address> for Option<Position> {
     }
 }
 
-#[must_use = "iterators are lazy and do nothing unless consumed"]
-pub(crate) struct WitnessAddrsIter {
-    root_level: Level,
-    current: Address,
-    ommer_count: usize,
-}
+/// A trait describing the operations that make a type suitable for use as
+/// a leaf or node value in a merkle tree.
+pub trait Hashable: Sized {
+    fn empty_leaf() -> Self;
 
-impl Iterator for WitnessAddrsIter {
-    type Item = (Address, Source);
+    fn combine(level: Level, a: &Self, b: &Self) -> Self;
 
-    fn next(&mut self) -> Option<(Address, Source)> {
-        if self.current.level() < self.root_level {
-            let current = self.current;
-            let source = if current.is_complete_node() {
-                Source::Past(self.ommer_count)
-            } else {
-                Source::Future
-            };
-
-            self.current = current.parent();
-            if matches!(source, Source::Past(_)) {
-                self.ommer_count += 1;
-            }
-
-            Some((current.sibling(), source))
-        } else {
-            None
-        }
+    fn empty_root(level: Level) -> Self {
+        Level::from(0)
+            .iter_to(level)
+            .fold(Self::empty_leaf(), |v, lvl| Self::combine(lvl, &v, &v))
     }
 }
 
 #[cfg(test)]
 pub(crate) mod tests {
-    use super::{Address, Level, Position, Source};
+    use super::{Address, Level, Position};
 
     #[test]
     fn position_is_complete_subtree() {
@@ -349,45 +310,5 @@ pub(crate) mod tests {
         assert_eq!(addr(3, 0), addr(2, 0).next_incomplete_parent());
         assert_eq!(addr(1, 2), addr(0, 4).next_incomplete_parent());
         assert_eq!(addr(3, 0), addr(1, 2).next_incomplete_parent());
-    }
-
-    #[test]
-    fn position_witness_addrs() {
-        use Source::*;
-        let path_elem = |l, i, s| (Address::from_parts(Level(l), i), s);
-        assert_eq!(
-            vec![path_elem(0, 1, Future), path_elem(1, 1, Future)],
-            Position(0).witness_addrs(Level(2)).collect::<Vec<_>>()
-        );
-        assert_eq!(
-            vec![path_elem(0, 3, Future), path_elem(1, 0, Past(0))],
-            Position(2).witness_addrs(Level(2)).collect::<Vec<_>>()
-        );
-        assert_eq!(
-            vec![
-                path_elem(0, 2, Past(0)),
-                path_elem(1, 0, Past(1)),
-                path_elem(2, 1, Future)
-            ],
-            Position(3).witness_addrs(Level(3)).collect::<Vec<_>>()
-        );
-        assert_eq!(
-            vec![
-                path_elem(0, 5, Future),
-                path_elem(1, 3, Future),
-                path_elem(2, 0, Past(0)),
-                path_elem(3, 1, Future)
-            ],
-            Position(4).witness_addrs(Level(4)).collect::<Vec<_>>()
-        );
-        assert_eq!(
-            vec![
-                path_elem(0, 7, Future),
-                path_elem(1, 2, Past(0)),
-                path_elem(2, 0, Past(1)),
-                path_elem(3, 1, Future)
-            ],
-            Position(6).witness_addrs(Level(4)).collect::<Vec<_>>()
-        );
     }
 }

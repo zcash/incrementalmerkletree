@@ -30,9 +30,6 @@
 //! reset the state to.
 //!
 //! In this module, the term "ommer" is used as for the sibling of a parent node in a binary tree.
-mod hashing;
-mod position;
-
 #[cfg(any(bench, test, feature = "test-dependencies"))]
 pub mod testing;
 
@@ -43,11 +40,7 @@ use std::fmt::Debug;
 use std::mem::size_of;
 use std::ops::Range;
 
-use crate::position::Source;
-pub use crate::{
-    hashing::Hashable,
-    position::{Address, Level, Position},
-};
+pub use incrementalmerkletree::{Address, Hashable, Level, Position};
 
 /// Validation errors that can occur during reconstruction of a Merkle frontier from
 /// its constituent parts.
@@ -82,6 +75,59 @@ pub enum WitnessingError {
     PositionNotMarked(Position),
     BridgeFusionError(ContinuityError),
     BridgeAddressInvalid(Address),
+}
+
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+enum Source {
+    /// The sibling to the address can be derived from the incremental frontier
+    /// at the contained ommer index
+    Past(usize),
+    /// The sibling to the address must be obtained from values discovered by
+    /// the addition of more nodes to the tree
+    Future,
+}
+
+#[must_use = "iterators are lazy and do nothing unless consumed"]
+struct WitnessAddrsIter {
+    root_level: Level,
+    current: Address,
+    ommer_count: usize,
+}
+
+/// Returns an iterator over the addresses of nodes required to create a witness for this
+/// position, beginning with the sibling of the leaf at this position and ending with the
+/// sibling of the ancestor of the leaf at this position that is required to compute a root at
+/// the specified level.
+fn witness_addrs(position: Position, root_level: Level) -> impl Iterator<Item = (Address, Source)> {
+    WitnessAddrsIter {
+        root_level,
+        current: Address::from(position),
+        ommer_count: 0,
+    }
+}
+
+impl Iterator for WitnessAddrsIter {
+    type Item = (Address, Source);
+
+    fn next(&mut self) -> Option<(Address, Source)> {
+        if self.current.level() < self.root_level {
+            let current = self.current;
+            let source = if current.is_complete_node() {
+                Source::Past(self.ommer_count)
+            } else {
+                Source::Future
+            };
+
+            self.current = current.parent();
+            if matches!(source, Source::Past(_)) {
+                self.ommer_count += 1;
+            }
+
+            Some((current.sibling(), source))
+        } else {
+            None
+        }
+    }
 }
 
 /// A [`NonEmptyFrontier`] is a reduced representation of a Merkle tree, containing a single leaf
@@ -154,7 +200,7 @@ impl<H: Hashable + Clone> NonEmptyFrontier<H> {
 
             let mut carry = Some((prior_leaf, 0.into()));
             let mut new_ommers = Vec::with_capacity(self.position.past_ommer_count());
-            for (addr, source) in prior_position.witness_addrs(new_root_level) {
+            for (addr, source) in witness_addrs(prior_position, new_root_level) {
                 if let Source::Past(i) = source {
                     if let Some((carry_ommer, carry_lvl)) = carry.as_ref() {
                         if *carry_lvl == addr.level() {
@@ -188,8 +234,7 @@ impl<H: Hashable + Clone> NonEmptyFrontier<H> {
     /// Generate the root of the Merkle tree by hashing against empty subtree roots.
     pub fn root(&self, root_level: Option<Level>) -> H {
         let max_level = root_level.unwrap_or_else(|| self.position.root_level());
-        self.position
-            .witness_addrs(max_level)
+        witness_addrs(self.position, max_level)
             .fold(
                 (self.leaf.clone(), Level::from(0)),
                 |(digest, complete_lvl), (addr, source)| {
@@ -220,8 +265,7 @@ impl<H: Hashable + Clone> NonEmptyFrontier<H> {
     {
         // construct a complete trailing edge that includes the data from
         // the following frontier not yet included in the trailing edge.
-        self.position()
-            .witness_addrs(depth.into())
+        witness_addrs(self.position(), depth.into())
             .map(|(addr, source)| match source {
                 Source::Past(i) => Ok(self.ommers[i].clone()),
                 Source::Future => {
@@ -1204,10 +1248,8 @@ impl<H: Hashable + Ord + Clone, const DEPTH: u8> BridgeTree<H, DEPTH> {
 
                         // Add the elements of the auth path to the set of addresses we should
                         // continue to track and retain information for
-                        for (addr, source) in cur_bridge
-                            .frontier
-                            .position()
-                            .witness_addrs(Level::from(DEPTH))
+                        for (addr, source) in
+                            witness_addrs(cur_bridge.frontier.position(), Level::from(DEPTH))
                         {
                             if source == Source::Future {
                                 ommer_addrs.insert(addr);
@@ -1313,6 +1355,46 @@ mod tests {
         fn rewind(&mut self) -> bool {
             BridgeTree::rewind(self)
         }
+    }
+
+    #[test]
+    fn position_witness_addrs() {
+        use Source::*;
+        let path_elem = |l, i, s| (Address::from_parts(Level::from(l), i), s);
+        assert_eq!(
+            vec![path_elem(0, 1, Future), path_elem(1, 1, Future)],
+            witness_addrs(Position::from(0), Level::from(2)).collect::<Vec<_>>()
+        );
+        assert_eq!(
+            vec![path_elem(0, 3, Future), path_elem(1, 0, Past(0))],
+            witness_addrs(Position::from(2), Level::from(2)).collect::<Vec<_>>()
+        );
+        assert_eq!(
+            vec![
+                path_elem(0, 2, Past(0)),
+                path_elem(1, 0, Past(1)),
+                path_elem(2, 1, Future)
+            ],
+            witness_addrs(Position::from(3), Level::from(3)).collect::<Vec<_>>()
+        );
+        assert_eq!(
+            vec![
+                path_elem(0, 5, Future),
+                path_elem(1, 3, Future),
+                path_elem(2, 0, Past(0)),
+                path_elem(3, 1, Future)
+            ],
+            witness_addrs(Position::from(4), Level::from(4)).collect::<Vec<_>>()
+        );
+        assert_eq!(
+            vec![
+                path_elem(0, 7, Future),
+                path_elem(1, 2, Past(0)),
+                path_elem(2, 0, Past(1)),
+                path_elem(3, 1, Future)
+            ],
+            witness_addrs(Position::from(6), Level::from(4)).collect::<Vec<_>>()
+        );
     }
 
     #[test]
