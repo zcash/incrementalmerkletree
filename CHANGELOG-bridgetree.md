@@ -35,11 +35,11 @@ referred to by their new location.
 - `witness` is now used as the name of the operation to construct the witness for a leaf.
   We now use `mark` to refer to the process of marking a node for which we may later wish
   to construct a witness.
-  - `Tree::witness` has been renamed to `Tree::mark`
-  - `Tree::witnessed_positions` has been renamed to `Tree::marked_positions`
-  - `Tree::get_witnessed_leaf` has been renamed to `Tree::get_marked_leaf`
-  - `Tree::remove_witness` has been renamed to `Tree::remove_mark`
-  - `Tree::authentication_path` has been renamed to `Tree::witness`
+  - `BridgeTree::witness` has been renamed to `BridgeTree::mark`
+  - `BridgeTree::witnessed_positions` has been renamed to `BridgeTree::marked_positions`
+  - `BridgeTree::get_witnessed_leaf` has been renamed to `BridgeTree::get_marked_leaf`
+  - `BridgeTree::remove_witness` has been renamed to `BridgeTree::remove_mark`
+  - `BridgeTree::authentication_path` has been renamed to `BridgeTree::witness`
   - `BridgeTree::witnessed` has been renamed to `BridgeTree::marked`
   - `BridgeTree::witnessed_indices` has been renamed to `BridgeTree::marked_indices`
 
@@ -74,6 +74,13 @@ from this crate as well as a number of tools for comparison testing between
 the `testing` module, as there is not another good use case for polymorphism
 over tree implementations; the API of `Tree` is excessively specialized to the
 `BridgeTree` use patterns case.
+
+The `Tree` interface reflects the renaming of `witness` to `mark` described above:
+  - `Tree::witness` has been renamed to `Tree::mark`
+  - `Tree::witnessed_positions` has been renamed to `Tree::marked_positions`
+  - `Tree::get_witnessed_leaf` has been renamed to `Tree::get_marked_leaf`
+  - `Tree::remove_witness` has been renamed to `Tree::remove_mark`
+  - `Tree::authentication_path` has been renamed to `Tree::witness`
 
 ### Removed relative to `incrementalmerkletree-0.3.0`
 
