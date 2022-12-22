@@ -33,7 +33,9 @@ is not another good use case for polymorphism over tree implementations.
   - `Tree::witnessed_positions` has been renamed to `Tree::marked_positions`
   - `Tree::get_witnessed_leaf` has been renamed to `Tree::get_marked_leaf`
   - `Tree::remove_witness` has been renamed to `Tree::remove_mark`
-  - `Tree::authentication_path` has been renamed to `Tree::witness`
+  - `Tree::authentication_path` has been renamed to `Tree::witness`. Also, this method
+    now takes a checkpoint depth as its second argument rather than a Merkle root,
+    to better support future changes.
 - `Tree::append` now takes ownership of the value being appended instead of a value passed
   by reference.
 

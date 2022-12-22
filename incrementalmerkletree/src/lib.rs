@@ -373,7 +373,7 @@ impl<'a> From<&'a Address> for Option<Position> {
 
 /// A trait describing the operations that make a type suitable for use as
 /// a leaf or node value in a merkle tree.
-pub trait Hashable: Sized {
+pub trait Hashable: Sized + core::fmt::Debug {
     fn empty_leaf() -> Self;
 
     fn combine(level: Level, a: &Self, b: &Self) -> Self;
