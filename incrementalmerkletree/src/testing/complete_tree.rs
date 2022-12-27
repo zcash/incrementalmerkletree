@@ -133,6 +133,8 @@ impl<H: Hashable, C: Clone + Ord + core::fmt::Debug, const DEPTH: u8> CompleteTr
         }
     }
 
+    /// Marks the current tree state leaf as a value that we're interested in
+    /// marking. Returns the current position if the tree is non-empty.
     fn mark(&mut self) -> Option<Position> {
         match self.current_position() {
             Some(pos) => {
@@ -217,8 +219,8 @@ impl<H: Hashable + PartialEq + Clone, C: Ord + Clone + core::fmt::Debug, const D
         Self::current_position(self)
     }
 
-    fn current_leaf(&self) -> Option<&H> {
-        self.leaves.last().and_then(|opt: &Option<H>| opt.as_ref())
+    fn marked_positions(&self) -> BTreeSet<Position> {
+        self.marks.clone()
     }
 
     fn get_marked_leaf(&self, position: Position) -> Option<&H> {
@@ -229,10 +231,6 @@ impl<H: Hashable + PartialEq + Clone, C: Ord + Clone + core::fmt::Debug, const D
         } else {
             None
         }
-    }
-
-    fn marked_positions(&self) -> BTreeSet<Position> {
-        self.marks.clone()
     }
 
     fn root(&self, checkpoint_depth: usize) -> Option<H> {

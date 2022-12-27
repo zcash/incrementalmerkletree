@@ -40,9 +40,6 @@ pub trait Tree<H, C> {
     /// Returns the most recently appended leaf value.
     fn current_position(&self) -> Option<Position>;
 
-    /// Returns the most recently appended leaf value.
-    fn current_leaf(&self) -> Option<&H>;
-
     /// Returns the leaf at the specified position if the tree can produce
     /// a witness for it.
     fn get_marked_leaf(&self, position: Position) -> Option<&H>;
@@ -138,7 +135,6 @@ impl<H: Hashable> Hashable for Option<H> {
 pub enum Operation<A, C> {
     Append(A, Retention<C>),
     CurrentPosition,
-    CurrentLeaf,
     MarkedLeaf(Position),
     MarkedPositions,
     Unmark(Position),
@@ -170,7 +166,6 @@ impl<H: Hashable + Clone, C: Clone> Operation<H, C> {
                 None
             }
             CurrentPosition => None,
-            CurrentLeaf => None,
             MarkedLeaf(_) => None,
             MarkedPositions => None,
             Unmark(p) => {
@@ -205,7 +200,6 @@ impl<H: Hashable + Clone, C: Clone> Operation<H, C> {
         match self {
             Append(a, r) => Append(a.clone(), r.map(f)),
             CurrentPosition => CurrentPosition,
-            CurrentLeaf => CurrentLeaf,
             MarkedLeaf(l) => MarkedLeaf(*l),
             MarkedPositions => MarkedPositions,
             Unmark(p) => Unmark(*p),
@@ -235,7 +229,6 @@ where
     prop_oneof![
         (item_gen, arb_retention()).prop_map(|(i, r)| Operation::Append(i, r)),
         prop_oneof![
-            Just(Operation::CurrentLeaf),
             Just(Operation::CurrentPosition),
             Just(Operation::MarkedPositions),
         ],
@@ -269,7 +262,6 @@ pub fn apply_operation<H, C, T: Tree<H, C>>(tree: &mut T, op: Operation<H, C>) {
             tree.rewind();
         }
         CurrentPosition => {}
-        CurrentLeaf => {}
         Witness(_, _) => {}
         MarkedLeaf(_) => {}
         MarkedPositions => {}
@@ -306,9 +298,6 @@ pub fn check_operations<H: Hashable + Ord + Clone, C: Clone, T: Tree<H, C>>(
                     prop_assert!(tree_size > 0);
                     prop_assert_eq!(tree_size - 1, pos.into());
                 }
-            }
-            CurrentLeaf => {
-                prop_assert_eq!(tree_values.last(), tree.current_leaf());
             }
             MarkedLeaf(position) => {
                 if tree.get_marked_leaf(*position).is_some() {
@@ -432,13 +421,6 @@ impl<H: Hashable + Ord + Clone + Debug, C: Clone, I: Tree<H, C>, E: Tree<H, C>> 
     fn current_position(&self) -> Option<Position> {
         let a = self.inefficient.current_position();
         let b = self.efficient.current_position();
-        assert_eq!(a, b);
-        a
-    }
-
-    fn current_leaf(&self) -> Option<&H> {
-        let a = self.inefficient.current_leaf();
-        let b = self.efficient.current_leaf();
         assert_eq!(a, b);
         a
     }

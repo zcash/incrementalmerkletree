@@ -1324,10 +1324,6 @@ mod tests {
             BridgeTree::current_position(self)
         }
 
-        fn current_leaf(&self) -> Option<&H> {
-            BridgeTree::current_leaf(self)
-        }
-
         fn get_marked_leaf(&self, position: Position) -> Option<&H> {
             BridgeTree::get_marked_leaf(self, position)
         }
