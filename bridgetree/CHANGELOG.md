@@ -47,6 +47,8 @@ referred to by their new location.
   - `BridgeTree::authentication_path` has been renamed to `BridgeTree::witness`
   - `BridgeTree::witnessed` has been renamed to `BridgeTree::marked`
   - `BridgeTree::witnessed_indices` has been renamed to `BridgeTree::marked_indices`
+- `BridgeTree::append` and `NonEmptyFrontier::append` now take ownership of the
+  value being appended instead of the value being passed by reference.
 
 The following types have been moved from the `bridgetree` module of
 `incrementalmerkletree` to the crate root:

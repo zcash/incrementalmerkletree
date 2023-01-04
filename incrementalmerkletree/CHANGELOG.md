@@ -34,6 +34,8 @@ is not another good use case for polymorphism over tree implementations.
   - `Tree::get_witnessed_leaf` has been renamed to `Tree::get_marked_leaf`
   - `Tree::remove_witness` has been renamed to `Tree::remove_mark`
   - `Tree::authentication_path` has been renamed to `Tree::witness`
+- `Tree::append` now takes ownership of the value being appended instead of a value passed
+  by reference.
 
 ### Removed
 

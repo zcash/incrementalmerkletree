@@ -18,7 +18,7 @@ pub trait Frontier<H> {
     /// Appends a new value to the frontier at the next available slot.
     /// Returns true if successful and false if the frontier would exceed
     /// the maximum allowed depth.
-    fn append(&mut self, value: &H) -> bool;
+    fn append(&mut self, value: H) -> bool;
 
     /// Obtains the current root of this Merkle frontier by hashing
     /// against empty nodes up to the maximum height of the pruned
@@ -32,7 +32,7 @@ pub trait Tree<H> {
     /// Appends a new value to the tree at the next available slot.
     /// Returns true if successful and false if the tree would exceed
     /// the maximum allowed depth.
-    fn append(&mut self, value: &H) -> bool;
+    fn append(&mut self, value: H) -> bool;
 
     /// Returns the most recently appended leaf value.
     fn current_position(&self) -> Option<Position>;
@@ -150,11 +150,11 @@ pub fn witness<T>(pos: usize, depth: usize) -> Operation<T> {
     Operation::Authpath(Position::from(pos), depth)
 }
 
-impl<H: Hashable> Operation<H> {
+impl<H: Hashable + Clone> Operation<H> {
     pub fn apply<T: Tree<H>>(&self, tree: &mut T) -> Option<(Position, Vec<H>)> {
         match self {
             Append(a) => {
-                assert!(tree.append(a), "append failed");
+                assert!(tree.append(a.clone()), "append failed");
                 None
             }
             CurrentPosition => None,
@@ -227,7 +227,7 @@ where
 pub fn apply_operation<H, T: Tree<H>>(tree: &mut T, op: Operation<H>) {
     match op {
         Append(value) => {
-            tree.append(&value);
+            tree.append(value);
         }
         Mark => {
             tree.mark();
@@ -264,7 +264,7 @@ pub fn check_operations<H: Hashable + Ord + Clone + Debug, T: Tree<H>>(
         prop_assert_eq!(tree_size, tree_values.len());
         match op {
             Append(value) => {
-                if tree.append(value) {
+                if tree.append(value.clone()) {
                     prop_assert!(tree_size < (1 << tree_depth));
                     tree_size += 1;
                     tree_values.push(value.clone());
@@ -385,8 +385,8 @@ impl<H: Hashable + Ord + Clone + Debug, I: Tree<H>, E: Tree<H>> CombinedTree<H, 
 }
 
 impl<H: Hashable + Ord + Clone + Debug, I: Tree<H>, E: Tree<H>> Tree<H> for CombinedTree<H, I, E> {
-    fn append(&mut self, value: &H) -> bool {
-        let a = self.inefficient.append(value);
+    fn append(&mut self, value: H) -> bool {
+        let a = self.inefficient.append(value.clone());
         let b = self.efficient.append(value);
         assert_eq!(a, b);
         a
@@ -471,29 +471,29 @@ pub fn check_root_hashes<T: Tree<String>, F: Fn(usize) -> T>(new_tree: F) {
     let mut tree = new_tree(100);
     assert_eq!(tree.root(0).unwrap(), "________________");
 
-    tree.append(&"a".to_string());
+    tree.append("a".to_string());
     assert_eq!(tree.root(0).unwrap().len(), 16);
     assert_eq!(tree.root(0).unwrap(), "a_______________");
 
-    tree.append(&"b".to_string());
+    tree.append("b".to_string());
     assert_eq!(tree.root(0).unwrap(), "ab______________");
 
-    tree.append(&"c".to_string());
+    tree.append("c".to_string());
     assert_eq!(tree.root(0).unwrap(), "abc_____________");
 
     let mut t = new_tree(100);
-    t.append(&"a".to_string());
+    t.append("a".to_string());
     t.checkpoint();
     t.mark();
-    t.append(&"a".to_string());
-    t.append(&"a".to_string());
-    t.append(&"a".to_string());
+    t.append("a".to_string());
+    t.append("a".to_string());
+    t.append("a".to_string());
     assert_eq!(t.root(0).unwrap(), "aaaa____________");
 }
 
 pub fn check_witnesses<T: Tree<String> + std::fmt::Debug, F: Fn(usize) -> T>(new_tree: F) {
     let mut tree = new_tree(100);
-    tree.append(&"a".to_string());
+    tree.append("a".to_string());
     tree.mark();
     assert_eq!(
         tree.witness(Position::from(0), &tree.root(0).unwrap()),
@@ -505,7 +505,7 @@ pub fn check_witnesses<T: Tree<String> + std::fmt::Debug, F: Fn(usize) -> T>(new
         ])
     );
 
-    tree.append(&"b".to_string());
+    tree.append("b".to_string());
     assert_eq!(
         tree.witness(0.into(), &tree.root(0).unwrap()),
         Some(vec![
@@ -516,7 +516,7 @@ pub fn check_witnesses<T: Tree<String> + std::fmt::Debug, F: Fn(usize) -> T>(new
         ])
     );
 
-    tree.append(&"c".to_string());
+    tree.append("c".to_string());
     tree.mark();
     assert_eq!(
         tree.witness(Position::from(2), &tree.root(0).unwrap()),
@@ -528,7 +528,7 @@ pub fn check_witnesses<T: Tree<String> + std::fmt::Debug, F: Fn(usize) -> T>(new
         ])
     );
 
-    tree.append(&"d".to_string());
+    tree.append("d".to_string());
     assert_eq!(
         tree.witness(Position::from(2), &tree.root(0).unwrap()),
         Some(vec![
@@ -539,7 +539,7 @@ pub fn check_witnesses<T: Tree<String> + std::fmt::Debug, F: Fn(usize) -> T>(new
         ])
     );
 
-    tree.append(&"e".to_string());
+    tree.append("e".to_string());
     assert_eq!(
         tree.witness(Position::from(2), &tree.root(0).unwrap()),
         Some(vec![
@@ -551,13 +551,13 @@ pub fn check_witnesses<T: Tree<String> + std::fmt::Debug, F: Fn(usize) -> T>(new
     );
 
     let mut tree = new_tree(100);
-    tree.append(&"a".to_string());
+    tree.append("a".to_string());
     tree.mark();
     for c in 'b'..'h' {
-        tree.append(&c.to_string());
+        tree.append(c.to_string());
     }
     tree.mark();
-    tree.append(&"h".to_string());
+    tree.append("h".to_string());
 
     assert_eq!(
         tree.witness(0.into(), &tree.root(0).unwrap()),
@@ -570,17 +570,17 @@ pub fn check_witnesses<T: Tree<String> + std::fmt::Debug, F: Fn(usize) -> T>(new
     );
 
     let mut tree = new_tree(100);
-    tree.append(&"a".to_string());
+    tree.append("a".to_string());
     tree.mark();
-    tree.append(&"b".to_string());
-    tree.append(&"c".to_string());
-    tree.append(&"d".to_string());
+    tree.append("b".to_string());
+    tree.append("c".to_string());
+    tree.append("d".to_string());
     tree.mark();
-    tree.append(&"e".to_string());
+    tree.append("e".to_string());
     tree.mark();
-    tree.append(&"f".to_string());
+    tree.append("f".to_string());
     tree.mark();
-    tree.append(&"g".to_string());
+    tree.append("g".to_string());
 
     assert_eq!(
         tree.witness(Position::from(5), &tree.root(0).unwrap()),
@@ -594,10 +594,10 @@ pub fn check_witnesses<T: Tree<String> + std::fmt::Debug, F: Fn(usize) -> T>(new
 
     let mut tree = new_tree(100);
     for c in 'a'..'l' {
-        tree.append(&c.to_string());
+        tree.append(c.to_string());
     }
     tree.mark();
-    tree.append(&'l'.to_string());
+    tree.append('l'.to_string());
 
     assert_eq!(
         tree.witness(Position::from(10), &tree.root(0).unwrap()),
@@ -610,16 +610,16 @@ pub fn check_witnesses<T: Tree<String> + std::fmt::Debug, F: Fn(usize) -> T>(new
     );
 
     let mut tree = new_tree(100);
-    tree.append(&'a'.to_string());
+    tree.append('a'.to_string());
     tree.mark();
     tree.checkpoint();
     assert!(tree.rewind());
     for c in 'b'..'f' {
-        tree.append(&c.to_string());
+        tree.append(c.to_string());
     }
     tree.mark();
     for c in 'f'..'i' {
-        tree.append(&c.to_string());
+        tree.append(c.to_string());
     }
 
     assert_eq!(
@@ -633,17 +633,17 @@ pub fn check_witnesses<T: Tree<String> + std::fmt::Debug, F: Fn(usize) -> T>(new
     );
 
     let mut tree = new_tree(100);
-    tree.append(&'a'.to_string());
-    tree.append(&'b'.to_string());
-    tree.append(&'c'.to_string());
+    tree.append('a'.to_string());
+    tree.append('b'.to_string());
+    tree.append('c'.to_string());
     tree.mark();
-    tree.append(&'d'.to_string());
-    tree.append(&'e'.to_string());
-    tree.append(&'f'.to_string());
-    tree.append(&'g'.to_string());
+    tree.append('d'.to_string());
+    tree.append('e'.to_string());
+    tree.append('f'.to_string());
+    tree.append('g'.to_string());
     tree.mark();
     tree.checkpoint();
-    tree.append(&'h'.to_string());
+    tree.append('h'.to_string());
     assert!(tree.rewind());
 
     assert_eq!(
@@ -657,8 +657,8 @@ pub fn check_witnesses<T: Tree<String> + std::fmt::Debug, F: Fn(usize) -> T>(new
     );
 
     let mut tree = new_tree(100);
-    tree.append(&'a'.to_string());
-    tree.append(&'b'.to_string());
+    tree.append('a'.to_string());
+    tree.append('b'.to_string());
     tree.mark();
     assert_eq!(
         tree.witness(Position::from(0), &tree.root(0).unwrap()),
@@ -667,13 +667,13 @@ pub fn check_witnesses<T: Tree<String> + std::fmt::Debug, F: Fn(usize) -> T>(new
 
     let mut tree = new_tree(100);
     for c in 'a'..'n' {
-        tree.append(&c.to_string());
+        tree.append(c.to_string());
     }
     tree.mark();
-    tree.append(&'n'.to_string());
+    tree.append('n'.to_string());
     tree.mark();
-    tree.append(&'o'.to_string());
-    tree.append(&'p'.to_string());
+    tree.append('o'.to_string());
+    tree.append('p'.to_string());
 
     assert_eq!(
         tree.witness(Position::from(12), &tree.root(0).unwrap()),
@@ -718,78 +718,78 @@ pub fn check_checkpoint_rewind<T: Tree<String>, F: Fn(usize) -> T>(new_tree: F) 
     assert!(t.rewind());
 
     let mut t = new_tree(100);
-    t.append(&"a".to_string());
+    t.append("a".to_string());
     t.checkpoint();
-    t.append(&"b".to_string());
+    t.append("b".to_string());
     t.mark();
     assert!(t.rewind());
     assert_eq!(Some(Position::from(0)), t.current_position());
 
     let mut t = new_tree(100);
-    t.append(&"a".to_string());
+    t.append("a".to_string());
     t.mark();
     t.checkpoint();
     assert!(t.rewind());
 
     let mut t = new_tree(100);
-    t.append(&"a".to_string());
+    t.append("a".to_string());
     t.checkpoint();
     t.mark();
-    t.append(&"a".to_string());
+    t.append("a".to_string());
     assert!(t.rewind());
     assert_eq!(Some(Position::from(0)), t.current_position());
 
     let mut t = new_tree(100);
-    t.append(&"a".to_string());
+    t.append("a".to_string());
     t.checkpoint();
     t.checkpoint();
     assert!(t.rewind());
-    t.append(&"b".to_string());
+    t.append("b".to_string());
     assert!(t.rewind());
-    t.append(&"b".to_string());
+    t.append("b".to_string());
     assert_eq!(t.root(0).unwrap(), "ab______________");
 }
 
 pub fn check_rewind_remove_mark<T: Tree<String>, F: Fn(usize) -> T>(new_tree: F) {
     let mut tree = new_tree(100);
-    tree.append(&"e".to_string());
+    tree.append("e".to_string());
     tree.mark();
     tree.checkpoint();
     assert!(tree.rewind());
     assert!(tree.remove_mark(0usize.into()));
 
     let mut tree = new_tree(100);
-    tree.append(&"e".to_string());
+    tree.append("e".to_string());
     tree.checkpoint();
     tree.mark();
-    assert!(tree.rewind());
-    assert!(!tree.remove_mark(0usize.into()));
-
-    let mut tree = new_tree(100);
-    tree.append(&"e".to_string());
-    tree.mark();
-    tree.checkpoint();
-    assert!(tree.remove_mark(0usize.into()));
-    assert!(tree.rewind());
-    assert!(tree.remove_mark(0usize.into()));
-
-    let mut tree = new_tree(100);
-    tree.append(&"e".to_string());
-    tree.mark();
-    assert!(tree.remove_mark(0usize.into()));
-    tree.checkpoint();
     assert!(tree.rewind());
     assert!(!tree.remove_mark(0usize.into()));
 
     let mut tree = new_tree(100);
-    tree.append(&"a".to_string());
+    tree.append("e".to_string());
+    tree.mark();
+    tree.checkpoint();
+    assert!(tree.remove_mark(0usize.into()));
+    assert!(tree.rewind());
+    assert!(tree.remove_mark(0usize.into()));
+
+    let mut tree = new_tree(100);
+    tree.append("e".to_string());
+    tree.mark();
+    assert!(tree.remove_mark(0usize.into()));
+    tree.checkpoint();
+    assert!(tree.rewind());
+    assert!(!tree.remove_mark(0usize.into()));
+
+    let mut tree = new_tree(100);
+    tree.append("a".to_string());
     assert!(!tree.remove_mark(0usize.into()));
     tree.checkpoint();
     assert!(tree.mark().is_some());
     assert!(tree.rewind());
 
     let mut tree = new_tree(100);
-    tree.append(&"a".to_string());
+    tree.append("a".to_string());
     tree.checkpoint();
     assert!(tree.mark().is_some());
     assert!(tree.remove_mark(0usize.into()));

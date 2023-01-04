@@ -326,16 +326,16 @@ impl<H: Hashable + Clone, const DEPTH: u8> Frontier<H, DEPTH> {
     /// Appends a new value to the frontier at the next available slot.
     /// Returns true if successful and false if the frontier would exceed
     /// the maximum allowed depth.
-    pub fn append(&mut self, value: &H) -> bool {
+    pub fn append(&mut self, value: H) -> bool {
         if let Some(frontier) = self.frontier.as_mut() {
             if frontier.position().is_complete_subtree(DEPTH.into()) {
                 false
             } else {
-                frontier.append(value.clone());
+                frontier.append(value);
                 true
             }
         } else {
-            self.frontier = Some(NonEmptyFrontier::new(value.clone()));
+            self.frontier = Some(NonEmptyFrontier::new(value));
             true
         }
     }
@@ -917,7 +917,7 @@ impl<H: Hashable + Ord + Clone, const DEPTH: u8> BridgeTree<H, DEPTH> {
     /// Appends a new value to the tree at the next available slot.
     /// Returns true if successful and false if the tree would exceed
     /// the maximum allowed depth.
-    pub fn append(&mut self, value: &H) -> bool {
+    pub fn append(&mut self, value: H) -> bool {
         if let Some(bridge) = self.current_bridge.as_mut() {
             if bridge
                 .frontier
@@ -926,11 +926,11 @@ impl<H: Hashable + Ord + Clone, const DEPTH: u8> BridgeTree<H, DEPTH> {
             {
                 false
             } else {
-                bridge.append(value.clone());
+                bridge.append(value);
                 true
             }
         } else {
-            self.current_bridge = Some(MerkleBridge::new(value.clone()));
+            self.current_bridge = Some(MerkleBridge::new(value));
             true
         }
     }
@@ -1308,7 +1308,7 @@ mod tests {
     };
 
     impl<H: Hashable + Clone, const DEPTH: u8> Frontier<H> for super::Frontier<H, DEPTH> {
-        fn append(&mut self, value: &H) -> bool {
+        fn append(&mut self, value: H) -> bool {
             super::Frontier::append(self, value)
         }
 
@@ -1318,7 +1318,7 @@ mod tests {
     }
 
     impl<H: Hashable + Ord + Clone, const DEPTH: u8> Tree<H> for BridgeTree<H, DEPTH> {
-        fn append(&mut self, value: &H) -> bool {
+        fn append(&mut self, value: H) -> bool {
             BridgeTree::append(self, value)
         }
 
@@ -1428,13 +1428,13 @@ mod tests {
         assert_eq!(frontier.root().len(), 16);
         assert_eq!(frontier.root(), "________________");
 
-        frontier.append(&"a".to_string());
+        frontier.append("a".to_string());
         assert_eq!(frontier.root(), "a_______________");
 
-        frontier.append(&"b".to_string());
+        frontier.append("b".to_string());
         assert_eq!(frontier.root(), "ab______________");
 
-        frontier.append(&"c".to_string());
+        frontier.append("c".to_string());
         assert_eq!(frontier.root(), "abc_____________");
     }
 
@@ -1462,9 +1462,9 @@ mod tests {
     fn tree_depth() {
         let mut tree = BridgeTree::<String, 3>::new(100);
         for c in 'a'..'i' {
-            assert!(tree.append(&c.to_string()))
+            assert!(tree.append(c.to_string()))
         }
-        assert!(!tree.append(&'i'.to_string()));
+        assert!(!tree.append('i'.to_string()));
     }
 
     fn arb_bridgetree<G: Strategy + Clone>(
@@ -1529,10 +1529,10 @@ mod tests {
     fn drop_oldest_checkpoint() {
         let mut t = BridgeTree::<String, 6>::new(100);
         t.checkpoint();
-        t.append(&"a".to_string());
+        t.append("a".to_string());
         t.mark();
-        t.append(&"b".to_string());
-        t.append(&"c".to_string());
+        t.append("b".to_string());
+        t.append("c".to_string());
         assert!(
             t.drop_oldest_checkpoint(),
             "Checkpoint drop is expected to succeed"
@@ -1567,7 +1567,7 @@ mod tests {
         let mut has_witness = vec![];
         for i in 0usize..100 {
             let elem: String = format!("{},", i);
-            assert!(t.append(&elem), "Append should succeed.");
+            assert!(t.append(elem), "Append should succeed.");
             if i % 5 == 0 {
                 t.checkpoint();
             }
@@ -1610,7 +1610,7 @@ mod tests {
     fn garbage_collect_idx() {
         let mut tree: BridgeTree<String, 7> = BridgeTree::new(100);
         let empty_root = tree.root(0);
-        tree.append(&"a".to_string());
+        tree.append("a".to_string());
         for _ in 0..100 {
             tree.checkpoint();
         }

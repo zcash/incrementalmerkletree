@@ -53,11 +53,11 @@ impl<H: Hashable + Clone> TreeState<H> {
 }
 
 impl<H: Hashable + Clone> Frontier<H> for TreeState<H> {
-    fn append(&mut self, value: &H) -> bool {
+    fn append(&mut self, value: H) -> bool {
         if self.current_offset == (1 << self.depth) {
             false
         } else {
-            self.leaves[self.current_offset] = value.clone();
+            self.leaves[self.current_offset] = value;
             self.current_offset += 1;
             true
         }
@@ -179,7 +179,7 @@ impl<H: Hashable + PartialEq + Clone> CompleteTree<H> {
 impl<H: Hashable + PartialEq + Clone + std::fmt::Debug> Tree<H> for CompleteTree<H> {
     /// Appends a new value to the tree at the next available slot. Returns true
     /// if successful and false if the tree is full.
-    fn append(&mut self, value: &H) -> bool {
+    fn append(&mut self, value: H) -> bool {
         self.tree_state.append(value)
     }
 
@@ -279,9 +279,9 @@ mod tests {
 
         let mut tree = CompleteTree::<SipHashable>::new(DEPTH, 100);
         for value in values {
-            assert!(tree.append(&value));
+            assert!(tree.append(value));
         }
-        assert!(!tree.append(&SipHashable(0)));
+        assert!(!tree.append(SipHashable(0)));
 
         let expected = SipHashable::combine(
             Level::from(2),
@@ -317,10 +317,10 @@ mod tests {
 
         let mut tree = CompleteTree::<SipHashable>::new(DEPTH, 100);
         for value in values {
-            assert!(tree.append(&value));
+            assert!(tree.append(value));
             tree.mark();
         }
-        assert!(!tree.append(&SipHashable(0)));
+        assert!(!tree.append(SipHashable(0)));
 
         let expected = SipHashable::combine(
             <Level>::from(2),
