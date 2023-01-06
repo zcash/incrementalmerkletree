@@ -30,12 +30,6 @@
 //! reset the state to.
 //!
 //! In this module, the term "ommer" is used as for the sibling of a parent node in a binary tree.
-mod hashing;
-mod position;
-
-#[cfg(any(bench, test, feature = "test-dependencies"))]
-pub mod testing;
-
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
 use std::convert::TryFrom;
@@ -43,11 +37,7 @@ use std::fmt::Debug;
 use std::mem::size_of;
 use std::ops::Range;
 
-use crate::position::Source;
-pub use crate::{
-    hashing::Hashable,
-    position::{Address, Level, Position},
-};
+pub use incrementalmerkletree::{Address, Hashable, Level, Position};
 
 /// Validation errors that can occur during reconstruction of a Merkle frontier from
 /// its constituent parts.
@@ -82,6 +72,59 @@ pub enum WitnessingError {
     PositionNotMarked(Position),
     BridgeFusionError(ContinuityError),
     BridgeAddressInvalid(Address),
+}
+
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+enum Source {
+    /// The sibling to the address can be derived from the incremental frontier
+    /// at the contained ommer index
+    Past(usize),
+    /// The sibling to the address must be obtained from values discovered by
+    /// the addition of more nodes to the tree
+    Future,
+}
+
+#[must_use = "iterators are lazy and do nothing unless consumed"]
+struct WitnessAddrsIter {
+    root_level: Level,
+    current: Address,
+    ommer_count: usize,
+}
+
+/// Returns an iterator over the addresses of nodes required to create a witness for this
+/// position, beginning with the sibling of the leaf at this position and ending with the
+/// sibling of the ancestor of the leaf at this position that is required to compute a root at
+/// the specified level.
+fn witness_addrs(position: Position, root_level: Level) -> impl Iterator<Item = (Address, Source)> {
+    WitnessAddrsIter {
+        root_level,
+        current: Address::from(position),
+        ommer_count: 0,
+    }
+}
+
+impl Iterator for WitnessAddrsIter {
+    type Item = (Address, Source);
+
+    fn next(&mut self) -> Option<(Address, Source)> {
+        if self.current.level() < self.root_level {
+            let current = self.current;
+            let source = if current.is_complete_node() {
+                Source::Past(self.ommer_count)
+            } else {
+                Source::Future
+            };
+
+            self.current = current.parent();
+            if matches!(source, Source::Past(_)) {
+                self.ommer_count += 1;
+            }
+
+            Some((current.sibling(), source))
+        } else {
+            None
+        }
+    }
 }
 
 /// A [`NonEmptyFrontier`] is a reduced representation of a Merkle tree, containing a single leaf
@@ -154,7 +197,7 @@ impl<H: Hashable + Clone> NonEmptyFrontier<H> {
 
             let mut carry = Some((prior_leaf, 0.into()));
             let mut new_ommers = Vec::with_capacity(self.position.past_ommer_count());
-            for (addr, source) in prior_position.witness_addrs(new_root_level) {
+            for (addr, source) in witness_addrs(prior_position, new_root_level) {
                 if let Source::Past(i) = source {
                     if let Some((carry_ommer, carry_lvl)) = carry.as_ref() {
                         if *carry_lvl == addr.level() {
@@ -188,8 +231,7 @@ impl<H: Hashable + Clone> NonEmptyFrontier<H> {
     /// Generate the root of the Merkle tree by hashing against empty subtree roots.
     pub fn root(&self, root_level: Option<Level>) -> H {
         let max_level = root_level.unwrap_or_else(|| self.position.root_level());
-        self.position
-            .witness_addrs(max_level)
+        witness_addrs(self.position, max_level)
             .fold(
                 (self.leaf.clone(), Level::from(0)),
                 |(digest, complete_lvl), (addr, source)| {
@@ -220,8 +262,7 @@ impl<H: Hashable + Clone> NonEmptyFrontier<H> {
     {
         // construct a complete trailing edge that includes the data from
         // the following frontier not yet included in the trailing edge.
-        self.position()
-            .witness_addrs(depth.into())
+        witness_addrs(self.position(), depth.into())
             .map(|(addr, source)| match source {
                 Source::Past(i) => Ok(self.ommers[i].clone()),
                 Source::Future => {
@@ -285,16 +326,16 @@ impl<H: Hashable + Clone, const DEPTH: u8> Frontier<H, DEPTH> {
     /// Appends a new value to the frontier at the next available slot.
     /// Returns true if successful and false if the frontier would exceed
     /// the maximum allowed depth.
-    pub fn append(&mut self, value: &H) -> bool {
+    pub fn append(&mut self, value: H) -> bool {
         if let Some(frontier) = self.frontier.as_mut() {
             if frontier.position().is_complete_subtree(DEPTH.into()) {
                 false
             } else {
-                frontier.append(value.clone());
+                frontier.append(value);
                 true
             }
         } else {
-            self.frontier = Some(NonEmptyFrontier::new(value.clone()));
+            self.frontier = Some(NonEmptyFrontier::new(value));
             true
         }
     }
@@ -876,7 +917,7 @@ impl<H: Hashable + Ord + Clone, const DEPTH: u8> BridgeTree<H, DEPTH> {
     /// Appends a new value to the tree at the next available slot.
     /// Returns true if successful and false if the tree would exceed
     /// the maximum allowed depth.
-    pub fn append(&mut self, value: &H) -> bool {
+    pub fn append(&mut self, value: H) -> bool {
         if let Some(bridge) = self.current_bridge.as_mut() {
             if bridge
                 .frontier
@@ -885,11 +926,11 @@ impl<H: Hashable + Ord + Clone, const DEPTH: u8> BridgeTree<H, DEPTH> {
             {
                 false
             } else {
-                bridge.append(value.clone());
+                bridge.append(value);
                 true
             }
         } else {
-            self.current_bridge = Some(MerkleBridge::new(value.clone()));
+            self.current_bridge = Some(MerkleBridge::new(value));
             true
         }
     }
@@ -1204,10 +1245,8 @@ impl<H: Hashable + Ord + Clone, const DEPTH: u8> BridgeTree<H, DEPTH> {
 
                         // Add the elements of the auth path to the set of addresses we should
                         // continue to track and retain information for
-                        for (addr, source) in cur_bridge
-                            .frontier
-                            .position()
-                            .witness_addrs(Level::from(DEPTH))
+                        for (addr, source) in
+                            witness_addrs(cur_bridge.frontier.position(), Level::from(DEPTH))
                         {
                             if source == Source::Future {
                                 ommer_addrs.insert(addr);
@@ -1255,12 +1294,21 @@ impl<H: Hashable + Ord + Clone, const DEPTH: u8> BridgeTree<H, DEPTH> {
 #[cfg(test)]
 mod tests {
     use proptest::prelude::*;
+    use std::fmt::Debug;
 
     use super::*;
-    use crate::testing::{apply_operation, arb_operation, tests, Frontier, Tree};
+    use incrementalmerkletree::{
+        testing::{
+            apply_operation, arb_operation, check_checkpoint_rewind, check_operations,
+            check_rewind_remove_mark, check_rewind_remove_mark_consistency, check_root_hashes,
+            check_witnesses, complete_tree::CompleteTree, CombinedTree, Frontier, SipHashable,
+            Tree,
+        },
+        Hashable,
+    };
 
     impl<H: Hashable + Clone, const DEPTH: u8> Frontier<H> for super::Frontier<H, DEPTH> {
-        fn append(&mut self, value: &H) -> bool {
+        fn append(&mut self, value: H) -> bool {
             super::Frontier::append(self, value)
         }
 
@@ -1270,7 +1318,7 @@ mod tests {
     }
 
     impl<H: Hashable + Ord + Clone, const DEPTH: u8> Tree<H> for BridgeTree<H, DEPTH> {
-        fn append(&mut self, value: &H) -> bool {
+        fn append(&mut self, value: H) -> bool {
             BridgeTree::append(self, value)
         }
 
@@ -1316,6 +1364,46 @@ mod tests {
     }
 
     #[test]
+    fn position_witness_addrs() {
+        use Source::*;
+        let path_elem = |l, i, s| (Address::from_parts(Level::from(l), i), s);
+        assert_eq!(
+            vec![path_elem(0, 1, Future), path_elem(1, 1, Future)],
+            witness_addrs(Position::from(0), Level::from(2)).collect::<Vec<_>>()
+        );
+        assert_eq!(
+            vec![path_elem(0, 3, Future), path_elem(1, 0, Past(0))],
+            witness_addrs(Position::from(2), Level::from(2)).collect::<Vec<_>>()
+        );
+        assert_eq!(
+            vec![
+                path_elem(0, 2, Past(0)),
+                path_elem(1, 0, Past(1)),
+                path_elem(2, 1, Future)
+            ],
+            witness_addrs(Position::from(3), Level::from(3)).collect::<Vec<_>>()
+        );
+        assert_eq!(
+            vec![
+                path_elem(0, 5, Future),
+                path_elem(1, 3, Future),
+                path_elem(2, 0, Past(0)),
+                path_elem(3, 1, Future)
+            ],
+            witness_addrs(Position::from(4), Level::from(4)).collect::<Vec<_>>()
+        );
+        assert_eq!(
+            vec![
+                path_elem(0, 7, Future),
+                path_elem(1, 2, Past(0)),
+                path_elem(2, 0, Past(1)),
+                path_elem(3, 1, Future)
+            ],
+            witness_addrs(Position::from(6), Level::from(4)).collect::<Vec<_>>()
+        );
+    }
+
+    #[test]
     fn nonempty_frontier_root() {
         let mut frontier = NonEmptyFrontier::new("a".to_string());
         assert_eq!(frontier.root(None), "a");
@@ -1340,13 +1428,13 @@ mod tests {
         assert_eq!(frontier.root().len(), 16);
         assert_eq!(frontier.root(), "________________");
 
-        frontier.append(&"a".to_string());
+        frontier.append("a".to_string());
         assert_eq!(frontier.root(), "a_______________");
 
-        frontier.append(&"b".to_string());
+        frontier.append("b".to_string());
         assert_eq!(frontier.root(), "ab______________");
 
-        frontier.append(&"c".to_string());
+        frontier.append("c".to_string());
         assert_eq!(frontier.root(), "abc_____________");
     }
 
@@ -1374,9 +1462,9 @@ mod tests {
     fn tree_depth() {
         let mut tree = BridgeTree::<String, 3>::new(100);
         for c in 'a'..'i' {
-            assert!(tree.append(&c.to_string()))
+            assert!(tree.append(c.to_string()))
         }
-        assert!(!tree.append(&'i'.to_string()));
+        assert!(!tree.append('i'.to_string()));
     }
 
     fn arb_bridgetree<G: Strategy + Clone>(
@@ -1441,10 +1529,10 @@ mod tests {
     fn drop_oldest_checkpoint() {
         let mut t = BridgeTree::<String, 6>::new(100);
         t.checkpoint();
-        t.append(&"a".to_string());
+        t.append("a".to_string());
         t.mark();
-        t.append(&"b".to_string());
-        t.append(&"c".to_string());
+        t.append("b".to_string());
+        t.append("c".to_string());
         assert!(
             t.drop_oldest_checkpoint(),
             "Checkpoint drop is expected to succeed"
@@ -1454,22 +1542,22 @@ mod tests {
 
     #[test]
     fn root_hashes() {
-        tests::check_root_hashes(BridgeTree::<String, 4>::new);
+        check_root_hashes(BridgeTree::<String, 4>::new);
     }
 
     #[test]
     fn witnesss() {
-        tests::check_witnesss(BridgeTree::<String, 4>::new);
+        check_witnesses(BridgeTree::<String, 4>::new);
     }
 
     #[test]
     fn checkpoint_rewind() {
-        tests::check_checkpoint_rewind(BridgeTree::<String, 4>::new);
+        check_checkpoint_rewind(BridgeTree::<String, 4>::new);
     }
 
     #[test]
     fn rewind_remove_mark() {
-        tests::check_rewind_remove_mark(BridgeTree::<String, 4>::new);
+        check_rewind_remove_mark(BridgeTree::<String, 4>::new);
     }
 
     #[test]
@@ -1479,7 +1567,7 @@ mod tests {
         let mut has_witness = vec![];
         for i in 0usize..100 {
             let elem: String = format!("{},", i);
-            assert!(t.append(&elem), "Append should succeed.");
+            assert!(t.append(elem), "Append should succeed.");
             if i % 5 == 0 {
                 t.checkpoint();
             }
@@ -1522,7 +1610,7 @@ mod tests {
     fn garbage_collect_idx() {
         let mut tree: BridgeTree<String, 7> = BridgeTree::new(100);
         let empty_root = tree.root(0);
-        tree.append(&"a".to_string());
+        tree.append("a".to_string());
         for _ in 0..100 {
             tree.checkpoint();
         }
@@ -1530,5 +1618,51 @@ mod tests {
         assert!(tree.root(0) != empty_root);
         tree.rewind();
         assert!(tree.root(0) != empty_root);
+    }
+
+    // Combined tree tests
+    fn new_combined_tree<H: Hashable + Ord + Clone + Debug>(
+        max_checkpoints: usize,
+    ) -> CombinedTree<H, CompleteTree<H>, BridgeTree<H, 4>> {
+        CombinedTree::new(
+            CompleteTree::new(4, max_checkpoints),
+            BridgeTree::<H, 4>::new(max_checkpoints),
+        )
+    }
+
+    #[test]
+    fn test_rewind_remove_mark() {
+        check_rewind_remove_mark(new_combined_tree);
+    }
+
+    #[test]
+    fn test_rewind_remove_mark_consistency() {
+        check_rewind_remove_mark_consistency(new_combined_tree);
+    }
+
+    proptest! {
+        #![proptest_config(ProptestConfig::with_cases(100000))]
+
+        #[test]
+        fn check_randomized_u64_ops(
+            ops in proptest::collection::vec(
+                arb_operation((0..32u64).prop_map(SipHashable), 0usize..100),
+                1..100
+            )
+        ) {
+            let tree = new_combined_tree(100);
+            check_operations(tree, 4, &ops)?;
+        }
+
+        #[test]
+        fn check_randomized_str_ops(
+            ops in proptest::collection::vec(
+                arb_operation((97u8..123).prop_map(|c| char::from(c).to_string()), 0usize..100),
+                1..100
+            )
+        ) {
+            let tree = new_combined_tree(100);
+            check_operations(tree, 4, &ops)?;
+        }
     }
 }

@@ -7,6 +7,11 @@ and this project adheres to Rust's notion of
 
 ## [Unreleased]
 
+### Removed
+
+- The `testing` module has been removed in favor of depending on
+  `incrementalmerkletree::testing`.
+
 ## [bridgetree-v0.2.0] - 2022-05-10
 
 The `bridgetree` crate is a fork of `incrementalmerkletree`, with the contents
@@ -42,6 +47,8 @@ referred to by their new location.
   - `BridgeTree::authentication_path` has been renamed to `BridgeTree::witness`
   - `BridgeTree::witnessed` has been renamed to `BridgeTree::marked`
   - `BridgeTree::witnessed_indices` has been renamed to `BridgeTree::marked_indices`
+- `BridgeTree::append` and `NonEmptyFrontier::append` now take ownership of the
+  value being appended instead of the value being passed by reference.
 
 The following types have been moved from the `bridgetree` module of
 `incrementalmerkletree` to the crate root:
@@ -84,7 +91,7 @@ The `Tree` interface reflects the renaming of `witness` to `mark` described abov
 
 ### Removed relative to `incrementalmerkletree-0.3.0`
 
-- `bridgetree::Leaf` 
+- `bridgetree::Leaf`
 - `bridgetree::AuthFragment`
 - `NonEmptyFrontier::size`
 - `NonEmptyFrontier::max_altitude`

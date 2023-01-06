@@ -1,11 +1,36 @@
 //! Sample implementation of the Tree interface.
 use std::collections::BTreeSet;
 
-use super::{Frontier, Tree};
 use crate::{
-    hashing::Hashable,
-    position::{Level, Position},
+    testing::{Frontier, Tree},
+    Hashable, Level, Position,
 };
+
+pub(crate) fn root<H: Hashable + Clone>(mut leaves: Vec<H>) -> H {
+    leaves.resize(leaves.len().next_power_of_two(), H::empty_leaf());
+
+    //leaves are always at level zero, so we start there.
+    let mut level = Level::from(0);
+    while leaves.len() != 1 {
+        leaves = leaves
+            .iter()
+            .enumerate()
+            .filter(|(i, _)| (i % 2) == 0)
+            .map(|(_, a)| a)
+            .zip(
+                leaves
+                    .iter()
+                    .enumerate()
+                    .filter(|(i, _)| (i % 2) == 1)
+                    .map(|(_, b)| b),
+            )
+            .map(|(a, b)| H::combine(level, a, b))
+            .collect();
+        level = level + 1;
+    }
+
+    leaves[0].clone()
+}
 
 #[derive(Clone, Debug)]
 pub struct TreeState<H: Hashable> {
@@ -17,7 +42,6 @@ pub struct TreeState<H: Hashable> {
 
 impl<H: Hashable + Clone> TreeState<H> {
     /// Creates a new, empty binary tree of specified depth.
-    #[cfg(test)]
     pub fn new(depth: usize) -> Self {
         Self {
             leaves: vec![H::empty_leaf(); 1 << depth],
@@ -29,11 +53,11 @@ impl<H: Hashable + Clone> TreeState<H> {
 }
 
 impl<H: Hashable + Clone> Frontier<H> for TreeState<H> {
-    fn append(&mut self, value: &H) -> bool {
+    fn append(&mut self, value: H) -> bool {
         if self.current_offset == (1 << self.depth) {
             false
         } else {
-            self.leaves[self.current_offset] = value.clone();
+            self.leaves[self.current_offset] = value;
             self.current_offset += 1;
             true
         }
@@ -41,7 +65,7 @@ impl<H: Hashable + Clone> Frontier<H> for TreeState<H> {
 
     /// Obtains the current root of this Merkle tree.
     fn root(&self) -> H {
-        lazy_root(self.leaves.clone())
+        root(self.leaves.clone())
     }
 }
 
@@ -89,9 +113,7 @@ impl<H: Hashable + PartialEq + Clone> TreeState<H> {
             let mut leaf_idx: usize = position.into();
             for bit in 0..self.depth {
                 leaf_idx ^= 1 << bit;
-                path.push(lazy_root::<H>(
-                    self.leaves[leaf_idx..][0..(1 << bit)].to_vec(),
-                ));
+                path.push(root::<H>(self.leaves[leaf_idx..][0..(1 << bit)].to_vec()));
                 leaf_idx &= usize::MAX << (bit + 1);
             }
 
@@ -118,7 +140,6 @@ pub struct CompleteTree<H: Hashable> {
 
 impl<H: Hashable + Clone> CompleteTree<H> {
     /// Creates a new, empty binary tree of specified depth.
-    #[cfg(test)]
     pub fn new(depth: usize, max_checkpoints: usize) -> Self {
         Self {
             tree_state: TreeState::new(depth),
@@ -158,7 +179,7 @@ impl<H: Hashable + PartialEq + Clone> CompleteTree<H> {
 impl<H: Hashable + PartialEq + Clone + std::fmt::Debug> Tree<H> for CompleteTree<H> {
     /// Appends a new value to the tree at the next available slot. Returns true
     /// if successful and false if the tree is full.
-    fn append(&mut self, value: &H) -> bool {
+    fn append(&mut self, value: H) -> bool {
         self.tree_state.append(value)
     }
 
@@ -226,42 +247,17 @@ impl<H: Hashable + PartialEq + Clone + std::fmt::Debug> Tree<H> for CompleteTree
     }
 }
 
-pub(crate) fn lazy_root<H: Hashable + Clone>(mut leaves: Vec<H>) -> H {
-    //leaves are always at level zero, so we start there.
-    let mut level = Level::from(0);
-    while leaves.len() != 1 {
-        leaves = leaves
-            .iter()
-            .enumerate()
-            .filter(|(i, _)| (i % 2) == 0)
-            .map(|(_, a)| a)
-            .zip(
-                leaves
-                    .iter()
-                    .enumerate()
-                    .filter(|(i, _)| (i % 2) == 1)
-                    .map(|(_, b)| b),
-            )
-            .map(|(a, b)| H::combine(level, a, b))
-            .collect();
-        level = level + 1;
-    }
-
-    leaves[0].clone()
-}
-
 #[cfg(test)]
 mod tests {
     use std::convert::TryFrom;
 
     use super::CompleteTree;
     use crate::{
-        hashing::Hashable,
-        position::{Level, Position},
         testing::{
-            tests::{self, compute_root_from_witness},
-            SipHashable, Tree,
+            check_checkpoint_rewind, check_rewind_remove_mark, check_root_hashes, check_witnesses,
+            compute_root_from_witness, SipHashable, Tree,
         },
+        Hashable, Level, Position,
     };
 
     #[test]
@@ -283,9 +279,9 @@ mod tests {
 
         let mut tree = CompleteTree::<SipHashable>::new(DEPTH, 100);
         for value in values {
-            assert!(tree.append(&value));
+            assert!(tree.append(value));
         }
-        assert!(!tree.append(&SipHashable(0)));
+        assert!(!tree.append(SipHashable(0)));
 
         let expected = SipHashable::combine(
             Level::from(2),
@@ -306,12 +302,12 @@ mod tests {
 
     #[test]
     fn root_hashes() {
-        tests::check_root_hashes(|max_c| CompleteTree::<String>::new(4, max_c));
+        check_root_hashes(|max_c| CompleteTree::<String>::new(4, max_c));
     }
 
     #[test]
     fn witnesss() {
-        tests::check_witnesss(|max_c| CompleteTree::<String>::new(4, max_c));
+        check_witnesses(|max_c| CompleteTree::<String>::new(4, max_c));
     }
 
     #[test]
@@ -321,10 +317,10 @@ mod tests {
 
         let mut tree = CompleteTree::<SipHashable>::new(DEPTH, 100);
         for value in values {
-            assert!(tree.append(&value));
+            assert!(tree.append(value));
             tree.mark();
         }
-        assert!(!tree.append(&SipHashable(0)));
+        assert!(!tree.append(SipHashable(0)));
 
         let expected = SipHashable::combine(
             <Level>::from(2),
@@ -354,11 +350,11 @@ mod tests {
 
     #[test]
     fn checkpoint_rewind() {
-        tests::check_checkpoint_rewind(|max_c| CompleteTree::<String>::new(4, max_c));
+        check_checkpoint_rewind(|max_c| CompleteTree::<String>::new(4, max_c));
     }
 
     #[test]
     fn rewind_remove_mark() {
-        tests::check_rewind_remove_mark(|max_c| CompleteTree::<String>::new(4, max_c));
+        check_rewind_remove_mark(|max_c| CompleteTree::<String>::new(4, max_c));
     }
 }

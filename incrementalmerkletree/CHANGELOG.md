@@ -7,9 +7,46 @@ and this project adheres to Rust's notion of
 
 ## [Unreleased]
 
+### Added
+
+- `Position::is_odd`
+- `Position::ommer_index`
+- `Position::root_level`
+- `Position::past_ommer_count`
+- `Address` A type used to uniquely identify node locations within a binary tree.
+
+A `test-dependencies` feature has been added. This makes available a `testing`
+module to users of this crate, which contains `proptest` generators for types
+from this crate as well as a number of tools for comparison testing between
+`Tree` implementations and a number of generalized example tests. The
+`Frontier` and `Tree` traits have been moved to the `testing` module, as there
+is not another good use case for polymorphism over tree implementations.
+
+### Changed
+
+- `Altitude` has been renamed to `Level`
+- `Position::is_complete` has been renamed to `Position::is_complete_subtree`.
+- `witness` is now used as the name of the operation to construct the witness for a leaf.
+  We now use `mark` to refer to the process of marking a node for which we may later wish
+  to construct a witness.
+  - `Tree::witness` has been renamed to `Tree::mark`
+  - `Tree::witnessed_positions` has been renamed to `Tree::marked_positions`
+  - `Tree::get_witnessed_leaf` has been renamed to `Tree::get_marked_leaf`
+  - `Tree::remove_witness` has been renamed to `Tree::remove_mark`
+  - `Tree::authentication_path` has been renamed to `Tree::witness`
+- `Tree::append` now takes ownership of the value being appended instead of a value passed
+  by reference.
+
 ### Removed
 
 - The `bridgetree` module has been moved out a to a separate `bridgetree` crate.
+- `Position::witness_addrs`
+- `Position::altitudes_required`
+- `Position::all_altitudes_required`
+- `Position::auth_path`
+- `Position::max_altitude`
+- `Position::ommer_altitudes`
+- `impl Sub<u8> for Altitude`
 
 ## [0.3.0] - 2022-05-10
 
@@ -27,7 +64,7 @@ and this project adheres to Rust's notion of
     addition to the previous behavior which only allowed computation of the path as of the
     most recent tree state. The provided `as_of_root` value must be equal to either the
     current root of the tree, or to the root of the tree at a previous checkpoint that
-    contained a note at the given position. 
+    contained a note at the given position.
 
 ### Removed
 
@@ -43,7 +80,7 @@ and this project adheres to Rust's notion of
     witnessed leaves by their position in the tree.
   - `Tree::witnessed_positions`, to allow a user to query for all positions that
     have been witnessed.
-  - `Tree::garbage_collect`, to prune checkpoint and removed witness information 
+  - `Tree::garbage_collect`, to prune checkpoint and removed witness information
     that is no longer reachable by rewinds of the tree.
 - `incrementalmerkletree::bridgetree`:
   - `NonEmptyFrontier::current_leaf`
@@ -61,11 +98,11 @@ and this project adheres to Rust's notion of
   - `Tree::current_leaf` and `Tree::witness` have both been changed to only return the leaf
     value, instead of both the leaf value and the position.
 - `incrementalmerkletree::bridgetree`:
-  - The type of `BridgeTree::saved` and `Checkpoint::forgotten` have been changed from 
+  - The type of `BridgeTree::saved` and `Checkpoint::forgotten` have been changed from
     `BTreeMap<(Position, H), usize>` to `BTreeMap<Position, usize>`. This change
     is also reflected in the rturn type of the `BridgeTree::witnessed_indices` method.
   - The `Checkpoint` type is no longer parameterized by `H`.
-  - `BridgeTree::bridges` has been split into two parts: 
+  - `BridgeTree::bridges` has been split into two parts:
     - `BridgeTree::prior_bridges` now tracks past bridges not including the current frontier.
     - `BridgeTree::current_bridge` now tracks current mutable frontier.
   - The signature of `BridgeTree::from_parts` has been modified to reflect these changes.
@@ -83,8 +120,8 @@ and this project adheres to Rust's notion of
 
 ### Fixed
 
-- A bug in `BridgeTree::garbage_collect` that caused garbage collection to in some 
-  cases incorrectly rewrite checkpointed bridge lengths, resulting in a condition 
+- A bug in `BridgeTree::garbage_collect` that caused garbage collection to in some
+  cases incorrectly rewrite checkpointed bridge lengths, resulting in a condition
   where a rewind could panic after a GC operation.
 
 ## [0.3.0-beta.1] - 2022-03-22
@@ -133,7 +170,7 @@ and this project adheres to Rust's notion of
     or `None` if the tree is empty, instead of a boolean value.
 - `incrementalmerkletree::bridgetree`:
   - Most `MerkleBridge` methods now require `H: Ord`.
-  - Changed the return type of `MerkleBridge::auth_fragments` from 
+  - Changed the return type of `MerkleBridge::auth_fragments` from
     `HashMap<usize, AuthFragment>` to `BTreeMap<Position, AuthFragment>`; the
     `saved` argument to `BridgeTree::from_parts` is similarly altered.
   - `MerkleBridge::successor` now takes a boolean argument for tracking the most
@@ -157,7 +194,7 @@ and this project adheres to Rust's notion of
 ## [0.2.0] - 2022-03-22
 
 v0.2.0 is essentially a complete rewrite relative to v0.1.0, and should be considered
-the first usable release.  
+the first usable release.
 
 ## [0.1.0] - 2021-06-23
 Initial release!
