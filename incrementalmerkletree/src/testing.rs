@@ -144,7 +144,7 @@ pub enum Operation<A, C> {
     Unmark(Position),
     Checkpoint(C),
     Rewind,
-    Authpath(Position, usize),
+    Witness(Position, usize),
     GarbageCollect,
 }
 
@@ -159,7 +159,7 @@ pub fn unmark<H, C>(pos: usize) -> Operation<H, C> {
 }
 
 pub fn witness<H, C>(pos: usize, depth: usize) -> Operation<H, C> {
-    Operation::Authpath(Position::from(pos), depth)
+    Operation::Witness(Position::from(pos), depth)
 }
 
 impl<H: Hashable + Clone, C: Clone> Operation<H, C> {
@@ -185,7 +185,7 @@ impl<H: Hashable + Clone, C: Clone> Operation<H, C> {
                 assert!(tree.rewind(), "rewind failed");
                 None
             }
-            Authpath(p, d) => tree.witness(*p, *d).map(|xs| (*p, xs)),
+            Witness(p, d) => tree.witness(*p, *d).map(|xs| (*p, xs)),
             GarbageCollect => None,
         }
     }
@@ -211,7 +211,7 @@ impl<H: Hashable + Clone, C: Clone> Operation<H, C> {
             Unmark(p) => Unmark(*p),
             Checkpoint(id) => Checkpoint(f(id)),
             Rewind => Rewind,
-            Authpath(p, d) => Authpath(*p, *d),
+            Witness(p, d) => Witness(*p, *d),
             GarbageCollect => GarbageCollect,
         }
     }
@@ -250,7 +250,7 @@ where
         Just(Operation::Rewind),
         pos_gen
             .prop_flat_map(|i| (0usize..10)
-                .prop_map(move |depth| Operation::Authpath(Position::from(i), depth))),
+                .prop_map(move |depth| Operation::Witness(Position::from(i), depth))),
     ]
 }
 
@@ -270,7 +270,7 @@ pub fn apply_operation<H, C, T: Tree<H, C>>(tree: &mut T, op: Operation<H, C>) {
         }
         CurrentPosition => {}
         CurrentLeaf => {}
-        Authpath(_, _) => {}
+        Witness(_, _) => {}
         MarkedLeaf(_) => {}
         MarkedPositions => {}
         GarbageCollect => {}
@@ -331,7 +331,7 @@ pub fn check_operations<H: Hashable + Ord + Clone, C: Clone, T: Tree<H, C>>(
                     tree_size = checkpointed_tree_size;
                 }
             }
-            Authpath(position, depth) => {
+            Witness(position, depth) => {
                 if let Some(path) = tree.witness(*position, *depth) {
                     let value: H = tree_values[<usize>::from(*position)].clone();
                     let tree_root = tree.root(*depth);
@@ -710,7 +710,7 @@ pub fn check_witnesses<T: Tree<String, usize> + std::fmt::Debug, F: Fn(usize) ->
         .map(|c| Append(c.to_string(), Retention::Marked))
         .chain(Some(Append('m'.to_string(), Retention::Ephemeral)))
         .chain(Some(Append('n'.to_string(), Retention::Ephemeral)))
-        .chain(Some(Authpath(11usize.into(), 0)))
+        .chain(Some(Witness(11usize.into(), 0)))
         .collect::<Vec<_>>();
 
     let mut tree = new_tree(100);
