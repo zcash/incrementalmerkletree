@@ -500,9 +500,37 @@ pub fn check_root_hashes<T: Tree<String, usize>, F: Fn(usize) -> T>(new_tree: F)
     assert_eq!(t.root(0).unwrap(), "aaaa____________");
 }
 
-pub fn check_witnesses<T: Tree<String, usize> + std::fmt::Debug, F: Fn(usize) -> T>(new_tree: F) {
+/// This test expects a depth-4 tree and verifies that the tree reports itself as full after 2^4
+/// appends.
+pub fn check_append<T: Tree<String, usize> + std::fmt::Debug, F: Fn(usize) -> T>(new_tree: F) {
+    use Retention::*;
+
     let mut tree = new_tree(100);
-    tree.append("a".to_string(), Retention::Marked);
+    assert_eq!(tree.depth(), 4);
+
+    // 16 appends should succeed
+    for i in 0..16 {
+        assert!(tree.append(i.to_string(), Ephemeral));
+        assert_eq!(tree.current_position(), Some(Position::from(i)));
+    }
+
+    // 17th append should fail
+    assert!(!tree.append("16".to_string(), Ephemeral));
+
+    // The following checks a condition on state restoration in the case that an append fails.
+    // We want to ensure that a failed append does not cause a loss of information.
+    let ops = (0..17)
+        .map(|i| Append(i.to_string(), Ephemeral))
+        .collect::<Vec<_>>();
+    let tree = new_tree(100);
+    check_operations(tree, &ops).unwrap();
+}
+
+pub fn check_witnesses<T: Tree<String, usize> + std::fmt::Debug, F: Fn(usize) -> T>(new_tree: F) {
+    use Retention::*;
+
+    let mut tree = new_tree(100);
+    tree.append("a".to_string(), Marked);
     assert_eq!(
         tree.witness(Position::from(0), 0),
         Some(vec![

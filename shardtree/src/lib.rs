@@ -1,4 +1,6 @@
+use core::convert::Infallible;
 use core::fmt::Debug;
+use core::marker::PhantomData;
 use core::ops::{BitAnd, BitOr, Deref, Not, Range};
 use either::Either;
 use std::collections::{BTreeMap, BTreeSet};
@@ -1436,6 +1438,383 @@ impl<H: Hashable + Clone + PartialEq> LocatedPrunableTree<H> {
     }
 }
 
+/// An enumeration of possible checkpoint locations.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
+pub enum TreeState {
+    /// Checkpoints of the empty tree.
+    Empty,
+    /// Checkpoint at a (possibly pruned) leaf state corresponding to the
+    /// wrapped leaf position.
+    AtPosition(Position),
+}
+
+#[derive(Clone, Debug)]
+pub struct Checkpoint {
+    tree_state: TreeState,
+    marks_removed: BTreeSet<Position>,
+}
+
+impl Checkpoint {
+    pub fn tree_empty() -> Self {
+        Checkpoint {
+            tree_state: TreeState::Empty,
+            marks_removed: BTreeSet::new(),
+        }
+    }
+
+    pub fn at_position(position: Position) -> Self {
+        Checkpoint {
+            tree_state: TreeState::AtPosition(position),
+            marks_removed: BTreeSet::new(),
+        }
+    }
+
+    pub fn is_tree_empty(&self) -> bool {
+        matches!(self.tree_state, TreeState::Empty)
+    }
+
+    pub fn position(&self) -> Option<Position> {
+        match self.tree_state {
+            TreeState::Empty => None,
+            TreeState::AtPosition(pos) => Some(pos),
+        }
+    }
+}
+
+/// A capability for storage of fragment subtrees of the `ShardTree` type.
+///
+/// All fragment subtrees must have roots at level `SHARD_HEIGHT - 1`
+pub trait ShardStore<H> {
+    type Error;
+
+    /// Returns the subtree at the given root address, if any such subtree exists.
+    fn get_shard(&self, shard_root: Address) -> Option<&LocatedPrunableTree<H>>;
+
+    /// Returns the subtree containing the maximum inserted leaf position.
+    fn last_shard(&self) -> Option<&LocatedPrunableTree<H>>;
+
+    /// Inserts or replaces the subtree having the same root address as the provided tree.
+    ///
+    /// Implementations of this method MUST enforce the constraint that the root address
+    /// of the provided subtree has level `SHARD_HEIGHT - 1`.
+    fn put_shard(&mut self, subtree: LocatedPrunableTree<H>) -> Result<(), Self::Error>;
+
+    /// Returns the vector of addresses corresponding to the roots of subtrees stored in this
+    /// store.
+    fn get_shard_roots(&self) -> Vec<Address>;
+
+    /// Removes subtrees from the underlying store having root addresses at indices greater
+    /// than or equal to that of the specified address.
+    ///
+    /// Implementations of this method MUST enforce the constraint that the root address
+    /// provided has level `SHARD_HEIGHT - 1`.
+    fn truncate(&mut self, from: Address) -> Result<(), Self::Error>;
+}
+
+impl<H> ShardStore<H> for Vec<LocatedPrunableTree<H>> {
+    type Error = Infallible;
+
+    fn get_shard(&self, shard_root: Address) -> Option<&LocatedPrunableTree<H>> {
+        self.get(shard_root.index())
+    }
+
+    fn last_shard(&self) -> Option<&LocatedPrunableTree<H>> {
+        self.last()
+    }
+
+    fn put_shard(&mut self, subtree: LocatedPrunableTree<H>) -> Result<(), Self::Error> {
+        let subtree_addr = subtree.root_addr;
+        for subtree_idx in self.last().map_or(0, |s| s.root_addr.index() + 1)..=subtree_addr.index()
+        {
+            self.push(LocatedTree {
+                root_addr: Address::from_parts(subtree_addr.level(), subtree_idx),
+                root: Tree(Node::Nil),
+            })
+        }
+        self[subtree_addr.index()] = subtree;
+        Ok(())
+    }
+
+    fn get_shard_roots(&self) -> Vec<Address> {
+        self.iter().map(|s| s.root_addr).collect()
+    }
+
+    fn truncate(&mut self, from: Address) -> Result<(), Self::Error> {
+        self.truncate(from.index());
+        Ok(())
+    }
+}
+
+/// A left-dense, sparse binary Merkle tree of the specified depth, represented as a vector of
+/// subtrees (shards) of the given maximum height.
+///
+/// This tree maintains a collection of "checkpoints" which represent positions, usually near the
+/// front of the tree, that are maintained such that it's possible to truncate nodes to the right
+/// of the specified position.
+#[derive(Debug)]
+pub struct ShardTree<H, C: Ord, S: ShardStore<H>, const DEPTH: u8, const SHARD_HEIGHT: u8> {
+    /// The vector of tree shards.
+    store: S,
+    /// The maximum number of checkpoints to retain before pruning.
+    max_checkpoints: usize,
+    /// A map from position to the count of checkpoints at this position.
+    checkpoints: BTreeMap<C, Checkpoint>,
+    // /// A tree that is used to cache the known roots of subtrees in the "cap" of nodes between
+    // /// `SHARD_HEIGHT` and `DEPTH` that are otherwise not directly represented in the tree.  This
+    // /// cache is automatically updated when computing roots and witnesses. Leaf nodes are empty
+    // /// because the annotation slot is consistently used to store the subtree hashes at each node.
+    // cap_cache: Tree<Option<Rc<H>>, ()>
+    _hash_type: PhantomData<H>,
+}
+
+impl<
+        H: Hashable + Clone + PartialEq,
+        C: Clone + Ord + core::fmt::Debug,
+        S: ShardStore<H>,
+        const DEPTH: u8,
+        const SHARD_HEIGHT: u8,
+    > ShardTree<H, C, S, DEPTH, SHARD_HEIGHT>
+{
+    /// Creates a new empty tree.
+    pub fn new(store: S, max_checkpoints: usize, initial_checkpoint_id: C) -> Self {
+        Self {
+            store,
+            max_checkpoints,
+            checkpoints: BTreeMap::from([(initial_checkpoint_id, Checkpoint::tree_empty())]),
+            //cap_cache: Tree(None, ())
+            _hash_type: PhantomData,
+        }
+    }
+
+    /// Returns the root address of the tree.
+    pub fn root_addr() -> Address {
+        Address::from_parts(Level::from(DEPTH), 0)
+    }
+
+    /// Returns the fixed level of subtree roots within the vector of subtrees used as this tree's
+    /// representation.
+    pub fn subtree_level() -> Level {
+        Level::from(SHARD_HEIGHT - 1)
+    }
+
+    /// Returns the position and checkpoint count for each checkpointed position in the tree.
+    pub fn checkpoints(&self) -> &BTreeMap<C, Checkpoint> {
+        &self.checkpoints
+    }
+
+    /// Returns the leaf value at the specified position, if it is a marked leaf.
+    pub fn get_marked_leaf(&self, position: Position) -> Option<&H> {
+        self.store
+            .get_shard(Address::above_position(Self::subtree_level(), position))
+            .and_then(|t| t.value_at_position(position))
+            .and_then(|(v, r)| if r.is_marked() { Some(v) } else { None })
+    }
+
+    /// Returns the positions of marked leaves in the tree.
+    pub fn marked_positions(&self) -> BTreeSet<Position> {
+        let mut result = BTreeSet::new();
+        for subtree_addr in &self.store.get_shard_roots() {
+            if let Some(subtree) = self.store.get_shard(*subtree_addr) {
+                result.append(&mut subtree.marked_positions());
+            }
+        }
+        result
+    }
+
+    /// Inserts a new root into the tree at the given address.
+    ///
+    /// This will pad from the left until the tree's subtrees vector contains enough trees to reach
+    /// the specified address, which must be at the [`Self::subtree_level`] level. If a subtree
+    /// already exists at this address, its root will be annotated with the specified hash value.
+    ///
+    /// This will return an error if the specified hash conflicts with any existing annotation.
+    pub fn put_root(&mut self, addr: Address, value: H) -> Result<(), InsertionError<S::Error>> {
+        let updated_subtree = match self.store.get_shard(addr) {
+            Some(s) if !s.root.is_nil() => s.root.node_value().map_or_else(
+                || {
+                    Ok(Some(
+                        s.clone().reannotate_root(Some(Rc::new(value.clone()))),
+                    ))
+                },
+                |v| {
+                    if v == &value {
+                        // the existing root is already correctly annotated, so no need to
+                        // do anything
+                        Ok(None)
+                    } else {
+                        // the provided value conflicts with the existing root value
+                        Err(InsertionError::Conflict(addr))
+                    }
+                },
+            ),
+            _ => {
+                // there is no existing subtree root, so construct a new one.
+                Ok(Some(LocatedTree {
+                    root_addr: addr,
+                    root: Tree(Node::Leaf {
+                        value: (value, EPHEMERAL),
+                    }),
+                }))
+            }
+        }?;
+
+        if let Some(s) = updated_subtree {
+            self.store.put_shard(s).map_err(InsertionError::Storage)?;
+        }
+
+        Ok(())
+    }
+
+    /// Append a single value at the first available position in the tree.
+    ///
+    /// Prefer to use [`Self::batch_insert`] when appending multiple values, as these operations
+    /// require fewer traversals of the tree than are necessary when performing multiple sequential
+    /// calls to [`Self::append`].
+    pub fn append(
+        &mut self,
+        value: H,
+        retention: Retention<C>,
+    ) -> Result<(), InsertionError<S::Error>> {
+        if let Retention::Checkpoint { id, .. } = &retention {
+            if self.checkpoints.keys().last() >= Some(id) {
+                return Err(InsertionError::CheckpointOutOfOrder);
+            }
+        }
+
+        let (append_result, position, checkpoint_id) =
+            if let Some(subtree) = self.store.last_shard() {
+                if subtree.root.reduce(&is_complete) {
+                    let addr = subtree.root_addr;
+
+                    if addr.index() + 1 >= 0x1 << (SHARD_HEIGHT - 1) {
+                        return Err(InsertionError::OutOfRange(addr.position_range()));
+                    } else {
+                        LocatedTree::empty(addr.next_at_level()).append(value, retention)?
+                    }
+                } else {
+                    subtree.append(value, retention)?
+                }
+            } else {
+                let root_addr = Address::from_parts(Self::subtree_level(), 0);
+                LocatedTree::empty(root_addr).append(value, retention)?
+            };
+
+        self.store
+            .put_shard(append_result)
+            .map_err(InsertionError::Storage)?;
+        if let Some(c) = checkpoint_id {
+            self.checkpoints
+                .insert(c, Checkpoint::at_position(position));
+        }
+
+        self.prune_excess_checkpoints()
+            .map_err(InsertionError::Storage)?;
+
+        Ok(())
+    }
+
+    fn prune_excess_checkpoints(&mut self) -> Result<(), S::Error> {
+        if self.checkpoints.len() > self.max_checkpoints {
+            // Batch removals by subtree & create a list of the checkpoint identifiers that
+            // will be removed from the checkpoints map.
+            let mut checkpoints_to_delete = vec![];
+            let mut clear_positions: BTreeMap<Address, BTreeMap<Position, RetentionFlags>> =
+                BTreeMap::new();
+            for (cid, checkpoint) in self
+                .checkpoints
+                .iter()
+                .take(self.checkpoints.len() - self.max_checkpoints)
+            {
+                checkpoints_to_delete.push(cid.clone());
+
+                // clear the checkpoint leaf
+                if let TreeState::AtPosition(pos) = checkpoint.tree_state {
+                    let subtree_addr = Address::above_position(Self::subtree_level(), pos);
+                    clear_positions
+                        .entry(subtree_addr)
+                        .and_modify(|to_clear| {
+                            to_clear
+                                .entry(pos)
+                                .and_modify(|flags| *flags = *flags | CHECKPOINT)
+                                .or_insert(CHECKPOINT);
+                        })
+                        .or_insert_with(|| BTreeMap::from([(pos, CHECKPOINT)]));
+                }
+
+                // clear the leaves that have been marked for removal
+                for unmark_pos in checkpoint.marks_removed.iter() {
+                    let subtree_addr = Address::above_position(Self::subtree_level(), *unmark_pos);
+                    clear_positions
+                        .entry(subtree_addr)
+                        .and_modify(|to_clear| {
+                            to_clear
+                                .entry(*unmark_pos)
+                                .and_modify(|flags| *flags = *flags | MARKED)
+                                .or_insert(MARKED);
+                        })
+                        .or_insert_with(|| BTreeMap::from([(*unmark_pos, MARKED)]));
+                }
+            }
+
+            // Prune each affected subtree
+            for (subtree_addr, positions) in clear_positions.into_iter() {
+                let cleared = self
+                    .store
+                    .get_shard(subtree_addr)
+                    .map(|subtree| subtree.clear_flags(positions));
+                if let Some(cleared) = cleared {
+                    self.store.put_shard(cleared)?;
+                }
+            }
+
+            // Now that the leaves have been pruned, actually remove the checkpoints
+            for c in checkpoints_to_delete {
+                self.checkpoints.remove(&c);
+            }
+        }
+
+        Ok(())
+    }
+
+    /// Returns the position of the checkpoint, if any, along with the number of subsequent
+    /// checkpoints at the same position. Returns `None` if `checkpoint_depth == 0` or if
+    /// insufficient checkpoints exist to seek back to the requested depth.
+    pub fn checkpoint_at_depth(&self, checkpoint_depth: usize) -> Option<(&C, &Checkpoint)> {
+        if checkpoint_depth == 0 {
+            None
+        } else {
+            self.checkpoints.iter().rev().nth(checkpoint_depth - 1)
+        }
+    }
+
+    /// Returns the position of the rightmost leaf inserted as of the given checkpoint.
+    ///
+    /// Returns the maximum leaf position if `checkpoint_depth == 0` (or `Ok(None)` in this
+    /// case if the tree is empty) or an error if the checkpointed position cannot be restored
+    /// because it has been pruned. Note that no actual level-0 leaf may exist at this position.
+    pub fn max_leaf_position(
+        &self,
+        checkpoint_depth: usize,
+    ) -> Result<Option<Position>, QueryError> {
+        if checkpoint_depth == 0 {
+            // TODO: This relies on the invariant that the last shard in the subtrees vector is
+            // never created without a leaf then being added to it. However, this may be a
+            // difficult invariant to maintain when adding empty roots, so perhaps we need a
+            // better way of tracking the actual max position of the tree; we might want to
+            // just store it directly.
+            Ok(self.store.last_shard().and_then(|t| t.max_position()))
+        } else {
+            match self.checkpoint_at_depth(checkpoint_depth) {
+                Some((_, c)) => Ok(c.position()),
+                None => {
+                    // There is no checkpoint at the specified depth, so we report it as pruned.
+                    Err(QueryError::CheckpointPruned)
+                }
+            }
+        }
+    }
+}
+
 // We need an applicative functor for Result for this function so that we can correctly
 // accumulate errors, but we don't have one so we just write a special- cased version here.
 fn accumulate_result_with<A, B, C>(
@@ -1499,10 +1878,14 @@ pub mod testing {
 #[cfg(test)]
 mod tests {
     use crate::{
-        LocatedPrunableTree, LocatedTree, Node, PrunableTree, QueryError, Tree, EPHEMERAL, MARKED,
+        LocatedPrunableTree, LocatedTree, Node, PrunableTree, QueryError, ShardStore, ShardTree,
+        Tree, EPHEMERAL, MARKED,
     };
     use core::convert::Infallible;
-    use incrementalmerkletree::{Address, Level, Position, Retention};
+    use incrementalmerkletree::{
+        testing::{self, check_append, complete_tree::CompleteTree, CombinedTree},
+        Address, Hashable, Level, Position, Retention,
+    };
     use std::collections::BTreeSet;
     use std::rc::Rc;
 
@@ -1581,6 +1964,81 @@ mod tests {
             Err(vec![Address::from_parts(Level::from(1), 1)])
         );
     }
+
+    #[test]
+    fn located_prunable_tree_insert_subtree() {
+        let t: LocatedPrunableTree<String> = LocatedTree {
+            root_addr: Address::from_parts(3.into(), 1),
+            root: parent(
+                leaf(("abcd".to_string(), EPHEMERAL)),
+                parent(nil(), leaf(("gh".to_string(), EPHEMERAL))),
+            ),
+        };
+
+        assert_eq!(
+            t.insert_subtree::<Infallible>(
+                LocatedTree {
+                    root_addr: Address::from_parts(1.into(), 6),
+                    root: parent(leaf(("e".to_string(), MARKED)), nil())
+                },
+                true
+            ),
+            Ok((
+                LocatedTree {
+                    root_addr: Address::from_parts(3.into(), 1),
+                    root: parent(
+                        leaf(("abcd".to_string(), EPHEMERAL)),
+                        parent(
+                            parent(leaf(("e".to_string(), MARKED)), nil()),
+                            leaf(("gh".to_string(), EPHEMERAL))
+                        )
+                    )
+                },
+                vec![]
+            ))
+        );
+    }
+
+    #[test]
+    fn located_prunable_tree_witness() {
+        let t: LocatedPrunableTree<String> = LocatedTree {
+            root_addr: Address::from_parts(3.into(), 0),
+            root: parent(
+                leaf(("abcd".to_string(), EPHEMERAL)),
+                parent(
+                    parent(
+                        leaf(("e".to_string(), MARKED)),
+                        leaf(("f".to_string(), EPHEMERAL)),
+                    ),
+                    leaf(("gh".to_string(), EPHEMERAL)),
+                ),
+            ),
+        };
+
+        assert_eq!(
+            t.witness(4.into(), 8.into()),
+            Ok(vec!["f", "gh", "abcd"]
+                .into_iter()
+                .map(|s| s.to_string())
+                .collect())
+        );
+        assert_eq!(
+            t.witness(4.into(), 6.into()),
+            Ok(vec!["f", "__", "abcd"]
+                .into_iter()
+                .map(|s| s.to_string())
+                .collect())
+        );
+        assert_eq!(
+            t.witness(4.into(), 7.into()),
+            Err(QueryError::TreeIncomplete(vec![Address::from_parts(
+                1.into(),
+                3
+            )]))
+        );
+    }
+
+    type VecShardStore<H> = Vec<LocatedPrunableTree<H>>;
 
     #[test]
     fn tree_marked_positions() {
@@ -1739,76 +2197,80 @@ mod tests {
         assert_eq!(complete.subtree.right_filled_root(), Ok("abcd".to_string()));
     }
 
-    #[test]
-    fn located_prunable_tree_insert_subtree() {
-        let t: LocatedPrunableTree<String> = LocatedTree {
-            root_addr: Address::from_parts(3.into(), 1),
-            root: parent(
-                leaf(("abcd".to_string(), EPHEMERAL)),
-                parent(nil(), leaf(("gh".to_string(), EPHEMERAL))),
-            ),
-        };
+    impl<
+            H: Hashable + Ord + Clone,
+            C: Clone + Ord + core::fmt::Debug,
+            S: ShardStore<H>,
+            const DEPTH: u8,
+            const SHARD_HEIGHT: u8,
+        > testing::Tree<H, C> for ShardTree<H, C, S, DEPTH, SHARD_HEIGHT>
+    {
+        fn depth(&self) -> u8 {
+            DEPTH
+        }
 
-        assert_eq!(
-            t.insert_subtree::<Infallible>(
-                LocatedTree {
-                    root_addr: Address::from_parts(1.into(), 6),
-                    root: parent(leaf(("e".to_string(), MARKED)), nil())
-                },
-                true
-            ),
-            Ok((
-                LocatedTree {
-                    root_addr: Address::from_parts(3.into(), 1),
-                    root: parent(
-                        leaf(("abcd".to_string(), EPHEMERAL)),
-                        parent(
-                            parent(leaf(("e".to_string(), MARKED)), nil()),
-                            leaf(("gh".to_string(), EPHEMERAL))
-                        )
-                    )
-                },
-                vec![]
-            ))
-        );
+        fn append(&mut self, value: H, retention: Retention<C>) -> bool {
+            ShardTree::append(self, value, retention).is_ok()
+        }
+
+        fn current_position(&self) -> Option<Position> {
+            ShardTree::max_leaf_position(self, 0).ok().flatten()
+        }
+
+        fn get_marked_leaf(&self, _position: Position) -> Option<&H> {
+            todo!()
+        }
+
+        fn marked_positions(&self) -> BTreeSet<Position> {
+            todo!()
+        }
+
+        fn root(&self, _checkpoint_depth: usize) -> Option<H> {
+            todo!()
+        }
+
+        fn witness(&self, _position: Position, _checkpoint_depth: usize) -> Option<Vec<H>> {
+            todo!()
+        }
+
+        fn remove_mark(&mut self, _position: Position) -> bool {
+            todo!()
+        }
+
+        fn checkpoint(&mut self, _checkpoint_id: C) -> bool {
+            todo!()
+        }
+
+        fn rewind(&mut self) -> bool {
+            todo!()
+        }
     }
 
     #[test]
-    fn located_prunable_tree_witness() {
-        let t: LocatedPrunableTree<String> = LocatedTree {
-            root_addr: Address::from_parts(3.into(), 0),
-            root: parent(
-                leaf(("abcd".to_string(), EPHEMERAL)),
-                parent(
-                    parent(
-                        leaf(("e".to_string(), MARKED)),
-                        leaf(("f".to_string(), EPHEMERAL)),
-                    ),
-                    leaf(("gh".to_string(), EPHEMERAL)),
-                ),
-            ),
-        };
+    fn append() {
+        check_append(|m| {
+            ShardTree::<String, usize, VecShardStore<String>, 4, 3>::new(vec![], m, 0)
+        });
+    }
 
-        assert_eq!(
-            t.witness(4.into(), 8.into()),
-            Ok(vec!["f", "gh", "abcd"]
-                .into_iter()
-                .map(|s| s.to_string())
-                .collect())
-        );
-        assert_eq!(
-            t.witness(4.into(), 6.into()),
-            Ok(vec!["f", "__", "abcd"]
-                .into_iter()
-                .map(|s| s.to_string())
-                .collect())
-        );
-        assert_eq!(
-            t.witness(4.into(), 7.into()),
-            Err(QueryError::TreeIncomplete(vec![Address::from_parts(
-                1.into(),
-                3
-            )]))
-        );
+    // Combined tree tests
+    #[allow(clippy::type_complexity)]
+    fn new_combined_tree<H: Hashable + Ord + Clone + core::fmt::Debug>(
+        max_checkpoints: usize,
+    ) -> CombinedTree<
+        H,
+        usize,
+        CompleteTree<H, usize, 4>,
+        ShardTree<H, usize, VecShardStore<H>, 4, 3>,
+    > {
+        CombinedTree::new(
+            CompleteTree::new(max_checkpoints, 0),
+            ShardTree::new(vec![], max_checkpoints, 0),
+        )
+    }
+
+    #[test]
+    fn combined_append() {
+        check_append(new_combined_tree);
     }
 }

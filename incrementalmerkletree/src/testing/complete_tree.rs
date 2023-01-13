@@ -321,8 +321,8 @@ mod tests {
     use super::CompleteTree;
     use crate::{
         testing::{
-            check_checkpoint_rewind, check_rewind_remove_mark, check_root_hashes, check_witnesses,
-            compute_root_from_witness, SipHashable, Tree,
+            check_append, check_checkpoint_rewind, check_rewind_remove_mark, check_root_hashes,
+            check_witnesses, compute_root_from_witness, SipHashable, Tree,
         },
         Hashable, Level, Position, Retention,
     };
@@ -365,6 +365,11 @@ mod tests {
         );
 
         assert_eq!(tree.root(0).unwrap(), expected);
+    }
+
+    #[test]
+    fn append() {
+        check_append(|max_checkpoints| CompleteTree::<String, usize, 4>::new(max_checkpoints, 0));
     }
 
     #[test]
