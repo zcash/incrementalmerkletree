@@ -10,3 +10,27 @@ description = "A space-efficient Merkle tree with witnessing of marked leaves, c
 homepage = "https://github.com/zcash/incrementalmerkletree"
 repository = "https://github.com/zcash/incrementalmerkletree"
 categories = ["algorithms", "data-structures"]
+
+[dependencies]
+either = "1.8"
+incrementalmerkletree = { version = "0.3", path = "../incrementalmerkletree" }
+proptest = { version = "1.0.0", optional = true }
+
+[dev-dependencies]
+assert_matches = "1.5"
+criterion = "0.3"
+incrementalmerkletree = { version = "0.3", path = "../incrementalmerkletree", features = ["test-dependencies"] }
+proptest = "1.0.0"
+
+[features]
+test-dependencies = ["proptest"]
+
+[target.'cfg(unix)'.dev-dependencies]
+pprof = { version = "0.9", features = ["criterion", "flamegraph"] } # MSRV 1.56
+inferno = ">=0.11, <0.11.5" # MSRV 1.59
+
+[[bench]]
+name = "shardtree"
+harness = false
+required-features = ["test-dependencies"]
+

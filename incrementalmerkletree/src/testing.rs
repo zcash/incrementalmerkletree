@@ -65,17 +65,16 @@ pub trait Tree<H, C> {
 
     /// Creates a new checkpoint for the current tree state.
     ///
-    /// It is valid to have multiple checkpoints for the same tree state, and
-    /// each `rewind` call will remove a single checkpoint. Returns `false`
-    /// if the checkpoint identifier provided is less than or equal to the
-    /// maximum checkpoint identifier observed.
+    /// It is valid to have multiple checkpoints for the same tree state, and each `rewind` call
+    /// will remove a single checkpoint. Returns `false` if the checkpoint identifier provided is
+    /// less than or equal to the maximum checkpoint identifier observed.
     fn checkpoint(&mut self, id: C) -> bool;
 
-    /// Rewinds the tree state to the previous checkpoint, and then removes
-    /// that checkpoint record. If there are multiple checkpoints at a given
-    /// tree state, the tree state will not be altered until all checkpoints
-    /// at that tree state have been removed using `rewind`. This function
-    /// return false and leave the tree unmodified if no checkpoints exist.
+    /// Rewinds the tree state to the previous checkpoint, and then removes that checkpoint record.
+    ///
+    /// If there are multiple checkpoints at a given tree state, the tree state will not be altered
+    /// until all checkpoints at that tree state have been removed using `rewind`. This function
+    /// will return false and leave the tree unmodified if no checkpoints exist.
     fn rewind(&mut self) -> bool;
 }
 
@@ -288,7 +287,10 @@ pub fn check_operations<H: Hashable + Ord + Clone, C: Clone, T: Tree<H, C>>(
                         tree_checkpoints.push(tree_size);
                     }
                 } else {
-                    prop_assert_eq!(tree_size, 1 << tree.depth());
+                    prop_assert_eq!(
+                        tree_size,
+                        tree.current_position().map_or(0, |p| usize::from(p) + 1)
+                    );
                 }
             }
             CurrentPosition => {
@@ -375,7 +377,7 @@ pub fn compute_root_from_witness<H: Hashable>(value: H, position: Position, path
 // Types and utilities for cross-verification property tests
 //
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct CombinedTree<H, C, I: Tree<H, C>, E: Tree<H, C>> {
     inefficient: I,
     efficient: E,
