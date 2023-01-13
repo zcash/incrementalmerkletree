@@ -513,6 +513,181 @@ impl<H: Hashable + Clone + PartialEq> PrunableTree<H> {
     }
 }
 
+/// A binary Merkle tree with its root at the given address.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct LocatedTree<A, V> {
+    root_addr: Address,
+    root: Tree<A, V>,
+}
+
+impl<A, V> LocatedTree<A, V> {
+    /// Returns the root address of this tree.
+    pub fn root_addr(&self) -> Address {
+        self.root_addr
+    }
+
+    /// Returns a reference to the root of the tree.
+    pub fn root(&self) -> &Tree<A, V> {
+        &self.root
+    }
+
+    /// Returns a new [`LocatedTree`] with the provided value replacing the annotation of its root
+    /// node, if that root node is a `Node::Parent`. Otherwise .
+    pub fn reannotate_root(self, value: A) -> Self {
+        LocatedTree {
+            root_addr: self.root_addr,
+            root: self.root.reannotate_root(value),
+        }
+    }
+
+    /// Returns the set of incomplete subtree roots contained within this tree, ordered by
+    /// increasing position.
+    pub fn incomplete(&self) -> Vec<Address> {
+        self.root.incomplete(self.root_addr)
+    }
+
+    /// Returns the maximum position at which a non-Nil leaf has been observed in the tree.
+    ///
+    /// Note that no actual leaf value may exist at this position, as it may have previously been
+    /// pruned.
+    pub fn max_position(&self) -> Option<Position> {
+        fn go<A, V>(addr: Address, root: &Tree<A, V>) -> Option<Position> {
+            match &root.0 {
+                Node::Nil => None,
+                Node::Leaf { .. } => Some(addr.position_range_end() - 1),
+                Node::Parent { left, right, .. } => {
+                    let (l_addr, r_addr) = addr.children().unwrap();
+                    go(r_addr, right.as_ref()).or_else(|| go(l_addr, left.as_ref()))
+                }
+            }
+        }
+
+        go(self.root_addr, &self.root)
+    }
+
+    /// Returns the value at the specified position, if any.
+    pub fn value_at_position(&self, position: Position) -> Option<&V> {
+        fn go<A, V>(pos: Position, addr: Address, root: &Tree<A, V>) -> Option<&V> {
+            match &root.0 {
+                Node::Parent { left, right, .. } => {
+                    let (l_addr, r_addr) = addr.children().unwrap();
+                    if l_addr.position_range().contains(&pos) {
+                        go(pos, l_addr, left)
+                    } else {
+                        go(pos, r_addr, right)
+                    }
+                }
+                Node::Leaf { value } if addr.level() == Level::from(0) => Some(value),
+                _ => None,
+            }
+        }
+
+        if self.root_addr.position_range().contains(&position) {
+            go(position, self.root_addr, &self.root)
+        } else {
+            None
+        }
+    }
+}
+
+impl<A: Default + Clone, V: Clone> LocatedTree<A, V> {
+    /// Constructs a new empty tree with its root at the provided address.
+    pub fn empty(root_addr: Address) -> Self {
+        Self {
+            root_addr,
+            root: Tree(Node::Nil),
+        }
+    }
+
+    /// Constructs a new tree consisting of a single leaf with the provided value, and the
+    /// specified root address.
+    pub fn with_root_value(root_addr: Address, value: V) -> Self {
+        Self {
+            root_addr,
+            root: Tree(Node::Leaf { value }),
+        }
+    }
+
+    /// Traverses this tree to find the child node at the specified address and returns it.
+    ///
+    /// Returns `None` if the specified address is not a descendant of this tree's root address, or
+    /// if the tree is terminated by a [`Node::Nil`] or leaf node before the specified address can
+    /// be reached.
+    pub fn subtree(&self, addr: Address) -> Option<Self> {
+        fn go<A: Clone, V: Clone>(
+            root_addr: Address,
+            root: &Tree<A, V>,
+            addr: Address,
+        ) -> Option<LocatedTree<A, V>> {
+            if root_addr == addr {
+                Some(LocatedTree {
+                    root_addr,
+                    root: root.clone(),
+                })
+            } else {
+                match &root.0 {
+                    Node::Parent { left, right, .. } => {
+                        let (l_addr, r_addr) = root_addr.children().unwrap();
+                        if l_addr.contains(&addr) {
+                            go(l_addr, left.as_ref(), addr)
+                        } else {
+                            go(r_addr, right.as_ref(), addr)
+                        }
+                    }
+                    _ => None,
+                }
+            }
+        }
+
+        if self.root_addr.contains(&addr) {
+            go(self.root_addr, &self.root, addr)
+        } else {
+            None
+        }
+    }
+
+    /// Decomposes this tree into the vector of its subtrees having height `level + 1`.
+    ///
+    /// If this root address of this tree is lower down in the tree than the level specified,
+    /// the entire tree is returned as the sole element of the result vector.
+    pub fn decompose_to_level(self, level: Level) -> Vec<Self> {
+        fn go<A: Clone, V: Clone>(
+            level: Level,
+            root_addr: Address,
+            root: Tree<A, V>,
+        ) -> Vec<LocatedTree<A, V>> {
+            if root_addr.level() == level {
+                vec![LocatedTree { root_addr, root }]
+            } else {
+                match root.0 {
+                    Node::Parent { left, right, .. } => {
+                        let (l_addr, r_addr) = root_addr.children().unwrap();
+                        let mut l_decomposed = go(
+                            level,
+                            l_addr,
+                            Rc::try_unwrap(left).unwrap_or_else(|rc| (*rc).clone()),
+                        );
+                        let mut r_decomposed = go(
+                            level,
+                            r_addr,
+                            Rc::try_unwrap(right).unwrap_or_else(|rc| (*rc).clone()),
+                        );
+                        l_decomposed.append(&mut r_decomposed);
+                        l_decomposed
+                    }
+                    _ => vec![],
+                }
+            }
+        }
+
+        if level >= self.root_addr.level() {
+            vec![self]
+        } else {
+            go(level, self.root_addr, self.root)
+        }
+    }
+}
+
 // We need an applicative functor for Result for this function so that we can correctly
 // accumulate errors, but we don't have one so we just write a special- cased version here.
 fn accumulate_result_with<A, B, C>(
@@ -575,38 +750,48 @@ pub mod testing {
 
 #[cfg(test)]
 mod tests {
-    use crate::{Node, PrunableTree, Tree, EPHEMERAL, MARKED};
+    use crate::{LocatedTree, Node, PrunableTree, Tree, EPHEMERAL, MARKED};
     use incrementalmerkletree::{Address, Level, Position};
     use std::collections::BTreeSet;
     use std::rc::Rc;
 
+    fn nil<A, B>() -> Tree<A, B> {
+        Tree(Node::Nil)
+    }
+
+    fn str_leaf<A>(c: &str) -> Tree<A, String> {
+        Tree(Node::Leaf {
+            value: c.to_string(),
+        })
+    }
+
+    fn leaf<A, B>(value: B) -> Tree<A, B> {
+        Tree(Node::Leaf { value })
+    }
+
+    fn parent<A: Default, B>(left: Tree<A, B>, right: Tree<A, B>) -> Tree<A, B> {
+        Tree(Node::Parent {
+            ann: A::default(),
+            left: Rc::new(left),
+            right: Rc::new(right),
+        })
+    }
+
     #[test]
     fn tree_incomplete() {
-        let t = Tree(Node::Parent {
-            ann: (),
-            left: Rc::new(Tree(Node::Nil)),
-            right: Rc::new(Tree(Node::Leaf { value: "a" })),
-        });
+        let t: Tree<(), String> = parent(nil(), str_leaf("a"));
         assert_eq!(
             t.incomplete(Address::from_parts(Level::from(1), 0)),
             vec![Address::from_parts(Level::from(0), 0)]
         );
 
-        let t0 = Tree(Node::Parent {
-            ann: (),
-            left: Rc::new(Tree(Node::Leaf { value: "b" })),
-            right: Rc::new(t.clone()),
-        });
+        let t0 = parent(str_leaf("b"), t.clone());
         assert_eq!(
             t0.incomplete(Address::from_parts(Level::from(2), 1)),
             vec![Address::from_parts(Level::from(0), 6)]
         );
 
-        let t1 = Tree(Node::Parent {
-            ann: (),
-            left: Rc::new(Tree(Node::Nil)),
-            right: Rc::new(t),
-        });
+        let t1 = parent(nil(), t);
         assert_eq!(
             t1.incomplete(Address::from_parts(Level::from(2), 1)),
             vec![
@@ -618,36 +803,24 @@ mod tests {
 
     #[test]
     fn tree_root() {
-        let t: PrunableTree<String> = Tree(Node::Parent {
-            ann: None,
-            left: Rc::new(Tree(Node::Leaf {
-                value: ("a".to_string(), EPHEMERAL),
-            })),
-            right: Rc::new(Tree(Node::Leaf {
-                value: ("b".to_string(), EPHEMERAL),
-            })),
-        });
+        let t: PrunableTree<String> = parent(
+            leaf(("a".to_string(), EPHEMERAL)),
+            leaf(("b".to_string(), EPHEMERAL)),
+        );
+
         assert_eq!(
             t.root_hash(Address::from_parts(Level::from(1), 0), Position::from(2)),
             Ok("ab".to_string())
         );
 
-        let t0: PrunableTree<String> = Tree(Node::Parent {
-            ann: None,
-            left: Rc::new(Tree(Node::Nil)),
-            right: Rc::new(t.clone()),
-        });
+        let t0 = parent(nil(), t.clone());
         assert_eq!(
             t0.root_hash(Address::from_parts(Level::from(2), 0), Position::from(4)),
             Err(vec![Address::from_parts(Level::from(1), 0)])
         );
 
         // Check root computation with truncation
-        let t1: PrunableTree<String> = Tree(Node::Parent {
-            ann: None,
-            left: Rc::new(t),
-            right: Rc::new(Tree(Node::Nil)),
-        });
+        let t1 = parent(t, nil());
         assert_eq!(
             t1.root_hash(Address::from_parts(Level::from(2), 0), Position::from(2)),
             Ok("ab__".to_string())
@@ -660,25 +833,16 @@ mod tests {
 
     #[test]
     fn tree_marked_positions() {
-        let t: PrunableTree<String> = Tree(Node::Parent {
-            ann: None,
-            left: Rc::new(Tree(Node::Leaf {
-                value: ("a".to_string(), EPHEMERAL),
-            })),
-            right: Rc::new(Tree(Node::Leaf {
-                value: ("b".to_string(), MARKED),
-            })),
-        });
+        let t: PrunableTree<String> = parent(
+            leaf(("a".to_string(), EPHEMERAL)),
+            leaf(("b".to_string(), MARKED)),
+        );
         assert_eq!(
             t.marked_positions(Address::from_parts(Level::from(1), 0)),
             BTreeSet::from([Position::from(1)])
         );
 
-        let t0: PrunableTree<String> = Tree(Node::Parent {
-            ann: None,
-            left: Rc::new(t.clone()),
-            right: Rc::new(t),
-        });
+        let t0 = parent(t.clone(), t);
         assert_eq!(
             t0.marked_positions(Address::from_parts(Level::from(2), 1)),
             BTreeSet::from([Position::from(5), Position::from(7)])
@@ -687,99 +851,91 @@ mod tests {
 
     #[test]
     fn tree_prune() {
-        let t: PrunableTree<String> = Tree(Node::Parent {
-            ann: None,
-            left: Rc::new(Tree(Node::Leaf {
-                value: ("a".to_string(), EPHEMERAL),
-            })),
-            right: Rc::new(Tree(Node::Leaf {
-                value: ("b".to_string(), EPHEMERAL),
-            })),
-        });
+        let t: PrunableTree<String> = parent(
+            leaf(("a".to_string(), EPHEMERAL)),
+            leaf(("b".to_string(), EPHEMERAL)),
+        );
 
         assert_eq!(
             t.clone().prune(Level::from(1)),
-            Tree(Node::Leaf {
-                value: ("ab".to_string(), EPHEMERAL)
-            })
+            leaf(("ab".to_string(), EPHEMERAL))
         );
 
-        let t0: PrunableTree<String> = Tree(Node::Parent {
-            ann: None,
-            left: Rc::new(Tree(Node::Leaf {
-                value: ("c".to_string(), MARKED),
-            })),
-            right: Rc::new(t),
-        });
+        let t0 = parent(leaf(("c".to_string(), MARKED)), t);
         assert_eq!(
             t0.prune(Level::from(2)),
-            Tree(Node::Parent {
-                ann: None,
-                left: Rc::new(Tree(Node::Leaf {
-                    value: ("c".to_string(), MARKED),
-                },)),
-                right: Rc::new(Tree(Node::Leaf {
-                    value: ("ab".to_string(), EPHEMERAL)
-                }))
-            },)
+            parent(
+                leaf(("c".to_string(), MARKED)),
+                leaf(("ab".to_string(), EPHEMERAL))
+            )
         );
     }
 
     #[test]
     fn tree_merge_checked() {
-        let t0: PrunableTree<String> = Tree(Node::Parent {
-            ann: None,
-            left: Rc::new(Tree(Node::Leaf {
-                value: ("a".to_string(), EPHEMERAL),
-            })),
-            right: Rc::new(Tree(Node::Nil)),
-        });
+        let t0: PrunableTree<String> = parent(leaf(("a".to_string(), EPHEMERAL)), nil());
 
-        let t1: PrunableTree<String> = Tree(Node::Parent {
-            ann: None,
-            left: Rc::new(Tree(Node::Nil)),
-            right: Rc::new(Tree(Node::Leaf {
-                value: ("b".to_string(), EPHEMERAL),
-            })),
-        });
+        let t1: PrunableTree<String> = parent(nil(), leaf(("b".to_string(), EPHEMERAL)));
 
         assert_eq!(
             t0.clone()
                 .merge_checked(Address::from_parts(1.into(), 0), t1.clone()),
-            Ok(Tree(Node::Leaf {
-                value: ("ab".to_string(), EPHEMERAL)
-            }))
+            Ok(leaf(("ab".to_string(), EPHEMERAL)))
         );
 
-        let t2: PrunableTree<String> = Tree(Node::Parent {
-            ann: None,
-            left: Rc::new(Tree(Node::Leaf {
-                value: ("c".to_string(), EPHEMERAL),
-            })),
-            right: Rc::new(Tree(Node::Nil)),
-        });
+        let t2: PrunableTree<String> = parent(leaf(("c".to_string(), EPHEMERAL)), nil());
         assert_eq!(
             t0.clone()
                 .merge_checked(Address::from_parts(1.into(), 0), t2.clone()),
             Err(Address::from_parts(0.into(), 0))
         );
 
-        let t3: PrunableTree<String> = Tree(Node::Parent {
-            ann: None,
-            left: Rc::new(t0),
-            right: Rc::new(t2),
-        });
-        let t4: PrunableTree<String> = Tree(Node::Parent {
-            ann: None,
-            left: Rc::new(t1.clone()),
-            right: Rc::new(t1),
-        });
+        let t3: PrunableTree<String> = parent(t0, t2);
+        let t4: PrunableTree<String> = parent(t1.clone(), t1);
 
         assert_eq!(
             t3.merge_checked(Address::from_parts(2.into(), 0), t4),
-            Ok(Tree(Node::Leaf {
-                value: ("abcb".to_string(), EPHEMERAL)
-            }))
+            Ok(leaf(("abcb".to_string(), EPHEMERAL)))
+        );
+    }
+
+    #[test]
+    fn located_tree() {
+        let l = parent(str_leaf("a"), str_leaf("b"));
+        let r = parent(str_leaf("c"), str_leaf("d"));
+
+        let t: LocatedTree<(), String> = LocatedTree {
+            root_addr: Address::from_parts(2.into(), 1),
+            root: parent(l.clone(), r.clone()),
+        };
+
+        assert_eq!(t.max_position(), Some(7.into()));
+        assert_eq!(t.value_at_position(5.into()), Some(&"b".to_string()));
+        assert_eq!(t.value_at_position(8.into()), None);
+        assert_eq!(t.subtree(Address::from_parts(0.into(), 1)), None);
+        assert_eq!(t.subtree(Address::from_parts(3.into(), 0)), None);
+
+        let subtree_addr = Address::from_parts(1.into(), 3);
+        assert_eq!(
+            t.subtree(subtree_addr),
+            Some(LocatedTree {
+                root_addr: subtree_addr,
+                root: r.clone()
+            })
+        );
+
+        assert_eq!(
+            t.decompose_to_level(1.into()),
+            vec![
+                LocatedTree {
+                    root_addr: Address::from_parts(1.into(), 2),
+                    root: l,
+                },
+                LocatedTree {
+                    root_addr: Address::from_parts(1.into(), 3),
+                    root: r,
+                }
+            ]
         );
     }
 }
