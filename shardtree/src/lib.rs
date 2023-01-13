@@ -1951,6 +1951,61 @@ impl<
         Ok(())
     }
 
+    /// Truncates the tree, discarding all information after the checkpoint at the specified depth.
+    ///
+    /// This will also discard all checkpoints with depth <= the specified depth. Returns `true`
+    /// if the truncation succeeds or has no effect, or `false` if no checkpoint exists at the
+    /// specified depth.
+    pub fn truncate_removing_checkpoint(&mut self, checkpoint_depth: usize) -> bool {
+        if checkpoint_depth == 0 {
+            true
+        } else if self.checkpoints.len() > 1 {
+            match self.checkpoint_at_depth(checkpoint_depth) {
+                Some((checkpoint_id, c)) => {
+                    let checkpoint_id = checkpoint_id.clone();
+                    match c.tree_state {
+                        TreeState::Empty => {
+                            if (self
+                                .store
+                                .truncate(Address::from_parts(Self::subtree_level(), 0)))
+                            .is_err()
+                            {
+                                return false;
+                            }
+                            self.checkpoints.split_off(&checkpoint_id);
+                            true
+                        }
+                        TreeState::AtPosition(position) => {
+                            let subtree_addr =
+                                Address::above_position(Self::subtree_level(), position);
+                            let replacement = self
+                                .store
+                                .get_shard(subtree_addr)
+                                .and_then(|s| s.truncate_to_position(position));
+                            match replacement {
+                                Some(truncated) => {
+                                    if self.store.truncate(subtree_addr).is_err()
+                                        || self.store.put_shard(truncated).is_err()
+                                    {
+                                        false
+                                    } else {
+                                        self.checkpoints.split_off(&checkpoint_id);
+                                        true
+                                    }
+                                }
+                                None => false,
+                            }
+                        }
+                    }
+                }
+                None => false,
+            }
+        } else {
+            // do not remove the first checkpoint.
+            false
+        }
+    }
+
     /// Computes the root of any subtree of this tree rooted at the given address, with the overall
     /// tree truncated to the specified position.
     ///
@@ -2109,6 +2164,68 @@ impl<
             |pos| self.root(Self::root_addr(), pos + 1),
         )
     }
+
+    /// Computes the witness for the leaf at the specified position.
+    ///
+    /// Returns the witness as of the most recently appended leaf if `checkpoint_depth == 0`. Note
+    /// that if the most recently appended leaf is also a checkpoint, this will return the same
+    /// result as `checkpoint_depth == 1`.
+    pub fn witness(
+        &self,
+        position: Position,
+        checkpoint_depth: usize,
+    ) -> Result<Vec<H>, QueryError> {
+        let max_leaf_position = self
+            .max_leaf_position(checkpoint_depth)
+            .and_then(|v| v.ok_or_else(|| QueryError::TreeIncomplete(vec![Self::root_addr()])))?;
+
+        if position > max_leaf_position {
+            Err(QueryError::NotContained(Address::from_parts(
+                Level::from(0),
+                position.into(),
+            )))
+        } else {
+            let subtree_addr = Address::above_position(Self::subtree_level(), position);
+
+            // compute the witness for the specified position up to the subtree root
+            let mut witness = self.store.get_shard(subtree_addr).map_or_else(
+                || Err(QueryError::TreeIncomplete(vec![subtree_addr])),
+                |subtree| subtree.witness(position, max_leaf_position + 1),
+            )?;
+
+            // compute the remaining parts of the witness up to the root
+            let root_addr = Self::root_addr();
+            let mut cur_addr = subtree_addr;
+            while cur_addr != root_addr {
+                witness.push(self.root(cur_addr.sibling(), max_leaf_position + 1)?);
+                cur_addr = cur_addr.parent();
+            }
+
+            Ok(witness)
+        }
+    }
+
+    /// Make a marked leaf at a position eligible to be pruned.
+    ///
+    /// If the checkpoint associated with the specified identifier does not exist because the
+    /// corresponding checkpoint would have been more than `max_checkpoints` deep, the removal
+    /// is recorded as of the first existing checkpoint and the associated leaves will be pruned
+    /// when that checkpoint is subsequently removed.
+    pub fn remove_mark(&mut self, position: Position, as_of_checkpoint: &C) -> bool {
+        if self.get_marked_leaf(position).is_some() {
+            if let Some(checkpoint) = self.checkpoints.get_mut(as_of_checkpoint) {
+                checkpoint.marks_removed.insert(position);
+                return true;
+            }
+
+            if let Some((_, checkpoint)) = self.checkpoints.iter_mut().next() {
+                checkpoint.marks_removed.insert(position);
+                return true;
+            }
+        }
+
+        false
+    }
 }
 
 // We need an applicative functor for Result for this function so that we can correctly
@@ -2174,16 +2291,20 @@ pub mod testing {
 #[cfg(test)]
 mod tests {
     use crate::{
-        LocatedPrunableTree, LocatedTree, Node, PrunableTree, QueryError, ShardStore, ShardTree,
-        Tree, EPHEMERAL, MARKED,
+        IncompleteAt, LocatedPrunableTree, LocatedTree, Node, PrunableTree, QueryError, ShardStore,
+        ShardTree, Tree, EPHEMERAL, MARKED,
     };
+    use assert_matches::assert_matches;
     use core::convert::Infallible;
     use incrementalmerkletree::{
         testing::{
-            self, check_append, check_root_hashes, complete_tree::CompleteTree, CombinedTree,
+            self, arb_operation, check_append, check_checkpoint_rewind, check_operations,
+            check_rewind_remove_mark, check_root_hashes, check_witnesses,
+            complete_tree::CompleteTree, CombinedTree, SipHashable,
         },
         Address, Hashable, Level, Position, Retention,
     };
+    use proptest::prelude::*;
     use std::collections::BTreeSet;
     use std::rc::Rc;
 
@@ -2495,6 +2616,97 @@ mod tests {
         assert_eq!(complete.subtree.right_filled_root(), Ok("abcd".to_string()));
     }
 
+    #[test]
+    fn shardtree_insertion() {
+        let mut tree: ShardTree<String, usize, VecShardStore<String>, 4, 3> =
+            ShardTree::new(vec![], 100, 0);
+        assert_matches!(
+            tree.batch_insert(
+                Position::from(1),
+                vec![
+                    ("b".to_string(), Retention::Checkpoint { id: 1, is_marked: false }),
+                    ("c".to_string(), Retention::Ephemeral),
+                    ("d".to_string(), Retention::Marked),
+                ].into_iter()
+            ),
+            Ok(Some((pos, incomplete))) if
+                pos == Position::from(3) &&
+                incomplete == vec![
+                    IncompleteAt {
+                        address: Address::from_parts(Level::from(0), 0),
+                        required_for_witness: true
+                    }
+                ]
+        );
+
+        assert_matches!(
+            tree.root_at_checkpoint(1),
+            Err(QueryError::TreeIncomplete(v)) if v == vec![Address::from_parts(Level::from(0), 0)]
+        );
+
+        assert_matches!(
+            tree.batch_insert(
+                Position::from(0),
+                vec![
+                    ("a".to_string(), Retention::Ephemeral),
+                ].into_iter()
+            ),
+            Ok(Some((pos, incomplete))) if
+                pos == Position::from(0) &&
+                incomplete == vec![]
+        );
+
+        assert_matches!(
+            tree.root_at_checkpoint(0),
+            Ok(h) if h == *"abcd____________"
+        );
+
+        assert_matches!(
+            tree.root_at_checkpoint(1),
+            Ok(h) if h == *"ab______________"
+        );
+
+        assert_matches!(
+            tree.batch_insert(
+                Position::from(10),
+                vec![
+                    ("k".to_string(), Retention::Ephemeral),
+                    ("l".to_string(), Retention::Checkpoint { id: 2, is_marked: false }),
+                    ("m".to_string(), Retention::Ephemeral),
+                ].into_iter()
+            ),
+            Ok(Some((pos, incomplete))) if
+                pos == Position::from(12) &&
+                incomplete == vec![
+                    IncompleteAt {
+                        address: Address::from_parts(Level::from(1), 4),
+                        required_for_witness: false
+                    },
+                    IncompleteAt {
+                        address: Address::from_parts(Level::from(0), 13),
+                        required_for_witness: false
+                    },
+                    IncompleteAt {
+                        address: Address::from_parts(Level::from(1), 7),
+                        required_for_witness: false
+                    },
+                ]
+        );
+
+        assert_matches!(
+            tree.root_at_checkpoint(0),
+            // The (0, 13) and (1, 7) incomplete subtrees are
+            // not considered incomplete here because they appear
+            // at the tip of the tree.
+            Err(QueryError::TreeIncomplete(xs)) if xs == vec![
+                Address::from_parts(Level::from(2), 1),
+                Address::from_parts(Level::from(1), 4),
+            ]
+        );
+
+        assert!(tree.truncate_removing_checkpoint(1));
+    }
+
     impl<
             H: Hashable + Ord + Clone,
             C: Clone + Ord + core::fmt::Debug,
@@ -2527,12 +2739,16 @@ mod tests {
             ShardTree::root_at_checkpoint(self, checkpoint_depth).ok()
         }
 
-        fn witness(&self, _position: Position, _checkpoint_depth: usize) -> Option<Vec<H>> {
-            todo!()
+        fn witness(&self, position: Position, checkpoint_depth: usize) -> Option<Vec<H>> {
+            ShardTree::witness(self, position, checkpoint_depth).ok()
         }
 
-        fn remove_mark(&mut self, _position: Position) -> bool {
-            todo!()
+        fn remove_mark(&mut self, position: Position) -> bool {
+            if let Some(c) = self.checkpoints.iter().rev().map(|(c, _)| c.clone()).next() {
+                ShardTree::remove_mark(self, position, &c)
+            } else {
+                false
+            }
         }
 
         fn checkpoint(&mut self, checkpoint_id: C) -> bool {
@@ -2540,7 +2756,7 @@ mod tests {
         }
 
         fn rewind(&mut self) -> bool {
-            todo!()
+            ShardTree::truncate_removing_checkpoint(self, 1)
         }
     }
 
@@ -2557,6 +2773,28 @@ mod tests {
             ShardTree::<String, usize, VecShardStore<String>, 4, 3>::new(vec![], m, 0)
         });
     }
+
+    #[test]
+    fn witnesses() {
+        check_witnesses(|m| {
+            ShardTree::<String, usize, VecShardStore<String>, 4, 3>::new(vec![], m, 0)
+        });
+    }
+
+    #[test]
+    fn checkpoint_rewind() {
+        check_checkpoint_rewind(|m| {
+            ShardTree::<String, usize, VecShardStore<String>, 4, 3>::new(vec![], m, 0)
+        });
+    }
+
+    #[test]
+    fn rewind_remove_mark() {
+        check_rewind_remove_mark(|m| {
+            ShardTree::<String, usize, VecShardStore<String>, 4, 3>::new(vec![], m, 0)
+        });
+    }
+
     // Combined tree tests
     #[allow(clippy::type_complexity)]
     fn new_combined_tree<H: Hashable + Ord + Clone + core::fmt::Debug>(
@@ -2576,5 +2814,38 @@ mod tests {
     #[test]
     fn combined_append() {
         check_append(new_combined_tree);
+    }
+
+    #[test]
+    fn combined_rewind_remove_mark() {
+        check_rewind_remove_mark(new_combined_tree);
+    }
+
+    proptest! {
+        #![proptest_config(ProptestConfig::with_cases(100000))]
+
+        #[test]
+        fn check_randomized_u64_ops(
+            ops in proptest::collection::vec(
+                arb_operation((0..32u64).prop_map(SipHashable), 0usize..100),
+                1..100
+            )
+        ) {
+            let tree = new_combined_tree(100);
+            let indexed_ops = ops.iter().enumerate().map(|(i, op)| op.map_checkpoint_id(|_| i)).collect::<Vec<_>>();
+            check_operations(tree, &indexed_ops)?;
+        }
+
+        #[test]
+        fn check_randomized_str_ops(
+            ops in proptest::collection::vec(
+                arb_operation((97u8..123).prop_map(|c| char::from(c).to_string()), 0usize..100),
+                1..100
+            )
+        ) {
+            let tree = new_combined_tree(100);
+            let indexed_ops = ops.iter().enumerate().map(|(i, op)| op.map_checkpoint_id(|_| i)).collect::<Vec<_>>();
+            check_operations(tree, &indexed_ops)?;
+        }
     }
 }

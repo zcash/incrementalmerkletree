@@ -380,7 +380,7 @@ mod tests {
     }
 
     #[test]
-    fn witness() {
+    fn witnesses() {
         check_witnesses(|max_checkpoints| {
             CompleteTree::<String, usize, 4>::new(max_checkpoints, 0)
         });
