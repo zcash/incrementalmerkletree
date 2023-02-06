@@ -267,7 +267,7 @@ impl<A: Clone, V: Clone> Tree<A, V> {
     }
 }
 
-type PrunableTree<H> = Tree<Option<Rc<H>>, (H, RetentionFlags)>;
+pub type PrunableTree<H> = Tree<Option<Rc<H>>, (H, RetentionFlags)>;
 
 impl<H: Hashable + Clone + PartialEq> PrunableTree<H> {
     /// Returns the the value if this is a leaf.
@@ -690,7 +690,7 @@ impl<A: Default + Clone, V: Clone> LocatedTree<A, V> {
     }
 }
 
-type LocatedPrunableTree<H> = LocatedTree<Option<Rc<H>>, (H, RetentionFlags)>;
+pub type LocatedPrunableTree<H> = LocatedTree<Option<Rc<H>>, (H, RetentionFlags)>;
 
 /// A data structure describing the nature of a [`Node::Nil`] node in the tree that was introduced
 /// as the consequence of an insertion.
