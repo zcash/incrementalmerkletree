@@ -16,6 +16,7 @@ and this project adheres to Rust's notion of
 
 - The `testing` module has been removed in favor of depending on
   `incrementalmerkletree::testing`.
+- `serde` serialization and parsing are no longer supported.
 
 ## [bridgetree-v0.2.0] - 2022-05-10
 

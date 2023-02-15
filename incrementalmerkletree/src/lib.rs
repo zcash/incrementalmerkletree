@@ -1,7 +1,6 @@
 //! Common types and utilities used in incremental Merkle tree implementations.
 
 use either::Either;
-use serde::{Deserialize, Serialize};
 use std::cmp::Ordering;
 use std::convert::{TryFrom, TryInto};
 use std::num::TryFromIntError;
@@ -44,7 +43,7 @@ impl<C> Retention<C> {
 }
 
 /// A type representing the position of a leaf in a Merkle tree.
-#[derive(Copy, Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Copy, Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 #[repr(transparent)]
 pub struct Position(usize);
 
@@ -128,7 +127,7 @@ impl TryFrom<u64> for Position {
 /// nodes at level `0` are leaves, nodes at level `1` are parents of nodes at
 /// level `0`, and so forth. This type is capable of representing levels in
 /// trees containing up to 2^255 leaves.
-#[derive(Copy, Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Copy, Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 #[repr(transparent)]
 pub struct Level(u8);
 
@@ -178,7 +177,7 @@ impl Sub<u8> for Level {
 /// The address of an internal node of the Merkle tree.
 /// When `level == 0`, the index has the same value as the
 /// position.
-#[derive(Copy, Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Copy, Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct Address {
     level: Level,
     index: usize,

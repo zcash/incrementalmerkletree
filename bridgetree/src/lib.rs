@@ -30,7 +30,6 @@
 //! reset the state to.
 //!
 //! In this module, the term "ommer" is used as for the sibling of a parent node in a binary tree.
-use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::convert::TryFrom;
 use std::fmt::Debug;
@@ -130,7 +129,7 @@ impl Iterator for WitnessAddrsIter {
 /// A [`NonEmptyFrontier`] is a reduced representation of a Merkle tree, containing a single leaf
 /// value, along with the vector of hashes produced by the reduction of previously appended leaf
 /// values that will be required when producing a witness for the current leaf.
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct NonEmptyFrontier<H> {
     position: Position,
     leaf: H,
@@ -274,7 +273,7 @@ impl<H: Hashable + Clone> NonEmptyFrontier<H> {
 }
 
 /// A possibly-empty Merkle frontier.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Frontier<H, const DEPTH: u8> {
     frontier: Option<NonEmptyFrontier<H>>,
 }
@@ -366,7 +365,7 @@ impl<H: Hashable + Clone, const DEPTH: u8> Frontier<H, DEPTH> {
 /// [`MerkleBridge`] values have a semigroup, such that the sum (`fuse`d) value of two successive
 /// bridges, along with a [`NonEmptyFrontier`] with its tip at the prior position of the first bridge
 /// being fused, can be used to produce a witness for the leaf at the tip of the prior frontier.
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct MerkleBridge<H> {
     /// The position of the final leaf in the frontier of the bridge that this bridge is the
     /// successor of, or None if this is the first bridge in a tree.
@@ -612,7 +611,7 @@ impl<'a, H: Hashable + Ord + Clone + 'a> MerkleBridge<H> {
 /// crosses [`MerkleBridge`] boundaries, and so it is not sufficient to just truncate the list of
 /// bridges; instead, we use [`Checkpoint`] values to be able to rapidly restore the cache to its
 /// previous state.
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Checkpoint {
     /// The unique identifier for this checkpoint.
     id: usize,
@@ -713,7 +712,7 @@ impl Checkpoint {
 
 /// A sparse representation of a Merkle tree with linear appending of leaves that contains enough
 /// information to produce a witness for any `mark`ed leaf.
-#[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, PartialEq, Eq)]
 pub struct BridgeTree<H, const DEPTH: u8> {
     /// The ordered list of Merkle bridges representing the history
     /// of the tree. There will be one bridge for each saved leaf.

@@ -57,6 +57,7 @@ is not another good use case for polymorphism over tree implementations.
 - `Position::max_altitude`
 - `Position::ommer_altitudes`
 - `impl Sub<u8> for Altitude`
+- `serde` serialization and parsing are no longer supported.
 
 ## [0.3.0] - 2022-05-10
 
