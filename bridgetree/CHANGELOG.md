@@ -14,6 +14,8 @@ and this project adheres to Rust's notion of
 
 ### Removed
 
+- The `NonEmptyFrontier`, `Frontier`, and `FrontierError` types have
+  been moved to the `incrementalmerkletree` crate.
 - The `testing` module has been removed in favor of depending on
   `incrementalmerkletree::testing`.
 - `serde` serialization and parsing are no longer supported.

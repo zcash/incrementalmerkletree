@@ -7,6 +7,12 @@ and this project adheres to Rust's notion of
 
 ## [Unreleased]
 
+### Added
+- `incrementalmerkletree::frontier` Types that model the state at the rightmost
+  node of a Merkle tree that is filled sequentially from the left. These have
+  been migrated here from the `bridgetree` crate as they are useful outside
+  of the context of the `bridgetree` data structures.
+
 ## [0.3.1] - 2023-02-28
 
 ### Fixed
