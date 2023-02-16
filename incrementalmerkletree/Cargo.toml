@@ -21,4 +21,5 @@ proptest = { version = "1.0.0", optional = true }
 proptest = "1.0.0"
 
 [features]
+legacy-api = []
 test-dependencies = ["proptest"]

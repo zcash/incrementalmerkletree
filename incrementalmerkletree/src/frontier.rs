@@ -3,6 +3,9 @@ use std::mem::size_of;
 
 use crate::{Address, Hashable, Level, Position, Source};
 
+#[cfg(feature = "legacy-api")]
+use {std::collections::VecDeque, std::iter::repeat};
+
 /// Validation errors that can occur during reconstruction of a Merkle frontier from
 /// its constituent parts.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -244,9 +247,227 @@ impl<H: Hashable + Clone, const DEPTH: u8> Frontier<H, DEPTH> {
     }
 }
 
+#[cfg(feature = "legacy-api")]
+pub(crate) struct PathFiller<H> {
+    pub(crate) queue: VecDeque<H>,
+}
+
+#[cfg(feature = "legacy-api")]
+impl<H: Hashable> PathFiller<H> {
+    pub(crate) fn empty() -> Self {
+        PathFiller {
+            queue: VecDeque::new(),
+        }
+    }
+
+    pub(crate) fn next(&mut self, level: Level) -> H {
+        self.queue
+            .pop_front()
+            .unwrap_or_else(|| H::empty_root(level))
+    }
+}
+
+/// A Merkle tree of note commitments.
+#[derive(Clone, Debug, PartialEq, Eq)]
+#[cfg(feature = "legacy-api")]
+pub struct CommitmentTree<H, const DEPTH: u8> {
+    pub(crate) left: Option<H>,
+    pub(crate) right: Option<H>,
+    pub(crate) parents: Vec<Option<H>>,
+}
+
+#[cfg(feature = "legacy-api")]
+impl<H, const DEPTH: u8> CommitmentTree<H, DEPTH> {
+    /// Creates an empty tree.
+    pub fn empty() -> Self {
+        CommitmentTree {
+            left: None,
+            right: None,
+            parents: vec![],
+        }
+    }
+
+    pub fn from_frontier(frontier: &Frontier<H, DEPTH>) -> Self
+    where
+        H: Clone,
+    {
+        frontier.value().map_or_else(Self::empty, |f| {
+            let mut ommers_iter = f.ommers().iter().cloned();
+            let (left, right) = if f.position().is_odd() {
+                (
+                    ommers_iter
+                        .next()
+                        .expect("An ommer must exist if the frontier position is odd"),
+                    Some(f.leaf().clone()),
+                )
+            } else {
+                (f.leaf().clone(), None)
+            };
+
+            let upos: usize = f.position().into();
+            Self {
+                left: Some(left),
+                right,
+                parents: (1u8..DEPTH)
+                    .into_iter()
+                    .map(|i| {
+                        if upos & (1 << i) == 0 {
+                            None
+                        } else {
+                            ommers_iter.next()
+                        }
+                    })
+                    .collect(),
+            }
+        })
+    }
+
+    pub fn to_frontier(&self) -> Frontier<H, DEPTH>
+    where
+        H: Hashable + Clone,
+    {
+        if self.size() == 0 {
+            Frontier::empty()
+        } else {
+            let ommers_iter = self.parents.iter().filter_map(|v| v.as_ref()).cloned();
+            let (leaf, ommers) = match (self.left.as_ref(), self.right.as_ref()) {
+                (Some(a), None) => (a.clone(), ommers_iter.collect()),
+                (Some(a), Some(b)) => (
+                    b.clone(),
+                    Some(a.clone()).into_iter().chain(ommers_iter).collect(),
+                ),
+                _ => unreachable!(),
+            };
+
+            // If a frontier cannot be successfully constructed from the
+            // parts of a commitment tree, it is a programming error.
+            Frontier::from_parts((self.size() - 1).into(), leaf, ommers)
+                .expect("Frontier should be constructable from CommitmentTree.")
+        }
+    }
+
+    /// Returns the number of leaf nodes in the tree.
+    pub fn size(&self) -> usize {
+        self.parents.iter().enumerate().fold(
+            match (self.left.as_ref(), self.right.as_ref()) {
+                (None, None) => 0,
+                (Some(_), None) => 1,
+                (Some(_), Some(_)) => 2,
+                (None, Some(_)) => unreachable!(),
+            },
+            |acc, (i, p)| {
+                // Treat occupation of parents array as a binary number
+                // (right-shifted by 1)
+                acc + if p.is_some() { 1 << (i + 1) } else { 0 }
+            },
+        )
+    }
+
+    pub(crate) fn is_complete(&self, depth: u8) -> bool {
+        if depth == 0 {
+            self.left.is_some() && self.right.is_none() && self.parents.is_empty()
+        } else {
+            self.left.is_some()
+                && self.right.is_some()
+                && self
+                    .parents
+                    .iter()
+                    .chain(repeat(&None))
+                    .take((depth - 1).into())
+                    .all(|p| p.is_some())
+        }
+    }
+}
+
+#[cfg(feature = "legacy-api")]
+impl<H: Hashable + Clone, const DEPTH: u8> CommitmentTree<H, DEPTH> {
+    /// Adds a leaf node to the tree.
+    ///
+    /// Returns an error if the tree is full.
+    #[allow(clippy::result_unit_err)]
+    pub fn append(&mut self, node: H) -> Result<(), ()> {
+        if self.is_complete(DEPTH) {
+            // Tree is full
+            return Err(());
+        }
+
+        match (&self.left, &self.right) {
+            (None, _) => self.left = Some(node),
+            (_, None) => self.right = Some(node),
+            (Some(l), Some(r)) => {
+                let mut combined = H::combine(0.into(), l, r);
+                self.left = Some(node);
+                self.right = None;
+
+                for i in 0..DEPTH {
+                    let i_usize = usize::from(i);
+                    if i_usize < self.parents.len() {
+                        if let Some(p) = &self.parents[i_usize] {
+                            combined = H::combine((i + 1).into(), p, &combined);
+                            self.parents[i_usize] = None;
+                        } else {
+                            self.parents[i_usize] = Some(combined);
+                            break;
+                        }
+                    } else {
+                        self.parents.push(Some(combined));
+                        break;
+                    }
+                }
+            }
+        }
+
+        Ok(())
+    }
+
+    /// Returns the current root of the tree.
+    pub fn root(&self) -> H {
+        self.root_inner(DEPTH, PathFiller::empty())
+    }
+
+    pub(crate) fn root_inner(&self, depth: u8, mut filler: PathFiller<H>) -> H {
+        assert!(depth > 0);
+
+        // 1) Hash left and right leaves together.
+        //    - Empty leaves are used as needed.
+        //    - Note that `filler.next` is side-effecting and so cannot be factored out.
+        let leaf_root = H::combine(
+            0.into(),
+            &self
+                .left
+                .as_ref()
+                .map_or_else(|| filler.next(0.into()), |n| n.clone()),
+            &self
+                .right
+                .as_ref()
+                .map_or_else(|| filler.next(0.into()), |n| n.clone()),
+        );
+
+        // 2) Extend the parents to the desired depth with None values, then hash from leaf to
+        //    root. Roots of the empty subtrees are used as needed.
+        self.parents
+            .iter()
+            .chain(repeat(&None))
+            .take((depth - 1).into())
+            .enumerate()
+            .fold(leaf_root, |root, (i, p)| {
+                let level = Level::from(i as u8 + 1);
+                match p {
+                    Some(node) => H::combine(level, node, &root),
+                    None => H::combine(level, &root, &filler.next(level)),
+                }
+            })
+    }
+}
+
 #[cfg(feature = "test-dependencies")]
 pub mod testing {
-    use crate::Hashable;
+    use core::fmt::Debug;
+    use proptest::prelude::*;
+    use std::collections::hash_map::DefaultHasher;
+    use std::hash::Hasher;
+
+    use crate::{Hashable, Level};
 
     impl<H: Hashable + Clone, const DEPTH: u8> crate::testing::Frontier<H>
         for super::Frontier<H, DEPTH>
@@ -259,11 +480,64 @@ pub mod testing {
             super::Frontier::root(self)
         }
     }
+
+    #[derive(Copy, Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
+    pub struct TestNode(pub u64);
+
+    impl Hashable for TestNode {
+        fn empty_leaf() -> Self {
+            Self(0)
+        }
+
+        fn combine(level: Level, a: &Self, b: &Self) -> Self {
+            let mut hasher = DefaultHasher::new();
+            hasher.write_u8(level.into());
+            hasher.write_u64(a.0);
+            hasher.write_u64(b.0);
+            Self(hasher.finish())
+        }
+    }
+
+    prop_compose! {
+        pub fn arb_test_node()(i in any::<u64>()) -> TestNode {
+            TestNode(i)
+        }
+    }
+
+    #[cfg(feature = "legacy-api")]
+    use {crate::frontier::CommitmentTree, proptest::collection::vec};
+
+    #[cfg(feature = "legacy-api")]
+    pub fn arb_commitment_tree<
+        H: Hashable + Clone + Debug,
+        T: Strategy<Value = H>,
+        const DEPTH: u8,
+    >(
+        min_size: usize,
+        arb_node: T,
+    ) -> impl Strategy<Value = CommitmentTree<H, DEPTH>> {
+        assert!((1 << DEPTH) >= min_size + 100);
+        vec(arb_node, min_size..(min_size + 100)).prop_map(move |v| {
+            let mut tree = CommitmentTree::empty();
+            for node in v.into_iter() {
+                tree.append(node).unwrap();
+            }
+            tree.parents.resize_with((DEPTH - 1).into(), || None);
+            tree
+        })
+    }
 }
 
 #[cfg(test)]
 mod tests {
+
     use super::*;
+
+    #[cfg(feature = "legacy-api")]
+    use {
+        super::testing::{arb_commitment_tree, arb_test_node, TestNode},
+        proptest::prelude::*,
+    };
 
     #[test]
     fn nonempty_frontier_root() {
@@ -318,5 +592,74 @@ mod tests {
                 .to_vec()),
             frontier.witness(4, bridge_value_at)
         );
+    }
+
+    #[test]
+    #[cfg(feature = "legacy-api")]
+    fn test_commitment_tree_complete() {
+        let mut t: CommitmentTree<TestNode, 6> = CommitmentTree::empty();
+        for n in 1u64..=32 {
+            t.append(TestNode(n)).unwrap();
+            // every tree of a power-of-two height is complete
+            let is_complete = n.count_ones() == 1;
+            let level = usize::BITS - 1 - n.leading_zeros(); //log2
+            assert_eq!(
+                is_complete,
+                t.is_complete(level.try_into().unwrap()),
+                "Tree {:?} {} complete at height {}",
+                t,
+                if is_complete {
+                    "should be"
+                } else {
+                    "should not be"
+                },
+                n
+            );
+        }
+    }
+
+    #[test]
+    #[cfg(feature = "legacy-api")]
+    fn test_commitment_tree_roundtrip() {
+        let ct = CommitmentTree {
+            left: Some("a".to_string()),
+            right: Some("b".to_string()),
+            parents: vec![
+                Some("c".to_string()),
+                Some("d".to_string()),
+                Some("e".to_string()),
+                Some("f".to_string()),
+                None,
+                None,
+                None,
+            ],
+        };
+
+        let frontier: Frontier<String, 8> = ct.to_frontier();
+        let ct0 = CommitmentTree::from_frontier(&frontier);
+        assert_eq!(ct, ct0);
+        let frontier0: Frontier<String, 8> = ct0.to_frontier();
+        assert_eq!(frontier, frontier0);
+    }
+
+    #[cfg(feature = "legacy-api")]
+    proptest! {
+        #[test]
+        fn prop_commitment_tree_roundtrip(ct in arb_commitment_tree(32, arb_test_node())) {
+            let frontier: Frontier<TestNode, 8> = ct.to_frontier();
+            let ct0 = CommitmentTree::from_frontier(&frontier);
+            assert_eq!(ct, ct0);
+            let frontier0: Frontier<TestNode, 8> = ct0.to_frontier();
+            assert_eq!(frontier, frontier0);
+        }
+
+        #[test]
+        fn prop_commitment_tree_roundtrip_str(ct in arb_commitment_tree::<_, _, 8>(32, any::<char>().prop_map(|c| c.to_string()))) {
+            let frontier: Frontier<String, 8> = ct.to_frontier();
+            let ct0 = CommitmentTree::from_frontier(&frontier);
+            assert_eq!(ct, ct0);
+            let frontier0: Frontier<String, 8> = ct0.to_frontier();
+            assert_eq!(frontier, frontier0);
+        }
     }
 }

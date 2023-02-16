@@ -8,6 +8,9 @@ use std::ops::{Add, AddAssign, Range, Sub};
 
 pub mod frontier;
 
+#[cfg(feature = "legacy-api")]
+pub mod witness;
+
 #[cfg(feature = "test-dependencies")]
 pub mod testing;
 
@@ -216,6 +219,13 @@ impl From<Level> for u8 {
 impl From<Level> for usize {
     fn from(level: Level) -> usize {
         level.0 as usize
+    }
+}
+
+impl TryFrom<usize> for Level {
+    type Error = TryFromIntError;
+    fn try_from(sz: usize) -> Result<Self, Self::Error> {
+        <u8>::try_from(sz).map(Self)
     }
 }
 

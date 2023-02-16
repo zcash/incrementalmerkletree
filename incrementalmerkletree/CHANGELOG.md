@@ -11,7 +11,12 @@ and this project adheres to Rust's notion of
 - `incrementalmerkletree::frontier` Types that model the state at the rightmost
   node of a Merkle tree that is filled sequentially from the left. These have
   been migrated here from the `bridgetree` crate as they are useful outside
-  of the context of the `bridgetree` data structures.
+  of the context of the `bridgetree` data structures. Additional legacy types
+  used for this modeling have been moved here from the `librustzcash` crate;
+  these migrated types are available under a `legacy-api` feature flag.
+- `incrementalmerkletree::witness` Types migrated from `librustzcash` under
+  the `legacy-api` feature flag related to constructing witnesses for leaves
+  of a Merkle tree.
 
 ## [0.3.1] - 2023-02-28
 
