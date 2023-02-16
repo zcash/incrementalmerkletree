@@ -109,7 +109,7 @@ impl Iterator for WitnessAddrsIter {
     fn next(&mut self) -> Option<(Address, Source)> {
         if self.current.level() < self.root_level {
             let current = self.current;
-            let source = if current.is_complete_node() {
+            let source = if current.is_right_child() {
                 Source::Past(self.ommer_count)
             } else {
                 Source::Future
