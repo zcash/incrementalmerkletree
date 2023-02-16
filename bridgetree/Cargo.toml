@@ -5,12 +5,13 @@ authors = [
     "Kris Nuttycombe <kris@nutty.land>",
     "Sean Bowe <ewillbefull@gmail.com>",
 ]
-edition = "2018"
+edition = "2021"
 license = "MIT OR Apache-2.0"
 description = "A space-efficient Merkle tree designed for linear appends with witnessing of marked leaves, checkpointing & state restoration."
 homepage = "https://github.com/zcash/incrementalmerkletree"
 repository = "https://github.com/zcash/incrementalmerkletree"
 categories = ["algorithms", "data-structures"]
+rust-version = "1.60"
 
 [dependencies]
 incrementalmerkletree = { version = "0.3", path = "../incrementalmerkletree" }

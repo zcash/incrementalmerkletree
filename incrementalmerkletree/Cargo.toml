@@ -1,16 +1,17 @@
 [package]
 name = "incrementalmerkletree"
+description = "Common types, interfaces, and utilities for Merkle tree data structures"
 version = "0.3.0"
 authors = [
     "Sean Bowe <ewillbefull@gmail.com>",
     "Kris Nuttycombe <kris@nutty.land>",
 ]
-edition = "2018"
+edition = "2021"
 license = "MIT OR Apache-2.0"
-description = "Common types, interfaces, and utilities for Merkle tree data structures"
 homepage = "https://github.com/zcash/incrementalmerkletree"
 repository = "https://github.com/zcash/incrementalmerkletree"
 categories = ["algorithms", "data-structures"]
+rust-version = "1.60"
 
 [dependencies]
 either = "1.8"
