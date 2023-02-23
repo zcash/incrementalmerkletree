@@ -16,4 +16,4 @@ categories = ["algorithms", "data-structures"]
 serde = { version = "1", features = ["derive"] }
 
 [dev-dependencies]
-proptest = "1"
+proptest = "~1.0"
