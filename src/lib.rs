@@ -106,7 +106,7 @@ impl Position {
         Altitude(if self.0 == 0 {
             0
         } else {
-            63 - self.0.leading_zeros() as u8
+            (usize::BITS - 1 - self.0.leading_zeros()) as u8
         })
     }
 
