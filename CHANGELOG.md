@@ -7,6 +7,11 @@ and this project adheres to Rust's notion of
 
 ## [Unreleased]
 
+### Fixed
+
+- A bug affecting 32-bit platforms caused `Position::max_altitude` to return the wrong
+  value. This typically manifested as failures to add commitments to the tree.
+
 ## [0.3.0] - 2022-05-10
 
 ### Added

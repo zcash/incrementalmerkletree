@@ -1,0 +1,8 @@
+# Seeds for failure cases proptest has generated in the past. It is
+# automatically read and these particular cases re-run before any
+# novel cases are generated.
+#
+# It is recommended to check this file in to source control so that
+# everyone who runs the test benefits from these saved cases.
+cc 713580b935d97377d97711c7f126ad2ef82c961bc4b64b538c551d1b2e8b1cdb # shrinks to ops = [Append("a"), Append("a"), Append("a")]
+cc db0c5a37f69e8824f0680d595aaf803e15b207d5571d07db464d8178037d8798 # shrinks to ops = [Append(SipHashable(0)), Append(SipHashable(0)), Authpath(Position(0), 0)]
