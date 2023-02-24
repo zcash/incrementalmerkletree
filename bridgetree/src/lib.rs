@@ -976,7 +976,6 @@ impl<H: Hashable + Ord + Clone, const DEPTH: u8> BridgeTree<H, DEPTH> {
     pub fn mark(&mut self) -> Option<Position> {
         match self.current_bridge.take() {
             Some(mut cur_b) => {
-                cur_b.track_current_leaf();
                 let pos = cur_b.position();
                 // If the latest bridge is a newly created checkpoint, the last prior
                 // bridge will have the same position and all we need to do is mark
@@ -988,8 +987,10 @@ impl<H: Hashable + Ord + Clone, const DEPTH: u8> BridgeTree<H, DEPTH> {
                 {
                     // the current bridge has not been advanced, so we just need to make
                     // sure that we have are tracking the marked leaf
+                    cur_b.track_current_leaf();
                     self.current_bridge = Some(cur_b);
                 } else {
+                    // the successor(true) call will ensure that the marked leaf is tracked
                     let successor = cur_b.successor(true);
                     self.prior_bridges.push(cur_b);
                     self.current_bridge = Some(successor);
