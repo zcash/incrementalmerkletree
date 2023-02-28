@@ -1,19 +1,5 @@
-[package]
-name = "incrementalmerkletree"
-version = "0.3.1"
-authors = [
-    "Sean Bowe <ewillbefull@gmail.com>",
-    "Kris Nuttycombe <kris@nutty.land>",
+[workspace]
+members = [
+    "incrementalmerkletree",
+    "bridgetree",
 ]
-edition = "2018"
-license = "MIT OR Apache-2.0"
-description = "Implementation of an Incremental Merkle Tree"
-homepage = "https://github.com/zcash/incrementalmerkletree"
-repository = "https://github.com/zcash/incrementalmerkletree"
-categories = ["algorithms", "data-structures"]
-
-[dependencies]
-serde = { version = "1", features = ["derive"] }
-
-[dev-dependencies]
-proptest = "~1.0"
