@@ -7,6 +7,8 @@ and this project adheres to Rust's notion of
 
 ## [Unreleased]
 
+## [0.3.1] - 2023-02-28
+
 ### Fixed
 
 - A bug affecting 32-bit platforms caused `Position::max_altitude` (which has
