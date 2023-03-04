@@ -53,11 +53,9 @@ pub trait Tree<H, C> {
     /// requested checkpoint depth.
     fn root(&self, checkpoint_depth: usize) -> Option<H>;
 
-    /// Obtains a witness to the value at the specified position,
-    /// as of the tree state corresponding to the given root.
-    /// Returns `None` if there is no available witness to that
-    /// position or if the root does not correspond to a checkpointed
-    /// root of the tree.
+    /// Obtains a witness for the value at the specified leaf position, as of the tree state at the
+    /// given checkpoint depth. Returns `None` if there is no witness information for the requested
+    /// position or if no checkpoint is available at the specified depth.
     fn witness(&self, position: Position, checkpoint_depth: usize) -> Option<Vec<H>>;
 
     /// Marks the value at the specified position as a value we're no longer

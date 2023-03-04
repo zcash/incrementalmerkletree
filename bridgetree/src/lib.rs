@@ -772,7 +772,7 @@ impl<H, const DEPTH: u8> BridgeTree<H, DEPTH> {
         }
     }
 
-    /// Removes the oldest checkpoin if there are more than `max_checkpoints`. Returns true if
+    /// Removes the oldest checkpoint if there are more than `max_checkpoints`. Returns true if
     /// successful and false if there are not enough checkpoints.
     fn drop_oldest_checkpoint(&mut self) -> bool {
         if self.checkpoints.len() > self.max_checkpoints {
@@ -1111,11 +1111,9 @@ impl<H: Hashable + Ord + Clone, const DEPTH: u8> BridgeTree<H, DEPTH> {
         }
     }
 
-    /// Obtains a witness to the value at the specified position,
-    /// as of the tree state corresponding to the given root.
-    /// Returns `None` if there is no available witness to that
-    /// position or if the root does not correspond to a checkpointed
-    /// root of the tree.
+    /// Obtains a witness for the value at the specified leaf position, as of the tree state at the
+    /// given checkpoint depth. Returns `None` if there is no witness information for the requested
+    /// position or if no checkpoint is available at the specified depth.
     pub fn witness(
         &self,
         position: Position,
