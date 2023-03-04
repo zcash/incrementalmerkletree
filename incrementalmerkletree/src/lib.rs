@@ -57,7 +57,7 @@ impl Position {
     /// Returns the minimum possible level of the root of a binary tree containing at least
     /// `self + 1` nodes.
     pub fn root_level(&self) -> Level {
-        Level(64 - self.0.leading_zeros() as u8)
+        Level((usize::BITS - self.0.leading_zeros()) as u8)
     }
 
     /// Returns the number of cousins and/or ommers required to construct an authentication
