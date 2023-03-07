@@ -27,9 +27,12 @@
 pub mod bridgetree;
 mod sample;
 
+use core::ops::Range;
+use either::Either;
 use serde::{Deserialize, Serialize};
+use std::cmp::Ordering;
 use std::collections::BTreeSet;
-use std::convert::TryFrom;
+use std::convert::{TryFrom, TryInto};
 use std::num::TryFromIntError;
 use std::ops::{Add, AddAssign, Sub};
 
@@ -37,7 +40,7 @@ use std::ops::{Add, AddAssign, Sub};
 /// nodes at altitude `0` are leaves, nodes at altitude `1` are parents
 /// of nodes at altitude `0`, and so forth. This type is capable of
 /// representing altitudes in trees containing up to 2^255 leaves.
-#[derive(Copy, Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[derive(Copy, Clone, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
 #[repr(transparent)]
 pub struct Altitude(u8);
 
@@ -190,6 +193,16 @@ impl AddAssign<usize> for Position {
     }
 }
 
+impl Sub<usize> for Position {
+    type Output = Position;
+    fn sub(self, other: usize) -> Self {
+        if self.0 < other {
+            panic!("position underflow");
+        }
+        Position(self.0 - other)
+    }
+}
+
 impl From<usize> for Position {
     fn from(sz: usize) -> Self {
         Self(sz)
@@ -200,6 +213,235 @@ impl TryFrom<u64> for Position {
     type Error = TryFromIntError;
     fn try_from(sz: u64) -> Result<Self, Self::Error> {
         <usize>::try_from(sz).map(Self)
+    }
+}
+
+/// The address of an internal node of the Merkle tree.
+/// When `level == 0`, the index has the same value as the
+/// position.
+#[derive(Copy, Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+pub struct Address {
+    level: Altitude,
+    index: usize,
+}
+
+impl Address {
+    /// Construct a new address from its constituent parts.
+    pub fn from_parts(level: Altitude, index: usize) -> Self {
+        Address { level, index }
+    }
+
+    /// Returns the address at the given level that contains the specified leaf position.
+    pub fn above_position(level: Altitude, position: Position) -> Self {
+        Address {
+            level,
+            index: position.0 >> level.0,
+        }
+    }
+
+    /// Returns the level of the root of the tree having its root at this address.
+    pub fn level(&self) -> Altitude {
+        self.level
+    }
+
+    /// Returns the index of the address.
+    ///
+    /// The index of an address is defined as the number of subtrees with their roots
+    /// at the address's level that appear to the left of this address in a binary
+    /// tree of arbitrary height > level * 2 + 1.
+    pub fn index(&self) -> usize {
+        self.index
+    }
+
+    /// The address of the node one level higher than this in a binary tree that contains
+    /// this address as either its left or right child.
+    pub fn parent(&self) -> Address {
+        Address {
+            level: self.level + 1,
+            index: self.index >> 1,
+        }
+    }
+
+    /// Returns the address that shares the same parent as this address.
+    pub fn sibling(&self) -> Address {
+        Address {
+            level: self.level,
+            index: if self.index & 0x1 == 0 {
+                self.index + 1
+            } else {
+                self.index - 1
+            },
+        }
+    }
+
+    /// Returns the immediate children of this address.
+    pub fn children(&self) -> Option<(Address, Address)> {
+        if self.level == Altitude::from(0) {
+            None
+        } else {
+            let left = Address {
+                level: self.level - 1,
+                index: self.index << 1,
+            };
+
+            let right = Address {
+                level: self.level - 1,
+                index: (self.index << 1) + 1,
+            };
+
+            Some((left, right))
+        }
+    }
+
+    /// Returns whether this address is an ancestor of the specified address.
+    pub fn is_ancestor_of(&self, addr: &Self) -> bool {
+        self.level > addr.level && { addr.index >> (self.level.0 - addr.level.0) == self.index }
+    }
+
+    /// Returns whether this address is an ancestor of, or is equal to,
+    /// the specified address.
+    pub fn contains(&self, addr: &Self) -> bool {
+        self == addr || self.is_ancestor_of(addr)
+    }
+
+    /// Returns the minimum value among the range of leaf positions that are contained within the
+    /// tree with its root at this address.
+    pub fn position_range_start(&self) -> Position {
+        (self.index << self.level.0).try_into().unwrap()
+    }
+
+    /// Returns the (exclusive) end of the range of leaf positions that are contained within the
+    /// tree with its root at this address.
+    pub fn position_range_end(&self) -> Position {
+        ((self.index + 1) << self.level.0).try_into().unwrap()
+    }
+
+    /// Returns the maximum value among the range of leaf positions that are contained within the
+    /// tree with its root at this address.
+    pub fn max_position(&self) -> Position {
+        self.position_range_end() - 1
+    }
+
+    /// Returns the end-exclusive range of leaf positions that are contained within the tree with
+    /// its root at this address.
+    pub fn position_range(&self) -> Range<Position> {
+        Range {
+            start: self.position_range_start(),
+            end: self.position_range_end(),
+        }
+    }
+
+    /// Returns either the ancestor of this address at the given level (if the level is greater
+    /// than or equal to that of this address) or the range of indices of root addresses of
+    /// subtrees with roots at the given level contained within the tree with its root at this
+    /// address otherwise.
+    pub fn context(&self, level: Altitude) -> Either<Address, Range<usize>> {
+        if level >= self.level {
+            Either::Left(Address {
+                level,
+                index: self.index >> (level.0 - self.level.0),
+            })
+        } else {
+            let shift = self.level.0 - level.0;
+            Either::Right(Range {
+                start: self.index << shift,
+                end: (self.index + 1) << shift,
+            })
+        }
+    }
+
+    /// Returns whether the tree with this root address contains the given leaf position, or if not
+    /// whether an address at the same level with a greater or lesser index will contain the
+    /// specified leaf position.
+    pub fn position_cmp(&self, pos: Position) -> Ordering {
+        let range = self.position_range();
+        if range.start > pos {
+            Ordering::Greater
+        } else if range.end <= pos {
+            Ordering::Less
+        } else {
+            Ordering::Equal
+        }
+    }
+
+    /// Returns whether this address is the right-hand child of its parent
+    pub fn is_right_child(&self) -> bool {
+        self.index & 0x1 == 1
+    }
+
+    pub fn current_incomplete(&self) -> Address {
+        // find the first zero bit in the index, searching from the least significant bit
+        let mut index = self.index;
+        for level in self.level.0.. {
+            if index & 0x1 == 1 {
+                index >>= 1;
+            } else {
+                return Address {
+                    level: Altitude(level),
+                    index,
+                };
+            }
+        }
+
+        unreachable!("The loop will always terminate via return in at most 64 iterations.")
+    }
+
+    pub fn next_incomplete_parent(&self) -> Address {
+        if self.is_right_child() {
+            self.current_incomplete()
+        } else {
+            let complete = Address {
+                level: self.level,
+                index: self.index + 1,
+            };
+            complete.current_incomplete()
+        }
+    }
+
+    /// Increments this address's index by 1 and returns the resulting address.
+    pub fn next_at_level(&self) -> Address {
+        Address {
+            level: self.level,
+            index: self.index + 1,
+        }
+    }
+}
+
+impl From<Position> for Address {
+    fn from(p: Position) -> Self {
+        Address {
+            level: 0.into(),
+            index: p.into(),
+        }
+    }
+}
+
+impl<'a> From<&'a Position> for Address {
+    fn from(p: &'a Position) -> Self {
+        Address {
+            level: 0.into(),
+            index: (*p).into(),
+        }
+    }
+}
+
+impl From<Address> for Option<Position> {
+    fn from(addr: Address) -> Self {
+        if addr.level == 0.into() {
+            Some(addr.index.into())
+        } else {
+            None
+        }
+    }
+}
+
+impl<'a> From<&'a Address> for Option<Position> {
+    fn from(addr: &'a Address) -> Self {
+        if addr.level == 0.into() {
+            Some(addr.index.into())
+        } else {
+            None
+        }
     }
 }
 

@@ -13,6 +13,7 @@ repository = "https://github.com/zcash/incrementalmerkletree"
 categories = ["algorithms", "data-structures"]
 
 [dependencies]
+either = "1.8"
 serde = { version = "1", features = ["derive"] }
 
 [dev-dependencies]
