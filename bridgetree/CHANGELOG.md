@@ -7,6 +7,11 @@ and this project adheres to Rust's notion of
 
 ## [Unreleased]
 
+### Changed
+
+- `BridgeTree::witness` now takes a checkpoint depth rather than a root hash to
+  identify the tree state with respect to which the witness should be constructed.
+
 ### Removed
 
 - The `testing` module has been removed in favor of depending on
