@@ -409,8 +409,7 @@ impl<H: Hashable + Clone + PartialEq> PrunableTree<H> {
             // a starting valid fill point that is outside the range of leaf positions.
             let no_default_fill = addr.position_range_end();
             match (t0, t1) {
-                (Tree(Node::Nil), other) => Ok(other),
-                (other, Tree(Node::Nil)) => Ok(other),
+                (Tree(Node::Nil), other) | (other, Tree(Node::Nil)) => Ok(other),
                 (Tree(Node::Leaf { value: vl }), Tree(Node::Leaf { value: vr })) => {
                     if vl == vr {
                         Ok(Tree(Node::Leaf { value: vl }))
@@ -418,20 +417,8 @@ impl<H: Hashable + Clone + PartialEq> PrunableTree<H> {
                         Err(addr)
                     }
                 }
-                (Tree(Node::Leaf { value }), parent) => {
-                    // `parent` is statically known to be a `Node::Parent`
-                    if parent
-                        .root_hash(addr, no_default_fill)
-                        .iter()
-                        .all(|r| r == &value.0)
-                    {
-                        Ok(parent.reannotate_root(Some(Rc::new(value.0))))
-                    } else {
-                        Err(addr)
-                    }
-                }
-                (parent, Tree(Node::Leaf { value })) => {
-                    // `parent` is statically known to be a `Node::Parent`
+                (Tree(Node::Leaf { value }), parent @ Tree(Node::Parent { .. }))
+                | (parent @ Tree(Node::Parent { .. }), Tree(Node::Leaf { value })) => {
                     if parent
                         .root_hash(addr, no_default_fill)
                         .iter()
@@ -818,7 +805,7 @@ impl<H: Hashable + Clone + PartialEq> LocatedPrunableTree<H> {
     /// Compute the witness for the leaf at the specified position.
     ///
     /// This tree will be truncated to the `truncate_at` position, and then empty
-    /// empty roots corresponding to later positions will be filled by [`H::empty_root`].
+    /// roots corresponding to later positions will be filled by [`H::empty_root`].
     ///
     /// Returns either the witness for the leaf at the specified position, or an error that
     /// describes the causes of failure.
@@ -871,8 +858,8 @@ impl<H: Hashable + Clone + PartialEq> LocatedPrunableTree<H> {
                             }
                         } else if left.is_marked_leaf() {
                             // If we have the left-hand leaf and the right-hand leaf is empty, we
-                            // can fill it with the empty leaf, but only if `fill_start` is None or
-                            // it is located at `position + 1`.
+                            // can fill it with the empty leaf, but only if we are truncating at
+                            // a position to the left of the current position
                             if truncate_at <= position + 1 {
                                 Ok(vec![H::empty_leaf()])
                             } else {
@@ -1559,9 +1546,9 @@ pub struct ShardTree<H, C: Ord, S: ShardStore<H>, const DEPTH: u8, const SHARD_H
     max_checkpoints: usize,
     /// A map from position to the count of checkpoints at this position.
     checkpoints: BTreeMap<C, Checkpoint>,
-    // /// A tree that is used to cache the known roots of subtrees in the "cap" of nodes between
+    // /// TODO: Add a tree that is used to cache the known roots of subtrees in the "cap" of nodes between
     // /// `SHARD_HEIGHT` and `DEPTH` that are otherwise not directly represented in the tree.  This
-    // /// cache is automatically updated when computing roots and witnesses. Leaf nodes are empty
+    // /// cache will be automatically updated when computing roots and witnesses. Leaf nodes are empty
     // /// because the annotation slot is consistently used to store the subtree hashes at each node.
     // cap_cache: Tree<Option<Rc<H>>, ()>
     _hash_type: PhantomData<H>,
