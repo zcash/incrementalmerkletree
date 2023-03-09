@@ -109,33 +109,19 @@ impl<C, A, V> Node<C, A, V> {
     }
 }
 
-/// An F-algebra for use with [`Tree::reduce`] for determining whether a tree has any `Nil` nodes.
-///
-/// Returns `true` if no [`Node::Nil`] nodes are present in the tree.
-pub fn is_complete<A, V>(node: Node<bool, A, V>) -> bool {
-    match node {
-        Node::Parent { left, right, .. } => left && right,
-        Node::Leaf { .. } => true,
-        Node::Nil { .. } => false,
-    }
-}
-
-/// An F-algebra for use with [`Tree::try_reduce`] for determining whether a tree has any `MARKED` nodes.
-///
-/// `Tree::try_reduce` is preferred for this operation because it allows us to short-circuit as
-/// soon as we find a marked node. Returns [`Either::Left(())`] if a marked node exists,
-/// [`Either::Right(())`] otherwise.
-pub fn contains_marked<A, V>(node: Node<(), A, (V, RetentionFlags)>) -> Either<(), ()> {
-    match node {
-        Node::Parent { .. } => Either::Right(()),
-        Node::Leaf { value: (_, r) } => {
-            if r.is_marked() {
-                Either::Left(())
-            } else {
-                Either::Right(())
-            }
+impl<'a, C: Clone, A: Clone, V: Clone> Node<C, &'a A, &'a V> {
+    pub fn cloned(&self) -> Node<C, A, V> {
+        match self {
+            Node::Parent { ann, left, right } => Node::Parent {
+                ann: (*ann).clone(),
+                left: left.clone(),
+                right: right.clone(),
+            },
+            Node::Leaf { value } => Node::Leaf {
+                value: (*value).clone(),
+            },
+            Node::Nil => Node::Nil,
         }
-        Node::Nil { .. } => Either::Right(()),
     }
 }
 
@@ -157,11 +143,22 @@ impl<A, V> Tree<A, V> {
         Tree(self.0.reannotate(ann))
     }
 
+    /// Returns `true` if no [`Node::Nil`] nodes are present in the tree, `false` otherwise.
+    pub fn is_complete(&self) -> bool {
+        match &self.0 {
+            Node::Parent { left, right, .. } => {
+                left.as_ref().is_complete() && right.as_ref().is_complete()
+            }
+            Node::Leaf { .. } => true,
+            Node::Nil { .. } => false,
+        }
+    }
+
     /// Returns a vector of the addresses of [`Node::Nil`] subtree roots within this tree.
     ///
     /// The given address must correspond to the root of this tree, or this method will
     /// yield incorrect results or may panic.
-    pub fn incomplete(&self, root_addr: Address) -> Vec<Address> {
+    pub fn incomplete_nodes(&self, root_addr: Address) -> Vec<Address> {
         match &self.0 {
             Node::Parent { left, right, .. } => {
                 // We should never construct parent nodes where both children are Nil.
@@ -172,62 +169,13 @@ impl<A, V> Tree<A, V> {
                     .children()
                     .expect("A parent node cannot appear at level 0");
 
-                let mut left_incomplete = left.incomplete(left_root);
-                let mut right_incomplete = right.incomplete(right_root);
+                let mut left_incomplete = left.incomplete_nodes(left_root);
+                let mut right_incomplete = right.incomplete_nodes(right_root);
                 left_incomplete.append(&mut right_incomplete);
                 left_incomplete
             }
             Node::Leaf { .. } => vec![],
             Node::Nil => vec![root_addr],
-        }
-    }
-}
-
-impl<A: Clone, V: Clone> Tree<A, V> {
-    /// Folds over the tree from leaf to root with the given function.
-    ///
-    /// See [`is_complete`] for an example of a function that can be used with this method.
-    /// This operation will visit every node of the tree. See [`try_reduce`] for a variant
-    /// that can perform a depth-first, left-to-right traversal with the option to
-    /// short-circuit.
-    pub fn reduce<B, F: Fn(Node<B, A, V>) -> B>(&self, alg: &F) -> B {
-        match &self.0 {
-            Node::Parent { ann, left, right } => {
-                let left_result = left.reduce(alg);
-                let right_result = right.reduce(alg);
-                alg(Node::Parent {
-                    ann: ann.clone(),
-                    left: left_result,
-                    right: right_result,
-                })
-            }
-            Node::Leaf { value } => alg(Node::Leaf {
-                value: value.clone(),
-            }),
-            Node::Nil => alg(Node::Nil),
-        }
-    }
-
-    /// Folds over the tree from leaf to root with the given function.
-    ///
-    /// This performs a left-to-right, depth-first traversal that halts on the first
-    /// [`Either::Left`] result, or builds an [`Either::Right`] from the results computed at every
-    /// node.
-    pub fn try_reduce<L, R, F: Fn(Node<R, A, V>) -> Either<L, R>>(&self, alg: &F) -> Either<L, R> {
-        match &self.0 {
-            Node::Parent { ann, left, right } => left.try_reduce(alg).right_and_then(|l_value| {
-                right.try_reduce(alg).right_and_then(move |r_value| {
-                    alg(Node::Parent {
-                        ann: ann.clone(),
-                        left: l_value,
-                        right: r_value,
-                    })
-                })
-            }),
-            Node::Leaf { value } => alg(Node::Leaf {
-                value: value.clone(),
-            }),
-            Node::Nil => alg(Node::Nil),
         }
     }
 }
@@ -254,6 +202,15 @@ impl<H: Hashable + Clone + PartialEq> PrunableTree<H> {
         self.0
             .leaf_value()
             .map_or(false, |(_, retention)| retention.is_marked())
+    }
+
+    /// Determines whether a tree has any `MARKED` nodes.
+    pub fn contains_marked(&self) -> bool {
+        match &self.0 {
+            Node::Parent { left, right, .. } => left.contains_marked() || right.contains_marked(),
+            Node::Leaf { value: (_, r) } => r.is_marked(),
+            Node::Nil => false,
+        }
     }
 
     /// Returns the Merkle root of this tree, given the address of the root node, or
@@ -496,8 +453,8 @@ impl<A, V> LocatedTree<A, V> {
 
     /// Returns the set of incomplete subtree roots contained within this tree, ordered by
     /// increasing position.
-    pub fn incomplete(&self) -> Vec<Address> {
-        self.root.incomplete(self.root_addr)
+    pub fn incomplete_nodes(&self) -> Vec<Address> {
+        self.root.incomplete_nodes(self.root_addr)
     }
 
     /// Returns the maximum position at which a non-Nil leaf has been observed in the tree.
@@ -1037,7 +994,7 @@ impl<H: Hashable + Clone + PartialEq> LocatedPrunableTree<H> {
 
         let LocatedTree { root_addr, root } = self;
         if root_addr.contains(&subtree.root_addr) {
-            let complete = subtree.root.reduce(&is_complete);
+            let complete = subtree.root.is_complete();
             go(*root_addr, root, subtree, complete, contains_marked).map(|(root, incomplete)| {
                 (
                     LocatedTree {
@@ -1635,7 +1592,7 @@ impl<
 
         let (append_result, position, checkpoint_id) =
             if let Some(subtree) = self.store.last_shard() {
-                if subtree.root.reduce(&is_complete) {
+                if subtree.root.is_complete() {
                     let addr = subtree.root_addr;
 
                     if addr.index() + 1 >= 0x1 << (SHARD_HEIGHT - 1) {
@@ -1733,7 +1690,7 @@ impl<
         let mut all_incomplete = vec![];
         for subtree in tree.decompose_to_level(Self::subtree_level()).into_iter() {
             let root_addr = subtree.root_addr;
-            let contains_marked = subtree.root.try_reduce(&contains_marked).is_left();
+            let contains_marked = subtree.root.contains_marked();
             let empty = LocatedTree::empty(root_addr);
             let (new_subtree, mut incomplete) = self
                 .store
@@ -2288,22 +2245,22 @@ mod tests {
     }
 
     #[test]
-    fn tree_incomplete() {
+    fn tree_incomplete_nodes() {
         let t: Tree<(), String> = parent(nil(), str_leaf("a"));
         assert_eq!(
-            t.incomplete(Address::from_parts(Level::from(1), 0)),
+            t.incomplete_nodes(Address::from_parts(Level::from(1), 0)),
             vec![Address::from_parts(Level::from(0), 0)]
         );
 
         let t0 = parent(str_leaf("b"), t.clone());
         assert_eq!(
-            t0.incomplete(Address::from_parts(Level::from(2), 1)),
+            t0.incomplete_nodes(Address::from_parts(Level::from(2), 1)),
             vec![Address::from_parts(Level::from(0), 6)]
         );
 
         let t1 = parent(nil(), t);
         assert_eq!(
-            t1.incomplete(Address::from_parts(Level::from(2), 1)),
+            t1.incomplete_nodes(Address::from_parts(Level::from(2), 1)),
             vec![
                 Address::from_parts(Level::from(1), 2),
                 Address::from_parts(Level::from(0), 6)
