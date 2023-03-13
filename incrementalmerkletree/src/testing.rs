@@ -716,7 +716,6 @@ pub fn check_witnesses<T: Tree<String, usize> + std::fmt::Debug, F: Fn(usize) ->
     );
 
     let ops = ('a'..='l')
-        .into_iter()
         .map(|c| Append(c.to_string(), Marked))
         .chain(Some(Append('m'.to_string(), Ephemeral)))
         .chain(Some(Append('n'.to_string(), Ephemeral)))

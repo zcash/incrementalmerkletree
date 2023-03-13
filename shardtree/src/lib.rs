@@ -1819,7 +1819,7 @@ impl<
                         .and_modify(|to_clear| {
                             to_clear
                                 .entry(pos)
-                                .and_modify(|flags| *flags = *flags | RetentionFlags::CHECKPOINT)
+                                .and_modify(|flags| *flags |= RetentionFlags::CHECKPOINT)
                                 .or_insert(RetentionFlags::CHECKPOINT);
                         })
                         .or_insert_with(|| BTreeMap::from([(pos, RetentionFlags::CHECKPOINT)]));
@@ -1833,7 +1833,7 @@ impl<
                         .and_modify(|to_clear| {
                             to_clear
                                 .entry(*unmark_pos)
-                                .and_modify(|flags| *flags = *flags | RetentionFlags::MARKED)
+                                .and_modify(|flags| *flags |= RetentionFlags::MARKED)
                                 .or_insert(RetentionFlags::MARKED);
                         })
                         .or_insert_with(|| BTreeMap::from([(*unmark_pos, RetentionFlags::MARKED)]));

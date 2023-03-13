@@ -342,7 +342,7 @@ mod tests {
     #[test]
     fn correct_root() {
         const DEPTH: u8 = 3;
-        let values = (0..(1 << DEPTH)).into_iter().map(SipHashable);
+        let values = (0..(1 << DEPTH)).map(SipHashable);
 
         let mut tree = CompleteTree::<SipHashable, (), DEPTH>::new(100, ());
         for value in values {
@@ -391,7 +391,7 @@ mod tests {
         use crate::{testing::Tree, Retention};
 
         const DEPTH: u8 = 3;
-        let values = (0..(1 << DEPTH)).into_iter().map(SipHashable);
+        let values = (0..(1 << DEPTH)).map(SipHashable);
 
         let mut tree = CompleteTree::<SipHashable, (), DEPTH>::new(100, ());
         for value in values {
