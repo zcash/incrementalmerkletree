@@ -14,16 +14,8 @@ pub struct MerklePath<H, const DEPTH: u8> {
 }
 
 impl<H, const DEPTH: u8> MerklePath<H, DEPTH> {
-    pub fn auth_path(&self) -> &[(H, bool)] {
-        &self.auth_path
-    }
-
-    pub fn position(&self) -> u64 {
-        self.position
-    }
-
     /// Constructs a Merkle path directly from a path and position.
-    pub fn from_path(auth_path: Vec<(H, bool)>, position: u64) -> Result<Self, ()> {
+    pub fn from_parts(auth_path: Vec<(H, bool)>, position: u64) -> Result<Self, ()> {
         if auth_path.len() == usize::from(DEPTH) {
             Ok(MerklePath {
                 auth_path,
@@ -32,6 +24,14 @@ impl<H, const DEPTH: u8> MerklePath<H, DEPTH> {
         } else {
             Err(())
         }
+    }
+
+    pub fn auth_path(&self) -> &[(H, bool)] {
+        &self.auth_path
+    }
+
+    pub fn position(&self) -> u64 {
+        self.position
     }
 }
 
@@ -91,13 +91,42 @@ pub struct IncrementalWitness<H, const DEPTH: u8> {
 impl<H, const DEPTH: u8> IncrementalWitness<H, DEPTH> {
     /// Creates an `IncrementalWitness` for the most recent commitment added to the given
     /// [`CommitmentTree`].
-    pub fn from_tree(tree: CommitmentTree<H, DEPTH>) -> IncrementalWitness<H, DEPTH> {
+    pub fn from_tree(tree: CommitmentTree<H, DEPTH>) -> Self {
         IncrementalWitness {
             tree,
             filled: vec![],
             cursor_depth: 0,
             cursor: None,
         }
+    }
+
+    pub fn from_parts(
+        tree: CommitmentTree<H, DEPTH>,
+        filled: Vec<H>,
+        cursor: Option<CommitmentTree<H, DEPTH>>,
+    ) -> Self {
+        let mut witness = IncrementalWitness {
+            tree,
+            filled,
+            cursor_depth: 0,
+            cursor,
+        };
+
+        witness.cursor_depth = witness.next_depth();
+
+        witness
+    }
+
+    pub fn tree(&self) -> &CommitmentTree<H, DEPTH> {
+        &self.tree
+    }
+
+    pub fn filled(&self) -> &Vec<H> {
+        &self.filled
+    }
+
+    pub fn cursor(&self) -> &Option<CommitmentTree<H, DEPTH>> {
+        &self.cursor
     }
 
     /// Returns the position of the witnessed leaf node in the commitment tree.
@@ -150,11 +179,9 @@ impl<H: Hashable + Clone, const DEPTH: u8> IncrementalWitness<H, DEPTH> {
         let cursor_root = self
             .cursor
             .as_ref()
-            .map(|c| c.root_inner(self.cursor_depth, PathFiller::empty()));
+            .map(|c| c.root_at_depth(self.cursor_depth, PathFiller::empty()));
 
-        PathFiller {
-            queue: self.filled.iter().cloned().chain(cursor_root).collect(),
-        }
+        PathFiller::new(self.filled.iter().cloned().chain(cursor_root).collect())
     }
 
     /// Tracks a leaf node that has been added to the underlying tree.
@@ -166,7 +193,7 @@ impl<H: Hashable + Clone, const DEPTH: u8> IncrementalWitness<H, DEPTH> {
             cursor.append(node).expect("cursor should not be full");
             if cursor.is_complete(self.cursor_depth) {
                 self.filled
-                    .push(cursor.root_inner(self.cursor_depth, PathFiller::empty()));
+                    .push(cursor.root_at_depth(self.cursor_depth, PathFiller::empty()));
             } else {
                 self.cursor = Some(cursor);
             }
@@ -191,11 +218,7 @@ impl<H: Hashable + Clone, const DEPTH: u8> IncrementalWitness<H, DEPTH> {
 
     /// Returns the current root of the tree corresponding to the witness.
     pub fn root(&self) -> H {
-        self.root_inner(DEPTH)
-    }
-
-    fn root_inner(&self, depth: u8) -> H {
-        self.tree.root_inner(depth, self.filler())
+        self.tree.root_at_depth(DEPTH, self.filler())
     }
 
     /// Returns the current witness, or None if the tree is empty.
@@ -234,6 +257,6 @@ impl<H: Hashable + Clone, const DEPTH: u8> IncrementalWitness<H, DEPTH> {
 
         assert_eq!(auth_path.len(), usize::from(depth));
 
-        MerklePath::from_path(auth_path, self.position() as u64).ok()
+        MerklePath::from_parts(auth_path, self.position() as u64).ok()
     }
 }

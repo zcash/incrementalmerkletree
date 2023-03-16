@@ -248,19 +248,23 @@ impl<H: Hashable + Clone, const DEPTH: u8> Frontier<H, DEPTH> {
 }
 
 #[cfg(feature = "legacy-api")]
-pub(crate) struct PathFiller<H> {
-    pub(crate) queue: VecDeque<H>,
+pub struct PathFiller<H> {
+    queue: VecDeque<H>,
 }
 
 #[cfg(feature = "legacy-api")]
 impl<H: Hashable> PathFiller<H> {
-    pub(crate) fn empty() -> Self {
+    pub fn empty() -> Self {
         PathFiller {
             queue: VecDeque::new(),
         }
     }
 
-    pub(crate) fn next(&mut self, level: Level) -> H {
+    pub fn new(queue: VecDeque<H>) -> Self {
+        Self { queue }
+    }
+
+    pub fn next(&mut self, level: Level) -> H {
         self.queue
             .pop_front()
             .unwrap_or_else(|| H::empty_root(level))
@@ -287,63 +291,32 @@ impl<H, const DEPTH: u8> CommitmentTree<H, DEPTH> {
         }
     }
 
-    pub fn from_frontier(frontier: &Frontier<H, DEPTH>) -> Self
-    where
-        H: Clone,
-    {
-        frontier.value().map_or_else(Self::empty, |f| {
-            let mut ommers_iter = f.ommers().iter().cloned();
-            let (left, right) = if f.position().is_odd() {
-                (
-                    ommers_iter
-                        .next()
-                        .expect("An ommer must exist if the frontier position is odd"),
-                    Some(f.leaf().clone()),
-                )
-            } else {
-                (f.leaf().clone(), None)
-            };
-
-            let upos: usize = f.position().into();
-            Self {
-                left: Some(left),
+    pub fn from_parts(
+        left: Option<H>,
+        right: Option<H>,
+        parents: Vec<Option<H>>,
+    ) -> Result<Self, ()> {
+        if parents.len() < usize::from(DEPTH) {
+            Ok(CommitmentTree {
+                left,
                 right,
-                parents: (1u8..DEPTH)
-                    .into_iter()
-                    .map(|i| {
-                        if upos & (1 << i) == 0 {
-                            None
-                        } else {
-                            ommers_iter.next()
-                        }
-                    })
-                    .collect(),
-            }
-        })
+                parents,
+            })
+        } else {
+            Err(())
+        }
     }
 
-    pub fn to_frontier(&self) -> Frontier<H, DEPTH>
-    where
-        H: Hashable + Clone,
-    {
-        if self.size() == 0 {
-            Frontier::empty()
-        } else {
-            let ommers_iter = self.parents.iter().filter_map(|v| v.as_ref()).cloned();
-            let (leaf, ommers) = match (self.left.as_ref(), self.right.as_ref()) {
-                (Some(a), None) => (a.clone(), ommers_iter.collect()),
-                (Some(a), Some(b)) => (
-                    b.clone(),
-                    Some(a.clone()).into_iter().chain(ommers_iter).collect(),
-                ),
-                _ => unreachable!(),
-            };
+    pub fn left(&self) -> &Option<H> {
+        &self.left
+    }
 
-            // If a frontier cannot be successfully constructed from the
-            // parts of a commitment tree, it is a programming error.
-            Frontier::from_parts((self.size() - 1).into(), leaf, ommers)
-                .expect("Frontier should be constructable from CommitmentTree.")
-        }
+    pub fn right(&self) -> &Option<H> {
+        &self.right
+    }
+
+    pub fn parents(&self) -> &Vec<Option<H>> {
+        &self.parents
     }
 
     /// Returns the number of leaf nodes in the tree.
@@ -381,6 +354,59 @@ impl<H, const DEPTH: u8> CommitmentTree<H, DEPTH> {
 
 #[cfg(feature = "legacy-api")]
 impl<H: Hashable + Clone, const DEPTH: u8> CommitmentTree<H, DEPTH> {
+    pub fn from_frontier(frontier: &Frontier<H, DEPTH>) -> Self {
+        frontier.value().map_or_else(Self::empty, |f| {
+            let mut ommers_iter = f.ommers().iter().cloned();
+            let (left, right) = if f.position().is_odd() {
+                (
+                    ommers_iter
+                        .next()
+                        .expect("An ommer must exist if the frontier position is odd"),
+                    Some(f.leaf().clone()),
+                )
+            } else {
+                (f.leaf().clone(), None)
+            };
+
+            let upos: usize = f.position().into();
+            Self {
+                left: Some(left),
+                right,
+                parents: (1u8..DEPTH)
+                    .into_iter()
+                    .map(|i| {
+                        if upos & (1 << i) == 0 {
+                            None
+                        } else {
+                            ommers_iter.next()
+                        }
+                    })
+                    .collect(),
+            }
+        })
+    }
+
+    pub fn to_frontier(&self) -> Frontier<H, DEPTH> {
+        if self.size() == 0 {
+            Frontier::empty()
+        } else {
+            let ommers_iter = self.parents.iter().filter_map(|v| v.as_ref()).cloned();
+            let (leaf, ommers) = match (self.left.as_ref(), self.right.as_ref()) {
+                (Some(a), None) => (a.clone(), ommers_iter.collect()),
+                (Some(a), Some(b)) => (
+                    b.clone(),
+                    Some(a.clone()).into_iter().chain(ommers_iter).collect(),
+                ),
+                _ => unreachable!(),
+            };
+
+            // If a frontier cannot be successfully constructed from the
+            // parts of a commitment tree, it is a programming error.
+            Frontier::from_parts((self.size() - 1).into(), leaf, ommers)
+                .expect("Frontier should be constructable from CommitmentTree.")
+        }
+    }
+
     /// Adds a leaf node to the tree.
     ///
     /// Returns an error if the tree is full.
@@ -422,10 +448,10 @@ impl<H: Hashable + Clone, const DEPTH: u8> CommitmentTree<H, DEPTH> {
 
     /// Returns the current root of the tree.
     pub fn root(&self) -> H {
-        self.root_inner(DEPTH, PathFiller::empty())
+        self.root_at_depth(DEPTH, PathFiller::empty())
     }
 
-    pub(crate) fn root_inner(&self, depth: u8, mut filler: PathFiller<H>) -> H {
+    pub fn root_at_depth(&self, depth: u8, mut filler: PathFiller<H>) -> H {
         assert!(depth > 0);
 
         // 1) Hash left and right leaves together.
