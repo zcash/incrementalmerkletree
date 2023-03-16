@@ -15,6 +15,7 @@ pub struct MerklePath<H, const DEPTH: u8> {
 
 impl<H, const DEPTH: u8> MerklePath<H, DEPTH> {
     /// Constructs a Merkle path directly from a path and position.
+    #[allow(clippy::result_unit_err)]
     pub fn from_parts(auth_path: Vec<(H, bool)>, position: u64) -> Result<Self, ()> {
         if auth_path.len() == usize::from(DEPTH) {
             Ok(MerklePath {

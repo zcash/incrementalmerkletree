@@ -291,6 +291,7 @@ impl<H, const DEPTH: u8> CommitmentTree<H, DEPTH> {
         }
     }
 
+    #[allow(clippy::result_unit_err)]
     pub fn from_parts(
         left: Option<H>,
         right: Option<H>,
