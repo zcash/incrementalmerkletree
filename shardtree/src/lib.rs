@@ -1454,8 +1454,8 @@ impl<H> ShardStore<H> for Vec<LocatedPrunableTree<H>> {
     }
 }
 
-/// A left-dense, sparse binary Merkle tree of the specified depth, represented as a vector of
-/// subtrees (shards) of the given maximum height.
+/// A sparse binary Merkle tree of the specified depth, represented as an ordered collection of
+/// subtrees (shards) of a given maximum height.
 ///
 /// This tree maintains a collection of "checkpoints" which represent positions, usually near the
 /// front of the tree, that are maintained such that it's possible to truncate nodes to the right
@@ -1466,7 +1466,7 @@ pub struct ShardTree<H, C: Ord, S: ShardStore<H>, const DEPTH: u8, const SHARD_H
     store: S,
     /// The maximum number of checkpoints to retain before pruning.
     max_checkpoints: usize,
-    /// A map from position to the count of checkpoints at this position.
+    /// An ordered map from checkpoint identifier to checkpoint.
     checkpoints: BTreeMap<C, Checkpoint>,
     // /// TODO: Add a tree that is used to cache the known roots of subtrees in the "cap" of nodes between
     // /// `SHARD_HEIGHT` and `DEPTH` that are otherwise not directly represented in the tree.  This
@@ -1478,7 +1478,7 @@ pub struct ShardTree<H, C: Ord, S: ShardStore<H>, const DEPTH: u8, const SHARD_H
 
 impl<
         H: Hashable + Clone + PartialEq,
-        C: Clone + Ord + core::fmt::Debug,
+        C: Clone + Ord,
         S: ShardStore<H>,
         const DEPTH: u8,
         const SHARD_HEIGHT: u8,
@@ -1722,7 +1722,7 @@ impl<
                                         l_addr.level(),
                                         ann.clone(),
                                         new_left,
-                                        right.as_ref().clone(),
+                                        Tree(Node::Nil),
                                     ),
                                     pos,
                                 )
@@ -1811,32 +1811,27 @@ impl<
             {
                 checkpoints_to_delete.push(cid.clone());
 
-                // clear the checkpoint leaf
-                if let TreeState::AtPosition(pos) = checkpoint.tree_state {
+                let mut clear_at = |pos, flags_to_clear| {
                     let subtree_addr = Address::above_position(Self::subtree_level(), pos);
                     clear_positions
                         .entry(subtree_addr)
                         .and_modify(|to_clear| {
                             to_clear
                                 .entry(pos)
-                                .and_modify(|flags| *flags |= RetentionFlags::CHECKPOINT)
-                                .or_insert(RetentionFlags::CHECKPOINT);
+                                .and_modify(|flags| *flags |= flags_to_clear)
+                                .or_insert(flags_to_clear);
                         })
-                        .or_insert_with(|| BTreeMap::from([(pos, RetentionFlags::CHECKPOINT)]));
+                        .or_insert_with(|| BTreeMap::from([(pos, flags_to_clear)]));
+                };
+
+                // clear the checkpoint leaf
+                if let TreeState::AtPosition(pos) = checkpoint.tree_state {
+                    clear_at(pos, RetentionFlags::CHECKPOINT)
                 }
 
                 // clear the leaves that have been marked for removal
                 for unmark_pos in checkpoint.marks_removed.iter() {
-                    let subtree_addr = Address::above_position(Self::subtree_level(), *unmark_pos);
-                    clear_positions
-                        .entry(subtree_addr)
-                        .and_modify(|to_clear| {
-                            to_clear
-                                .entry(*unmark_pos)
-                                .and_modify(|flags| *flags |= RetentionFlags::MARKED)
-                                .or_insert(RetentionFlags::MARKED);
-                        })
-                        .or_insert_with(|| BTreeMap::from([(*unmark_pos, RetentionFlags::MARKED)]));
+                    clear_at(*unmark_pos, RetentionFlags::MARKED)
                 }
             }
 
