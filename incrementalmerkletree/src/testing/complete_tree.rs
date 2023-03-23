@@ -321,8 +321,8 @@ mod tests {
     use super::CompleteTree;
     use crate::{
         testing::{
-            check_checkpoint_rewind, check_rewind_remove_mark, check_root_hashes, check_witnesses,
-            compute_root_from_witness, SipHashable, Tree,
+            check_append, check_checkpoint_rewind, check_rewind_remove_mark, check_root_hashes,
+            check_witnesses, compute_root_from_witness, SipHashable, Tree,
         },
         Hashable, Level, Position, Retention,
     };
@@ -342,7 +342,7 @@ mod tests {
     #[test]
     fn correct_root() {
         const DEPTH: u8 = 3;
-        let values = (0..(1 << DEPTH)).into_iter().map(SipHashable);
+        let values = (0..(1 << DEPTH)).map(SipHashable);
 
         let mut tree = CompleteTree::<SipHashable, (), DEPTH>::new(100, ());
         for value in values {
@@ -368,6 +368,11 @@ mod tests {
     }
 
     #[test]
+    fn append() {
+        check_append(|max_checkpoints| CompleteTree::<String, usize, 4>::new(max_checkpoints, 0));
+    }
+
+    #[test]
     fn root_hashes() {
         check_root_hashes(|max_checkpoints| {
             CompleteTree::<String, usize, 4>::new(max_checkpoints, 0)
@@ -375,7 +380,7 @@ mod tests {
     }
 
     #[test]
-    fn witness() {
+    fn witnesses() {
         check_witnesses(|max_checkpoints| {
             CompleteTree::<String, usize, 4>::new(max_checkpoints, 0)
         });
@@ -386,7 +391,7 @@ mod tests {
         use crate::{testing::Tree, Retention};
 
         const DEPTH: u8 = 3;
-        let values = (0..(1 << DEPTH)).into_iter().map(SipHashable);
+        let values = (0..(1 << DEPTH)).map(SipHashable);
 
         let mut tree = CompleteTree::<SipHashable, (), DEPTH>::new(100, ());
         for value in values {
