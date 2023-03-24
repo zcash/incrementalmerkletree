@@ -477,7 +477,7 @@ impl<H> MerkleBridge<H> {
     }
 }
 
-impl<'a, H: Hashable + Ord + Clone + 'a> MerkleBridge<H> {
+impl<'a, H: Hashable + Clone + Ord + 'a> MerkleBridge<H> {
     /// Constructs a new bridge to follow this one. If `mark_current_leaf` is true, the successor
     /// will track the information necessary to create a witness for the leaf most
     /// recently appended to this bridge's frontier.
@@ -613,9 +613,9 @@ impl<'a, H: Hashable + Ord + Clone + 'a> MerkleBridge<H> {
 /// bridges; instead, we use [`Checkpoint`] values to be able to rapidly restore the cache to its
 /// previous state.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub struct Checkpoint {
+pub struct Checkpoint<C> {
     /// The unique identifier for this checkpoint.
-    id: usize,
+    id: C,
     /// The number of bridges that will be retained in a rewind.
     bridges_len: usize,
     /// A set of the positions that have been marked during the period that this
@@ -627,10 +627,10 @@ pub struct Checkpoint {
     forgotten: BTreeSet<Position>,
 }
 
-impl Checkpoint {
+impl<C> Checkpoint<C> {
     /// Creates a new checkpoint from its constituent parts.
     pub fn from_parts(
-        id: usize,
+        id: C,
         bridges_len: usize,
         marked: BTreeSet<Position>,
         forgotten: BTreeSet<Position>,
@@ -644,7 +644,7 @@ impl Checkpoint {
     }
 
     /// Creates a new empty checkpoint for the specified [`BridgeTree`] state.
-    pub fn at_length(bridges_len: usize, id: usize) -> Self {
+    pub fn at_length(bridges_len: usize, id: C) -> Self {
         Checkpoint {
             id,
             bridges_len,
@@ -653,10 +653,9 @@ impl Checkpoint {
         }
     }
 
-    /// The unique identifier for the checkpoint, which is simply an automatically incrementing
-    /// index over all checkpoints that have ever been created in the history of the tree.
-    pub fn id(&self) -> usize {
-        self.id
+    /// The unique identifier for the checkpoint.
+    pub fn id(&self) -> &C {
+        &self.id
     }
 
     /// Returns the length of the [`BridgeTree::prior_bridges`] vector of the [`BridgeTree`] to
@@ -714,7 +713,7 @@ impl Checkpoint {
 /// A sparse representation of a Merkle tree with linear appending of leaves that contains enough
 /// information to produce a witness for any `mark`ed leaf.
 #[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct BridgeTree<H, const DEPTH: u8> {
+pub struct BridgeTree<H, C, const DEPTH: u8> {
     /// The ordered list of Merkle bridges representing the history
     /// of the tree. There will be one bridge for each saved leaf.
     prior_bridges: Vec<MerkleBridge<H>>,
@@ -727,14 +726,14 @@ pub struct BridgeTree<H, const DEPTH: u8> {
     /// This deque must be maintained to have a minimum size of 1 and a maximum
     /// size of `max_checkpoints` in order to correctly maintain mark & rewind
     /// semantics.
-    checkpoints: VecDeque<Checkpoint>,
+    checkpoints: VecDeque<Checkpoint<C>>,
     /// The maximum number of checkpoints to retain. If this number is
     /// exceeded, the oldest checkpoint will be dropped when creating
     /// a new checkpoint.
     max_checkpoints: usize,
 }
 
-impl<H: Hashable + Ord + Debug, const DEPTH: u8> Debug for BridgeTree<H, DEPTH> {
+impl<H: Debug, C: Debug, const DEPTH: u8> Debug for BridgeTree<H, C, DEPTH> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> Result<(), std::fmt::Error> {
         write!(
             f,
@@ -756,12 +755,12 @@ pub enum BridgeTreeError {
     CheckpointMismatch,
 }
 
-impl<H, const DEPTH: u8> BridgeTree<H, DEPTH> {
+impl<H, C, const DEPTH: u8> BridgeTree<H, C, DEPTH> {
     /// Construct an empty BridgeTree value with the specified maximum number of checkpoints.
     ///
     /// Panics if `max_checkpoints < 1` because mark/rewind logic depends upon the presence
     /// of checkpoints to function.
-    pub fn new(max_checkpoints: usize, initial_checkpoint_id: usize) -> Self {
+    pub fn new(max_checkpoints: usize, initial_checkpoint_id: C) -> Self {
         assert!(max_checkpoints >= 1);
         Self {
             prior_bridges: vec![],
@@ -806,7 +805,7 @@ impl<H, const DEPTH: u8> BridgeTree<H, DEPTH> {
     }
 
     /// Returns the checkpoints to which this tree may be rewound.
-    pub fn checkpoints(&self) -> &VecDeque<Checkpoint> {
+    pub fn checkpoints(&self) -> &VecDeque<Checkpoint<C>> {
         &self.checkpoints
     }
 
@@ -823,7 +822,7 @@ impl<H, const DEPTH: u8> BridgeTree<H, DEPTH> {
     }
 }
 
-impl<H: Hashable + Ord + Clone, const DEPTH: u8> BridgeTree<H, DEPTH> {
+impl<H: Hashable + Clone + Ord, C: Clone + Ord, const DEPTH: u8> BridgeTree<H, C, DEPTH> {
     /// Construct a new BridgeTree that will start recording changes from the state of
     /// the specified frontier.
     pub fn from_frontier(max_checkpoints: usize, frontier: NonEmptyFrontier<H>) -> Self {
@@ -847,7 +846,7 @@ impl<H: Hashable + Ord + Clone, const DEPTH: u8> BridgeTree<H, DEPTH> {
         prior_bridges: Vec<MerkleBridge<H>>,
         current_bridge: Option<MerkleBridge<H>>,
         saved: BTreeMap<Position, usize>,
-        checkpoints: VecDeque<Checkpoint>,
+        checkpoints: VecDeque<Checkpoint<C>>,
         max_checkpoints: usize,
     ) -> Result<Self, BridgeTreeError> {
         Self::check_consistency_internal(
@@ -880,7 +879,7 @@ impl<H: Hashable + Ord + Clone, const DEPTH: u8> BridgeTree<H, DEPTH> {
         prior_bridges: &[MerkleBridge<H>],
         current_bridge: &Option<MerkleBridge<H>>,
         saved: &BTreeMap<Position, usize>,
-        checkpoints: &VecDeque<Checkpoint>,
+        checkpoints: &VecDeque<Checkpoint<C>>,
         max_checkpoints: usize,
     ) -> Result<(), BridgeTreeError> {
         // check that saved values correspond to bridges
@@ -1050,8 +1049,8 @@ impl<H: Hashable + Ord + Clone, const DEPTH: u8> BridgeTree<H, DEPTH> {
     /// It is valid to have multiple checkpoints for the same tree state, and each `rewind` call
     /// will remove a single checkpoint. Successive checkpoint identifiers must always be provided
     /// in increasing order.
-    pub fn checkpoint(&mut self, id: usize) -> bool {
-        if Some(id) > self.checkpoints.back().map(|c| c.id) {
+    pub fn checkpoint(&mut self, id: C) -> bool {
+        if Some(&id) > self.checkpoints.back().map(|c| &c.id) {
             match self.current_bridge.take() {
                 Some(cur_b) => {
                     // Do not create a duplicate bridge
@@ -1121,9 +1120,9 @@ impl<H: Hashable + Ord + Clone, const DEPTH: u8> BridgeTree<H, DEPTH> {
         checkpoint_depth: usize,
     ) -> Result<Vec<H>, WitnessingError> {
         #[derive(Debug)]
-        enum AuthBase<'a> {
+        enum AuthBase<'a, C> {
             Current,
-            Checkpoint(usize, &'a Checkpoint),
+            Checkpoint(usize, &'a Checkpoint<C>),
         }
 
         // Find the earliest checkpoint having a matching root, or the current
@@ -1284,24 +1283,16 @@ mod tests {
     use super::*;
     use incrementalmerkletree::{
         testing::{
-            apply_operation, arb_operation, check_checkpoint_rewind, check_operations,
+            self, apply_operation, arb_operation, check_checkpoint_rewind, check_operations,
             check_remove_mark, check_rewind_remove_mark, check_root_hashes, check_witnesses,
-            complete_tree::CompleteTree, CombinedTree, Frontier, SipHashable, Tree,
+            complete_tree::CompleteTree, CombinedTree, SipHashable,
         },
         Hashable,
     };
 
-    impl<H: Hashable + Clone, const DEPTH: u8> Frontier<H> for super::Frontier<H, DEPTH> {
-        fn append(&mut self, value: H) -> bool {
-            super::Frontier::append(self, value)
-        }
-
-        fn root(&self) -> H {
-            super::Frontier::root(self)
-        }
-    }
-
-    impl<H: Hashable + Ord + Clone, const DEPTH: u8> Tree<H, usize> for BridgeTree<H, DEPTH> {
+    impl<H: Hashable + Clone + Ord, const DEPTH: u8> testing::Tree<H, usize>
+        for BridgeTree<H, usize, DEPTH>
+    {
         fn append(&mut self, value: H, retention: Retention<usize>) -> bool {
             let appended = BridgeTree::append(self, value);
             if appended {
@@ -1449,7 +1440,7 @@ mod tests {
 
     #[test]
     fn tree_depth() {
-        let mut tree = BridgeTree::<String, 3>::new(100, 0);
+        let mut tree = BridgeTree::<String, usize, 3>::new(100, 0);
         for c in 'a'..'i' {
             assert!(tree.append(c.to_string()))
         }
@@ -1457,7 +1448,7 @@ mod tests {
     }
 
     fn check_garbage_collect<H: Hashable + Clone + Ord, const DEPTH: u8>(
-        mut tree: BridgeTree<H, DEPTH>,
+        mut tree: BridgeTree<H, usize, DEPTH>,
     ) {
         // Add checkpoints until we're sure everything that can be gc'ed will be gc'ed
         for i in 0..tree.max_checkpoints {
@@ -1475,13 +1466,13 @@ mod tests {
     fn arb_bridgetree<G: Strategy + Clone>(
         item_gen: G,
         max_count: usize,
-    ) -> impl Strategy<Value = BridgeTree<G::Value, 8>>
+    ) -> impl Strategy<Value = BridgeTree<G::Value, usize, 8>>
     where
-        G::Value: Hashable + Ord + Clone + Debug + 'static,
+        G::Value: Hashable + Clone + Ord + Debug + 'static,
     {
         proptest::collection::vec(arb_operation(item_gen, 0..max_count), 0..max_count).prop_map(
             |ops| {
-                let mut tree: BridgeTree<G::Value, 8> = BridgeTree::new(10, 0);
+                let mut tree: BridgeTree<G::Value, usize, 8> = BridgeTree::new(10, 0);
                 for (i, op) in ops.into_iter().enumerate() {
                     apply_operation(&mut tree, op.map_checkpoint_id(|_| i));
                 }
@@ -1517,29 +1508,33 @@ mod tests {
 
     #[test]
     fn root_hashes() {
-        check_root_hashes(|max_checkpoints| BridgeTree::<String, 4>::new(max_checkpoints, 0));
+        check_root_hashes(|max_checkpoints| {
+            BridgeTree::<String, usize, 4>::new(max_checkpoints, 0)
+        });
     }
 
     #[test]
     fn witness() {
-        check_witnesses(|max_checkpoints| BridgeTree::<String, 4>::new(max_checkpoints, 0));
+        check_witnesses(|max_checkpoints| BridgeTree::<String, usize, 4>::new(max_checkpoints, 0));
     }
 
     #[test]
     fn checkpoint_rewind() {
-        check_checkpoint_rewind(|max_checkpoints| BridgeTree::<String, 4>::new(max_checkpoints, 0));
+        check_checkpoint_rewind(|max_checkpoints| {
+            BridgeTree::<String, usize, 4>::new(max_checkpoints, 0)
+        });
     }
 
     #[test]
     fn rewind_remove_mark() {
         check_rewind_remove_mark(|max_checkpoints| {
-            BridgeTree::<String, 4>::new(max_checkpoints, 0)
+            BridgeTree::<String, usize, 4>::new(max_checkpoints, 0)
         });
     }
 
     #[test]
     fn garbage_collect() {
-        let mut tree: BridgeTree<String, 7> = BridgeTree::new(1000, 0);
+        let mut tree: BridgeTree<String, usize, 7> = BridgeTree::new(1000, 0);
         let empty_root = tree.root(0);
         tree.append("a".to_string());
         for i in 0..100 {
@@ -1550,7 +1545,7 @@ mod tests {
         tree.rewind();
         assert!(tree.root(0) != empty_root);
 
-        let mut t = BridgeTree::<String, 7>::new(10, 0);
+        let mut t = BridgeTree::<String, usize, 7>::new(10, 0);
         let mut to_unmark = vec![];
         let mut has_witness = vec![];
         for i in 0usize..100 {
@@ -1592,12 +1587,12 @@ mod tests {
     }
 
     // Combined tree tests
-    fn new_combined_tree<H: Hashable + Ord + Clone + Debug>(
+    fn new_combined_tree<H: Hashable + Clone + Ord + Debug>(
         max_checkpoints: usize,
-    ) -> CombinedTree<H, usize, CompleteTree<H, usize, 4>, BridgeTree<H, 4>> {
+    ) -> CombinedTree<H, usize, CompleteTree<H, usize, 4>, BridgeTree<H, usize, 4>> {
         CombinedTree::new(
             CompleteTree::<H, usize, 4>::new(max_checkpoints, 0),
-            BridgeTree::<H, 4>::new(max_checkpoints, 0),
+            BridgeTree::<H, usize, 4>::new(max_checkpoints, 0),
         )
     }
 
