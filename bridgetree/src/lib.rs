@@ -536,8 +536,8 @@ impl<H, C, const DEPTH: u8> BridgeTree<H, C, DEPTH> {
 impl<H: Hashable + Ord + Clone, C: Clone + Ord, const DEPTH: u8> BridgeTree<H, C, DEPTH> {
     /// Construct a new BridgeTree that will start recording changes from the state of
     /// the specified frontier.
-    pub fn from_frontier(max_checkpoints: usize, frontier: NonEmptyFrontier<H>) -> Self {
-        Self {
+    pub fn from_frontier(max_checkpoints: usize, frontier: NonEmptyFrontier<H>, checkpoint_id: C) -> Self {
+        let mut bridge = Self {
             prior_bridges: vec![],
             current_bridge: Some(MerkleBridge::from_parts(
                 None,
@@ -548,7 +548,9 @@ impl<H: Hashable + Ord + Clone, C: Clone + Ord, const DEPTH: u8> BridgeTree<H, C
             saved: BTreeMap::new(),
             checkpoints: VecDeque::new(),
             max_checkpoints,
-        }
+        };
+        bridge.checkpoint(checkpoint_id);
+        bridge
     }
 
     /// Construct a new BridgeTree from its constituent parts, checking for internal
