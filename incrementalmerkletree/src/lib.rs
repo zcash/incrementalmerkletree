@@ -289,11 +289,7 @@ impl Address {
     pub fn sibling(&self) -> Address {
         Address {
             level: self.level,
-            index: if self.index & 0x1 == 0 {
-                self.index + 1
-            } else {
-                self.index - 1
-            },
+            index: self.index ^ 1,
         }
     }
 

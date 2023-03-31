@@ -15,7 +15,8 @@ pub enum FrontierError {
     PositionMismatch { expected_ommers: usize },
     /// An error representing that the position and/or list of ommers provided to frontier
     /// construction would result in a frontier that exceeds the maximum statically allowed depth
-    /// of the tree.
+    /// of the tree. `depth` is the minimum tree depth that would be required in order for that
+    /// tree to contain the position in question.
     MaxDepthExceeded { depth: u8 },
 }
 
@@ -39,7 +40,7 @@ impl<H> NonEmptyFrontier<H> {
         }
     }
 
-    /// Constructs a new frontier from its constituent parts
+    /// Constructs a new frontier from its constituent parts.
     pub fn from_parts(position: Position, leaf: H, ommers: Vec<H>) -> Result<Self, FrontierError> {
         let expected_ommers = position.past_ommer_count();
         if ommers.len() == expected_ommers {
@@ -58,7 +59,7 @@ impl<H> NonEmptyFrontier<H> {
         self.position
     }
 
-    /// Returns the leaf most recently appended to the frontier
+    /// Returns the leaf most recently appended to the frontier.
     pub fn leaf(&self) -> &H {
         &self.leaf
     }
@@ -71,8 +72,8 @@ impl<H> NonEmptyFrontier<H> {
 }
 
 impl<H: Hashable + Clone> NonEmptyFrontier<H> {
-    /// Append a new leaf to the frontier, and recompute recompute ommers by hashing together full
-    /// subtrees until an empty ommer slot is found.
+    /// Append a new leaf to the frontier, and recompute ommers by hashing together full subtrees
+    /// until an empty ommer slot is found.
     pub fn append(&mut self, leaf: H) {
         let prior_position = self.position;
         let prior_leaf = self.leaf.clone();
