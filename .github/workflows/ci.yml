@@ -23,7 +23,7 @@ jobs:
       - uses: actions/checkout@v3
       # Build benchmarks to prevent bitrot
       - name: Build benchmarks
-        run: cargo build --workspace --benches
+        run: cargo build --workspace --benches --all-features
 
   doc-links:
     name: Intra-doc links

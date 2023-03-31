@@ -65,17 +65,16 @@ pub trait Tree<H, C> {
 
     /// Creates a new checkpoint for the current tree state.
     ///
-    /// It is valid to have multiple checkpoints for the same tree state, and
-    /// each `rewind` call will remove a single checkpoint. Returns `false`
-    /// if the checkpoint identifier provided is less than or equal to the
-    /// maximum checkpoint identifier observed.
+    /// It is valid to have multiple checkpoints for the same tree state, and each `rewind` call
+    /// will remove a single checkpoint. Returns `false` if the checkpoint identifier provided is
+    /// less than or equal to the maximum checkpoint identifier observed.
     fn checkpoint(&mut self, id: C) -> bool;
 
-    /// Rewinds the tree state to the previous checkpoint, and then removes
-    /// that checkpoint record. If there are multiple checkpoints at a given
-    /// tree state, the tree state will not be altered until all checkpoints
-    /// at that tree state have been removed using `rewind`. This function
-    /// return false and leave the tree unmodified if no checkpoints exist.
+    /// Rewinds the tree state to the previous checkpoint, and then removes that checkpoint record.
+    ///
+    /// If there are multiple checkpoints at a given tree state, the tree state will not be altered
+    /// until all checkpoints at that tree state have been removed using `rewind`. This function
+    /// will return false and leave the tree unmodified if no checkpoints exist.
     fn rewind(&mut self) -> bool;
 }
 
@@ -288,7 +287,10 @@ pub fn check_operations<H: Hashable + Ord + Clone, C: Clone, T: Tree<H, C>>(
                         tree_checkpoints.push(tree_size);
                     }
                 } else {
-                    prop_assert_eq!(tree_size, 1 << tree.depth());
+                    prop_assert_eq!(
+                        tree_size,
+                        tree.current_position().map_or(0, |p| usize::from(p) + 1)
+                    );
                 }
             }
             CurrentPosition => {
@@ -375,7 +377,7 @@ pub fn compute_root_from_witness<H: Hashable>(value: H, position: Position, path
 // Types and utilities for cross-verification property tests
 //
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct CombinedTree<H, C, I: Tree<H, C>, E: Tree<H, C>> {
     inefficient: I,
     efficient: E,
@@ -498,9 +500,37 @@ pub fn check_root_hashes<T: Tree<String, usize>, F: Fn(usize) -> T>(new_tree: F)
     assert_eq!(t.root(0).unwrap(), "aaaa____________");
 }
 
-pub fn check_witnesses<T: Tree<String, usize> + std::fmt::Debug, F: Fn(usize) -> T>(new_tree: F) {
+/// This test expects a depth-4 tree and verifies that the tree reports itself as full after 2^4
+/// appends.
+pub fn check_append<T: Tree<String, usize> + std::fmt::Debug, F: Fn(usize) -> T>(new_tree: F) {
+    use Retention::*;
+
     let mut tree = new_tree(100);
-    tree.append("a".to_string(), Retention::Marked);
+    assert_eq!(tree.depth(), 4);
+
+    // 16 appends should succeed
+    for i in 0..16 {
+        assert!(tree.append(i.to_string(), Ephemeral));
+        assert_eq!(tree.current_position(), Some(Position::from(i)));
+    }
+
+    // 17th append should fail
+    assert!(!tree.append("16".to_string(), Ephemeral));
+
+    // The following checks a condition on state restoration in the case that an append fails.
+    // We want to ensure that a failed append does not cause a loss of information.
+    let ops = (0..17)
+        .map(|i| Append(i.to_string(), Ephemeral))
+        .collect::<Vec<_>>();
+    let tree = new_tree(100);
+    check_operations(tree, &ops).unwrap();
+}
+
+pub fn check_witnesses<T: Tree<String, usize> + std::fmt::Debug, F: Fn(usize) -> T>(new_tree: F) {
+    use Retention::*;
+
+    let mut tree = new_tree(100);
+    tree.append("a".to_string(), Marked);
     assert_eq!(
         tree.witness(Position::from(0), 0),
         Some(vec![
@@ -511,7 +541,7 @@ pub fn check_witnesses<T: Tree<String, usize> + std::fmt::Debug, F: Fn(usize) ->
         ])
     );
 
-    tree.append("b".to_string(), Retention::Ephemeral);
+    tree.append("b".to_string(), Ephemeral);
     assert_eq!(
         tree.witness(0.into(), 0),
         Some(vec![
@@ -522,7 +552,7 @@ pub fn check_witnesses<T: Tree<String, usize> + std::fmt::Debug, F: Fn(usize) ->
         ])
     );
 
-    tree.append("c".to_string(), Retention::Marked);
+    tree.append("c".to_string(), Marked);
     assert_eq!(
         tree.witness(Position::from(2), 0),
         Some(vec![
@@ -533,7 +563,7 @@ pub fn check_witnesses<T: Tree<String, usize> + std::fmt::Debug, F: Fn(usize) ->
         ])
     );
 
-    tree.append("d".to_string(), Retention::Ephemeral);
+    tree.append("d".to_string(), Ephemeral);
     assert_eq!(
         tree.witness(Position::from(2), 0),
         Some(vec![
@@ -544,7 +574,7 @@ pub fn check_witnesses<T: Tree<String, usize> + std::fmt::Debug, F: Fn(usize) ->
         ])
     );
 
-    tree.append("e".to_string(), Retention::Ephemeral);
+    tree.append("e".to_string(), Ephemeral);
     assert_eq!(
         tree.witness(Position::from(2), 0),
         Some(vec![
@@ -556,12 +586,12 @@ pub fn check_witnesses<T: Tree<String, usize> + std::fmt::Debug, F: Fn(usize) ->
     );
 
     let mut tree = new_tree(100);
-    tree.append("a".to_string(), Retention::Marked);
+    tree.append("a".to_string(), Marked);
     for c in 'b'..'g' {
-        tree.append(c.to_string(), Retention::Ephemeral);
+        tree.append(c.to_string(), Ephemeral);
     }
-    tree.append("g".to_string(), Retention::Marked);
-    tree.append("h".to_string(), Retention::Ephemeral);
+    tree.append("g".to_string(), Marked);
+    tree.append("h".to_string(), Ephemeral);
 
     assert_eq!(
         tree.witness(0.into(), 0),
@@ -574,13 +604,13 @@ pub fn check_witnesses<T: Tree<String, usize> + std::fmt::Debug, F: Fn(usize) ->
     );
 
     let mut tree = new_tree(100);
-    tree.append("a".to_string(), Retention::Marked);
-    tree.append("b".to_string(), Retention::Ephemeral);
-    tree.append("c".to_string(), Retention::Ephemeral);
-    tree.append("d".to_string(), Retention::Marked);
-    tree.append("e".to_string(), Retention::Marked);
-    tree.append("f".to_string(), Retention::Marked);
-    tree.append("g".to_string(), Retention::Ephemeral);
+    tree.append("a".to_string(), Marked);
+    tree.append("b".to_string(), Ephemeral);
+    tree.append("c".to_string(), Ephemeral);
+    tree.append("d".to_string(), Marked);
+    tree.append("e".to_string(), Marked);
+    tree.append("f".to_string(), Marked);
+    tree.append("g".to_string(), Ephemeral);
 
     assert_eq!(
         tree.witness(Position::from(5), 0),
@@ -594,10 +624,10 @@ pub fn check_witnesses<T: Tree<String, usize> + std::fmt::Debug, F: Fn(usize) ->
 
     let mut tree = new_tree(100);
     for c in 'a'..'k' {
-        tree.append(c.to_string(), Retention::Ephemeral);
+        assert!(tree.append(c.to_string(), Ephemeral));
     }
-    tree.append('k'.to_string(), Retention::Marked);
-    tree.append('l'.to_string(), Retention::Ephemeral);
+    assert!(tree.append('k'.to_string(), Marked));
+    assert!(tree.append('l'.to_string(), Ephemeral));
 
     assert_eq!(
         tree.witness(Position::from(10), 0),
@@ -612,18 +642,18 @@ pub fn check_witnesses<T: Tree<String, usize> + std::fmt::Debug, F: Fn(usize) ->
     let mut tree = new_tree(100);
     assert!(tree.append(
         'a'.to_string(),
-        Retention::Checkpoint {
+        Checkpoint {
             id: 1,
             is_marked: true
         }
     ));
     assert!(tree.rewind());
     for c in 'b'..'e' {
-        tree.append(c.to_string(), Retention::Ephemeral);
+        tree.append(c.to_string(), Ephemeral);
     }
-    tree.append("e".to_string(), Retention::Marked);
+    tree.append("e".to_string(), Marked);
     for c in 'f'..'i' {
-        tree.append(c.to_string(), Retention::Ephemeral);
+        tree.append(c.to_string(), Ephemeral);
     }
     assert_eq!(
         tree.witness(0.into(), 0),
@@ -636,20 +666,20 @@ pub fn check_witnesses<T: Tree<String, usize> + std::fmt::Debug, F: Fn(usize) ->
     );
 
     let mut tree = new_tree(100);
-    tree.append('a'.to_string(), Retention::Ephemeral);
-    tree.append('b'.to_string(), Retention::Ephemeral);
-    tree.append('c'.to_string(), Retention::Marked);
-    tree.append('d'.to_string(), Retention::Ephemeral);
-    tree.append('e'.to_string(), Retention::Ephemeral);
-    tree.append('f'.to_string(), Retention::Ephemeral);
+    tree.append('a'.to_string(), Ephemeral);
+    tree.append('b'.to_string(), Ephemeral);
+    tree.append('c'.to_string(), Marked);
+    tree.append('d'.to_string(), Ephemeral);
+    tree.append('e'.to_string(), Ephemeral);
+    tree.append('f'.to_string(), Ephemeral);
     assert!(tree.append(
         'g'.to_string(),
-        Retention::Checkpoint {
+        Checkpoint {
             id: 1,
             is_marked: true
         }
     ));
-    tree.append('h'.to_string(), Retention::Ephemeral);
+    tree.append('h'.to_string(), Ephemeral);
     assert!(tree.rewind());
     assert_eq!(
         tree.witness(Position::from(2), 0),
@@ -662,18 +692,18 @@ pub fn check_witnesses<T: Tree<String, usize> + std::fmt::Debug, F: Fn(usize) ->
     );
 
     let mut tree = new_tree(100);
-    tree.append('a'.to_string(), Retention::Ephemeral);
-    tree.append('b'.to_string(), Retention::Marked);
+    tree.append('a'.to_string(), Ephemeral);
+    tree.append('b'.to_string(), Marked);
     assert_eq!(tree.witness(Position::from(0), 0), None);
 
     let mut tree = new_tree(100);
     for c in 'a'..'m' {
-        tree.append(c.to_string(), Retention::Ephemeral);
+        tree.append(c.to_string(), Ephemeral);
     }
-    tree.append('m'.to_string(), Retention::Marked);
-    tree.append('n'.to_string(), Retention::Marked);
-    tree.append('o'.to_string(), Retention::Ephemeral);
-    tree.append('p'.to_string(), Retention::Ephemeral);
+    tree.append('m'.to_string(), Marked);
+    tree.append('n'.to_string(), Marked);
+    tree.append('o'.to_string(), Ephemeral);
+    tree.append('p'.to_string(), Ephemeral);
 
     assert_eq!(
         tree.witness(Position::from(12), 0),
@@ -686,10 +716,9 @@ pub fn check_witnesses<T: Tree<String, usize> + std::fmt::Debug, F: Fn(usize) ->
     );
 
     let ops = ('a'..='l')
-        .into_iter()
-        .map(|c| Append(c.to_string(), Retention::Marked))
-        .chain(Some(Append('m'.to_string(), Retention::Ephemeral)))
-        .chain(Some(Append('n'.to_string(), Retention::Ephemeral)))
+        .map(|c| Append(c.to_string(), Marked))
+        .chain(Some(Append('m'.to_string(), Ephemeral)))
+        .chain(Some(Append('n'.to_string(), Ephemeral)))
         .chain(Some(Witness(11usize.into(), 0)))
         .collect::<Vec<_>>();
 
@@ -703,6 +732,153 @@ pub fn check_witnesses<T: Tree<String, usize> + std::fmt::Debug, F: Fn(usize) ->
                 "ij".to_string(),
                 "mn__".to_string(),
                 "abcdefgh".to_string()
+            ]
+        ))
+    );
+
+    let ops = vec![
+        Append("a".to_string(), Ephemeral),
+        Append("b".to_string(), Ephemeral),
+        Append("c".to_string(), Ephemeral),
+        Append(
+            "d".to_string(),
+            Checkpoint {
+                id: 1,
+                is_marked: true,
+            },
+        ),
+        Append("e".to_string(), Marked),
+        Operation::Checkpoint(2),
+        Append(
+            "f".to_string(),
+            Checkpoint {
+                id: 3,
+                is_marked: false,
+            },
+        ),
+        Append(
+            "g".to_string(),
+            Checkpoint {
+                id: 4,
+                is_marked: false,
+            },
+        ),
+        Append(
+            "h".to_string(),
+            Checkpoint {
+                id: 5,
+                is_marked: false,
+            },
+        ),
+        Witness(3usize.into(), 5),
+    ];
+    let mut tree = new_tree(100);
+    assert_eq!(
+        Operation::apply_all(&ops, &mut tree),
+        Some((
+            Position::from(3),
+            vec![
+                "c".to_string(),
+                "ab".to_string(),
+                "____".to_string(),
+                "________".to_string()
+            ]
+        ))
+    );
+    let ops = vec![
+        Append("a".to_string(), Ephemeral),
+        Append("a".to_string(), Ephemeral),
+        Append("a".to_string(), Ephemeral),
+        Append(
+            "a".to_string(),
+            Checkpoint {
+                id: 1,
+                is_marked: true,
+            },
+        ),
+        Append("a".to_string(), Ephemeral),
+        Append("a".to_string(), Ephemeral),
+        Append("a".to_string(), Ephemeral),
+        Append(
+            "a".to_string(),
+            Checkpoint {
+                id: 2,
+                is_marked: false,
+            },
+        ),
+        Append("a".to_string(), Ephemeral),
+        Append("a".to_string(), Ephemeral),
+        Witness(Position(3), 1),
+    ];
+    let mut tree = new_tree(100);
+    assert_eq!(
+        Operation::apply_all(&ops, &mut tree),
+        Some((
+            Position::from(3),
+            vec![
+                "a".to_string(),
+                "aa".to_string(),
+                "aaaa".to_string(),
+                "________".to_string()
+            ]
+        ))
+    );
+
+    let ops = vec![
+        Append("a".to_string(), Marked),
+        Append("a".to_string(), Ephemeral),
+        Append("a".to_string(), Ephemeral),
+        Append("a".to_string(), Ephemeral),
+        Append("a".to_string(), Ephemeral),
+        Append("a".to_string(), Ephemeral),
+        Append("a".to_string(), Ephemeral),
+        Operation::Checkpoint(1),
+        Append("a".to_string(), Marked),
+        Operation::Checkpoint(2),
+        Operation::Checkpoint(3),
+        Append(
+            "a".to_string(),
+            Checkpoint {
+                id: 4,
+                is_marked: false,
+            },
+        ),
+        Rewind,
+        Rewind,
+        Witness(Position(7), 2),
+    ];
+    let mut tree = new_tree(100);
+    assert_eq!(Operation::apply_all(&ops, &mut tree), None);
+
+    let ops = vec![
+        Append("a".to_string(), Marked),
+        Append("a".to_string(), Ephemeral),
+        Append(
+            "a".to_string(),
+            Checkpoint {
+                id: 1,
+                is_marked: true,
+            },
+        ),
+        Append(
+            "a".to_string(),
+            Checkpoint {
+                id: 4,
+                is_marked: false,
+            },
+        ),
+        Witness(Position(2), 2),
+    ];
+    let mut tree = new_tree(100);
+    assert_eq!(
+        Operation::apply_all(&ops, &mut tree),
+        Some((
+            Position::from(2),
+            vec![
+                "_".to_string(),
+                "aa".to_string(),
+                "____".to_string(),
+                "________".to_string()
             ]
         ))
     );
@@ -791,15 +967,15 @@ pub fn check_rewind_remove_mark<T: Tree<String, usize>, F: Fn(usize) -> T>(new_t
 
     // use a maximum number of checkpoints of 1
     let mut tree = new_tree(1);
-    tree.append("e".to_string(), Retention::Marked);
-    tree.checkpoint(1);
+    assert!(tree.append("e".to_string(), Retention::Marked));
+    assert!(tree.checkpoint(1));
     assert!(tree.marked_positions().contains(&0usize.into()));
-    tree.append("f".to_string(), Retention::Ephemeral);
+    assert!(tree.append("f".to_string(), Retention::Ephemeral));
     // simulate a spend of `e` at `f`
     assert!(tree.remove_mark(0usize.into()));
     // even though the mark has been staged for removal, it's not gone yet
     assert!(tree.marked_positions().contains(&0usize.into()));
-    tree.checkpoint(2);
+    assert!(tree.checkpoint(2));
     // the newest checkpoint will have caused the oldest to roll off, and
     // so the forgotten node will be unmarked
     assert!(!tree.marked_positions().contains(&0usize.into()));

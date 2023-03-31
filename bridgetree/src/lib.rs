@@ -185,7 +185,7 @@ impl<H> MerkleBridge<H> {
     }
 }
 
-impl<'a, H: Hashable + Ord + Clone + 'a> MerkleBridge<H> {
+impl<'a, H: Hashable + Clone + Ord + 'a> MerkleBridge<H> {
     /// Constructs a new bridge to follow this one. If `mark_current_leaf` is true, the successor
     /// will track the information necessary to create a witness for the leaf most
     /// recently appended to this bridge's frontier.
@@ -363,8 +363,7 @@ impl<C> Checkpoint<C> {
         }
     }
 
-    /// The unique identifier for the checkpoint, which is simply an automatically incrementing
-    /// index over all checkpoints that have ever been created in the history of the tree.
+    /// The unique identifier for the checkpoint.
     pub fn id(&self) -> &C {
         &self.id
     }
@@ -533,7 +532,7 @@ impl<H, C, const DEPTH: u8> BridgeTree<H, C, DEPTH> {
     }
 }
 
-impl<H: Hashable + Ord + Clone, C: Clone + Ord, const DEPTH: u8> BridgeTree<H, C, DEPTH> {
+impl<H: Hashable + Clone + Ord, C: Clone + Ord, const DEPTH: u8> BridgeTree<H, C, DEPTH> {
     /// Construct a new BridgeTree that will start recording changes from the state of
     /// the specified frontier.
     pub fn from_frontier(max_checkpoints: usize, frontier: NonEmptyFrontier<H>, checkpoint_id: C) -> Self {
@@ -1005,7 +1004,7 @@ mod tests {
         Hashable,
     };
 
-    impl<H: Hashable + Ord + Clone, const DEPTH: u8> testing::Tree<H, usize>
+    impl<H: Hashable + Clone + Ord, const DEPTH: u8> testing::Tree<H, usize>
         for BridgeTree<H, usize, DEPTH>
     {
         fn append(&mut self, value: H, retention: Retention<usize>) -> bool {
@@ -1088,7 +1087,7 @@ mod tests {
         max_count: usize,
     ) -> impl Strategy<Value = BridgeTree<G::Value, usize, 8>>
     where
-        G::Value: Hashable + Ord + Clone + Debug + 'static,
+        G::Value: Hashable + Clone + Ord + Debug + 'static,
     {
         proptest::collection::vec(arb_operation(item_gen, 0..max_count), 0..max_count).prop_map(
             |ops| {
@@ -1207,7 +1206,7 @@ mod tests {
     }
 
     // Combined tree tests
-    fn new_combined_tree<H: Hashable + Ord + Clone + Debug>(
+    fn new_combined_tree<H: Hashable + Clone + Ord + Debug>(
         max_checkpoints: usize,
     ) -> CombinedTree<H, usize, CompleteTree<H, usize, 4>, BridgeTree<H, usize, 4>> {
         CombinedTree::new(

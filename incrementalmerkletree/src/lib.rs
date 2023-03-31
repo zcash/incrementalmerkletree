@@ -193,7 +193,7 @@ impl Level {
     // TODO: replace with an instance for `Step<Level>` once `step_trait`
     // is stabilized
     pub fn iter_to(self, other: Level) -> impl Iterator<Item = Self> {
-        (self.0..other.0).into_iter().map(Level)
+        (self.0..other.0).map(Level)
     }
 }
 
