@@ -1,11 +1,15 @@
 //! Common types and utilities used in incremental Merkle tree implementations.
 
 use either::Either;
-use serde::{Deserialize, Serialize};
 use std::cmp::Ordering;
 use std::convert::{TryFrom, TryInto};
 use std::num::TryFromIntError;
 use std::ops::{Add, AddAssign, Range, Sub};
+
+pub mod frontier;
+
+#[cfg(feature = "legacy-api")]
+pub mod witness;
 
 #[cfg(feature = "test-dependencies")]
 pub mod testing;
@@ -43,8 +47,49 @@ impl<C> Retention<C> {
     }
 }
 
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+pub enum Source {
+    /// The sibling to the address can be derived from the incremental frontier
+    /// at the contained ommer index
+    Past(usize),
+    /// The sibling to the address must be obtained from values discovered by
+    /// the addition of more nodes to the tree
+    Future,
+}
+
+#[must_use = "iterators are lazy and do nothing unless consumed"]
+struct WitnessAddrsIter {
+    root_level: Level,
+    current: Address,
+    ommer_count: usize,
+}
+
+impl Iterator for WitnessAddrsIter {
+    type Item = (Address, Source);
+
+    fn next(&mut self) -> Option<(Address, Source)> {
+        if self.current.level() < self.root_level {
+            let current = self.current;
+            let source = if current.is_right_child() {
+                Source::Past(self.ommer_count)
+            } else {
+                Source::Future
+            };
+
+            self.current = current.parent();
+            if matches!(source, Source::Past(_)) {
+                self.ommer_count += 1;
+            }
+
+            Some((current.sibling(), source))
+        } else {
+            None
+        }
+    }
+}
+
 /// A type representing the position of a leaf in a Merkle tree.
-#[derive(Copy, Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Copy, Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 #[repr(transparent)]
 pub struct Position(usize);
 
@@ -73,6 +118,18 @@ impl Position {
     /// aforesaid leaf.
     pub fn is_complete_subtree(&self, root_level: Level) -> bool {
         !(0..(root_level.0)).any(|l| self.0 & (1 << l) == 0)
+    }
+
+    /// Returns an iterator over the addresses of nodes required to create a witness for this
+    /// position, beginning with the sibling of the leaf at this position and ending with the
+    /// sibling of the ancestor of the leaf at this position that is required to compute a root at
+    /// the specified level.
+    pub fn witness_addrs(&self, root_level: Level) -> impl Iterator<Item = (Address, Source)> {
+        WitnessAddrsIter {
+            root_level,
+            current: Address::from(*self),
+            ommer_count: 0,
+        }
     }
 }
 
@@ -128,7 +185,7 @@ impl TryFrom<u64> for Position {
 /// nodes at level `0` are leaves, nodes at level `1` are parents of nodes at
 /// level `0`, and so forth. This type is capable of representing levels in
 /// trees containing up to 2^255 leaves.
-#[derive(Copy, Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Copy, Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 #[repr(transparent)]
 pub struct Level(u8);
 
@@ -165,6 +222,13 @@ impl From<Level> for usize {
     }
 }
 
+impl TryFrom<usize> for Level {
+    type Error = TryFromIntError;
+    fn try_from(sz: usize) -> Result<Self, Self::Error> {
+        <u8>::try_from(sz).map(Self)
+    }
+}
+
 impl Sub<u8> for Level {
     type Output = Self;
     fn sub(self, value: u8) -> Self {
@@ -178,7 +242,7 @@ impl Sub<u8> for Level {
 /// The address of an internal node of the Merkle tree.
 /// When `level == 0`, the index has the same value as the
 /// position.
-#[derive(Copy, Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Copy, Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct Address {
     level: Level,
     index: usize,
@@ -225,11 +289,7 @@ impl Address {
     pub fn sibling(&self) -> Address {
         Address {
             level: self.level,
-            index: if self.index & 0x1 == 0 {
-                self.index + 1
-            } else {
-                self.index - 1
-            },
+            index: self.index ^ 1,
         }
     }
 
@@ -420,7 +480,7 @@ pub trait Hashable: Sized + core::fmt::Debug {
 
 #[cfg(test)]
 pub(crate) mod tests {
-    use super::{Address, Level, Position};
+    use super::{Address, Level, Position, Source};
     use core::ops::Range;
     use either::Either;
 
@@ -459,7 +519,57 @@ pub(crate) mod tests {
     }
 
     #[test]
-    fn current_incomplete() {
+    fn position_witness_addrs() {
+        use Source::*;
+        let path_elem = |l, i, s| (Address::from_parts(Level::from(l), i), s);
+        assert_eq!(
+            vec![path_elem(0, 1, Future), path_elem(1, 1, Future)],
+            Position::from(0)
+                .witness_addrs(Level::from(2))
+                .collect::<Vec<_>>()
+        );
+        assert_eq!(
+            vec![path_elem(0, 3, Future), path_elem(1, 0, Past(0))],
+            Position::from(2)
+                .witness_addrs(Level::from(2))
+                .collect::<Vec<_>>()
+        );
+        assert_eq!(
+            vec![
+                path_elem(0, 2, Past(0)),
+                path_elem(1, 0, Past(1)),
+                path_elem(2, 1, Future)
+            ],
+            Position::from(3)
+                .witness_addrs(Level::from(3))
+                .collect::<Vec<_>>()
+        );
+        assert_eq!(
+            vec![
+                path_elem(0, 5, Future),
+                path_elem(1, 3, Future),
+                path_elem(2, 0, Past(0)),
+                path_elem(3, 1, Future)
+            ],
+            Position::from(4)
+                .witness_addrs(Level::from(4))
+                .collect::<Vec<_>>()
+        );
+        assert_eq!(
+            vec![
+                path_elem(0, 7, Future),
+                path_elem(1, 2, Past(0)),
+                path_elem(2, 0, Past(1)),
+                path_elem(3, 1, Future)
+            ],
+            Position::from(6)
+                .witness_addrs(Level::from(4))
+                .collect::<Vec<_>>()
+        );
+    }
+
+    #[test]
+    fn address_current_incomplete() {
         let addr = |l, i| Address::from_parts(Level(l), i);
         assert_eq!(addr(0, 0), addr(0, 0).current_incomplete());
         assert_eq!(addr(1, 0), addr(0, 1).current_incomplete());
@@ -468,7 +578,7 @@ pub(crate) mod tests {
     }
 
     #[test]
-    fn next_incomplete_parent() {
+    fn address_next_incomplete_parent() {
         let addr = |l, i| Address::from_parts(Level(l), i);
         assert_eq!(addr(1, 0), addr(0, 0).next_incomplete_parent());
         assert_eq!(addr(1, 0), addr(0, 1).next_incomplete_parent());

@@ -30,27 +30,13 @@
 //! reset the state to.
 //!
 //! In this module, the term "ommer" is used as for the sibling of a parent node in a binary tree.
-use serde::{Deserialize, Serialize};
+pub use incrementalmerkletree::{
+    frontier::{Frontier, NonEmptyFrontier},
+    Address, Hashable, Level, Position, Retention, Source,
+};
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
-use std::convert::TryFrom;
 use std::fmt::Debug;
-use std::mem::size_of;
 use std::ops::Range;
-
-pub use incrementalmerkletree::{Address, Hashable, Level, Position, Retention};
-
-/// Validation errors that can occur during reconstruction of a Merkle frontier from
-/// its constituent parts.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub enum FrontierError {
-    /// An error representing that the number of ommers provided in frontier construction does not
-    /// the expected length of the ommers list given the position.
-    PositionMismatch { expected_ommers: usize },
-    /// An error representing that the position and/or list of ommers provided to frontier
-    /// construction would result in a frontier that exceeds the maximum statically allowed depth
-    /// of the tree.
-    MaxDepthExceeded { depth: u8 },
-}
 
 /// Errors that can be discovered during checks that verify the compatibility of adjacent bridges.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -74,284 +60,6 @@ pub enum WitnessingError {
     BridgeAddressInvalid(Address),
 }
 
-#[derive(Copy, Clone, Debug, PartialEq, Eq)]
-enum Source {
-    /// The sibling to the address can be derived from the incremental frontier
-    /// at the contained ommer index
-    Past(usize),
-    /// The sibling to the address must be obtained from values discovered by
-    /// the addition of more nodes to the tree
-    Future,
-}
-
-#[must_use = "iterators are lazy and do nothing unless consumed"]
-struct WitnessAddrsIter {
-    root_level: Level,
-    current: Address,
-    ommer_count: usize,
-}
-
-/// Returns an iterator over the addresses of nodes required to create a witness for this
-/// position, beginning with the sibling of the leaf at this position and ending with the
-/// sibling of the ancestor of the leaf at this position that is required to compute a root at
-/// the specified level.
-fn witness_addrs(position: Position, root_level: Level) -> impl Iterator<Item = (Address, Source)> {
-    WitnessAddrsIter {
-        root_level,
-        current: Address::from(position),
-        ommer_count: 0,
-    }
-}
-
-impl Iterator for WitnessAddrsIter {
-    type Item = (Address, Source);
-
-    fn next(&mut self) -> Option<(Address, Source)> {
-        if self.current.level() < self.root_level {
-            let current = self.current;
-            let source = if current.is_right_child() {
-                Source::Past(self.ommer_count)
-            } else {
-                Source::Future
-            };
-
-            self.current = current.parent();
-            if matches!(source, Source::Past(_)) {
-                self.ommer_count += 1;
-            }
-
-            Some((current.sibling(), source))
-        } else {
-            None
-        }
-    }
-}
-
-/// A [`NonEmptyFrontier`] is a reduced representation of a Merkle tree, containing a single leaf
-/// value, along with the vector of hashes produced by the reduction of previously appended leaf
-/// values that will be required when producing a witness for the current leaf.
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub struct NonEmptyFrontier<H> {
-    position: Position,
-    leaf: H,
-    ommers: Vec<H>,
-}
-
-impl<H> NonEmptyFrontier<H> {
-    /// Constructs a new frontier with the specified value at position 0.
-    pub fn new(leaf: H) -> Self {
-        Self {
-            position: 0.into(),
-            leaf,
-            ommers: vec![],
-        }
-    }
-
-    /// Constructs a new frontier from its constituent parts
-    pub fn from_parts(position: Position, leaf: H, ommers: Vec<H>) -> Result<Self, FrontierError> {
-        let expected_ommers = position.past_ommer_count();
-        if ommers.len() == expected_ommers {
-            Ok(Self {
-                position,
-                leaf,
-                ommers,
-            })
-        } else {
-            Err(FrontierError::PositionMismatch { expected_ommers })
-        }
-    }
-
-    /// Returns the position of the most recently appended leaf.
-    pub fn position(&self) -> Position {
-        self.position
-    }
-
-    /// Returns the leaf most recently appended to the frontier
-    pub fn leaf(&self) -> &H {
-        &self.leaf
-    }
-
-    /// Returns the list of past hashes required to construct a witness for the
-    /// leaf most recently appended to the frontier.
-    pub fn ommers(&self) -> &[H] {
-        &self.ommers
-    }
-}
-
-impl<H: Hashable + Clone> NonEmptyFrontier<H> {
-    /// Append a new leaf to the frontier, and recompute recompute ommers by hashing together full
-    /// subtrees until an empty ommer slot is found.
-    pub fn append(&mut self, leaf: H) {
-        let prior_position = self.position;
-        let prior_leaf = self.leaf.clone();
-        self.position += 1;
-        self.leaf = leaf;
-        if self.position.is_odd() {
-            // if the new position is odd, the current leaf will directly become
-            // an ommer at level 0, and there is no other mutation made to the tree.
-            self.ommers.insert(0, prior_leaf);
-        } else {
-            // if the new position is even, then the current leaf will be hashed
-            // with the first ommer, and so forth up the tree.
-            let new_root_level = self.position.root_level();
-
-            let mut carry = Some((prior_leaf, 0.into()));
-            let mut new_ommers = Vec::with_capacity(self.position.past_ommer_count());
-            for (addr, source) in witness_addrs(prior_position, new_root_level) {
-                if let Source::Past(i) = source {
-                    if let Some((carry_ommer, carry_lvl)) = carry.as_ref() {
-                        if *carry_lvl == addr.level() {
-                            carry = Some((
-                                H::combine(addr.level(), &self.ommers[i], carry_ommer),
-                                addr.level() + 1,
-                            ))
-                        } else {
-                            // insert the carry at the first empty slot; then the rest of the
-                            // ommers will remain unchanged
-                            new_ommers.push(carry_ommer.clone());
-                            new_ommers.push(self.ommers[i].clone());
-                            carry = None;
-                        }
-                    } else {
-                        // when there's no carry, just push on the ommer value
-                        new_ommers.push(self.ommers[i].clone());
-                    }
-                }
-            }
-
-            // we carried value out, so we need to push on one more ommer.
-            if let Some((carry_ommer, _)) = carry {
-                new_ommers.push(carry_ommer);
-            }
-
-            self.ommers = new_ommers;
-        }
-    }
-
-    /// Generate the root of the Merkle tree by hashing against empty subtree roots.
-    pub fn root(&self, root_level: Option<Level>) -> H {
-        let max_level = root_level.unwrap_or_else(|| self.position.root_level());
-        witness_addrs(self.position, max_level)
-            .fold(
-                (self.leaf.clone(), Level::from(0)),
-                |(digest, complete_lvl), (addr, source)| {
-                    // fold up from complete_lvl to addr.level() pairing with empty roots; if
-                    // complete_lvl == addr.level() this is just the complete digest to this point
-                    let digest = complete_lvl
-                        .iter_to(addr.level())
-                        .fold(digest, |d, l| H::combine(l, &d, &H::empty_root(l)));
-
-                    let res_digest = match source {
-                        Source::Past(i) => H::combine(addr.level(), &self.ommers[i], &digest),
-                        Source::Future => {
-                            H::combine(addr.level(), &digest, &H::empty_root(addr.level()))
-                        }
-                    };
-
-                    (res_digest, addr.level() + 1)
-                },
-            )
-            .0
-    }
-
-    /// Constructs a witness for the leaf at the tip of this
-    /// frontier, given a source of node values that complement this frontier.
-    pub fn witness<F>(&self, depth: u8, bridge_value_at: F) -> Result<Vec<H>, WitnessingError>
-    where
-        F: Fn(Address) -> Option<H>,
-    {
-        // construct a complete trailing edge that includes the data from
-        // the following frontier not yet included in the trailing edge.
-        witness_addrs(self.position(), depth.into())
-            .map(|(addr, source)| match source {
-                Source::Past(i) => Ok(self.ommers[i].clone()),
-                Source::Future => {
-                    bridge_value_at(addr).ok_or(WitnessingError::BridgeAddressInvalid(addr))
-                }
-            })
-            .collect::<Result<Vec<_>, _>>()
-    }
-}
-
-/// A possibly-empty Merkle frontier.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct Frontier<H, const DEPTH: u8> {
-    frontier: Option<NonEmptyFrontier<H>>,
-}
-
-impl<H, const DEPTH: u8> TryFrom<NonEmptyFrontier<H>> for Frontier<H, DEPTH> {
-    type Error = FrontierError;
-    fn try_from(f: NonEmptyFrontier<H>) -> Result<Self, FrontierError> {
-        if f.position.root_level() <= Level::from(DEPTH) {
-            Ok(Frontier { frontier: Some(f) })
-        } else {
-            Err(FrontierError::MaxDepthExceeded {
-                depth: f.position.root_level().into(),
-            })
-        }
-    }
-}
-
-impl<H, const DEPTH: u8> Frontier<H, DEPTH> {
-    /// Constructs a new empty frontier.
-    pub fn empty() -> Self {
-        Self { frontier: None }
-    }
-
-    /// Constructs a new frontier from its constituent parts.
-    ///
-    /// Returns `None` if the new frontier would exceed the maximum
-    /// allowed depth or if the list of ommers provided is not consistent
-    /// with the position of the leaf.
-    pub fn from_parts(position: Position, leaf: H, ommers: Vec<H>) -> Result<Self, FrontierError> {
-        NonEmptyFrontier::from_parts(position, leaf, ommers).and_then(Self::try_from)
-    }
-
-    /// Return the wrapped NonEmptyFrontier reference, or None if
-    /// the frontier is empty.
-    pub fn value(&self) -> Option<&NonEmptyFrontier<H>> {
-        self.frontier.as_ref()
-    }
-
-    /// Returns the amount of memory dynamically allocated for ommer
-    /// values within the frontier.
-    pub fn dynamic_memory_usage(&self) -> usize {
-        self.frontier.as_ref().map_or(0, |f| {
-            size_of::<usize>() + (f.ommers.capacity() + 1) * size_of::<H>()
-        })
-    }
-}
-
-impl<H: Hashable + Clone, const DEPTH: u8> Frontier<H, DEPTH> {
-    /// Appends a new value to the frontier at the next available slot.
-    /// Returns true if successful and false if the frontier would exceed
-    /// the maximum allowed depth.
-    pub fn append(&mut self, value: H) -> bool {
-        if let Some(frontier) = self.frontier.as_mut() {
-            if frontier.position().is_complete_subtree(DEPTH.into()) {
-                false
-            } else {
-                frontier.append(value);
-                true
-            }
-        } else {
-            self.frontier = Some(NonEmptyFrontier::new(value));
-            true
-        }
-    }
-
-    /// Obtains the current root of this Merkle frontier by hashing
-    /// against empty nodes up to the maximum height of the pruned
-    /// tree that the frontier represents.
-    pub fn root(&self) -> H {
-        self.frontier
-            .as_ref()
-            .map_or(H::empty_root(DEPTH.into()), |frontier| {
-                frontier.root(Some(DEPTH.into()))
-            })
-    }
-}
-
 /// The information required to "update" witnesses from one state of a Merkle tree to another.
 ///
 /// The witness for a particular leaf of a Merkle tree consists of the siblings of that leaf, plus
@@ -366,7 +74,7 @@ impl<H: Hashable + Clone, const DEPTH: u8> Frontier<H, DEPTH> {
 /// [`MerkleBridge`] values have a semigroup, such that the sum (`fuse`d) value of two successive
 /// bridges, along with a [`NonEmptyFrontier`] with its tip at the prior position of the first bridge
 /// being fused, can be used to produce a witness for the leaf at the tip of the prior frontier.
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct MerkleBridge<H> {
     /// The position of the final leaf in the frontier of the bridge that this bridge is the
     /// successor of, or None if this is the first bridge in a tree.
@@ -582,19 +290,21 @@ impl<'a, H: Hashable + Clone + Ord + 'a> MerkleBridge<H> {
     ) -> Result<Vec<H>, WitnessingError> {
         assert!(Some(prior_frontier.position()) == self.prior_position);
 
-        prior_frontier.witness(depth, |addr| {
-            let r = addr.position_range();
-            if self.frontier.position() < r.start {
-                Some(H::empty_root(addr.level()))
-            } else if r.contains(&self.frontier.position()) {
-                Some(self.frontier.root(Some(addr.level())))
-            } else {
-                // the frontier's position is after the end of the requested
-                // range, so the requested value should exist in a stored
-                // fragment
-                self.ommers.get(&addr).cloned()
-            }
-        })
+        prior_frontier
+            .witness(depth, |addr| {
+                let r = addr.position_range();
+                if self.frontier.position() < r.start {
+                    Some(H::empty_root(addr.level()))
+                } else if r.contains(&self.frontier.position()) {
+                    Some(self.frontier.root(Some(addr.level())))
+                } else {
+                    // the frontier's position is after the end of the requested
+                    // range, so the requested value should exist in a stored
+                    // fragment
+                    self.ommers.get(&addr).cloned()
+                }
+            })
+            .map_err(WitnessingError::BridgeAddressInvalid)
     }
 
     fn retain(&mut self, ommer_addrs: &BTreeSet<Address>) {
@@ -612,7 +322,7 @@ impl<'a, H: Hashable + Clone + Ord + 'a> MerkleBridge<H> {
 /// crosses [`MerkleBridge`] boundaries, and so it is not sufficient to just truncate the list of
 /// bridges; instead, we use [`Checkpoint`] values to be able to rapidly restore the cache to its
 /// previous state.
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Checkpoint<C> {
     /// The unique identifier for this checkpoint.
     id: C,
@@ -712,7 +422,7 @@ impl<C> Checkpoint<C> {
 
 /// A sparse representation of a Merkle tree with linear appending of leaves that contains enough
 /// information to produce a witness for any `mark`ed leaf.
-#[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, PartialEq, Eq)]
 pub struct BridgeTree<H, C, const DEPTH: u8> {
     /// The ordered list of Merkle bridges representing the history
     /// of the tree. There will be one bridge for each saved leaf.
@@ -825,8 +535,12 @@ impl<H, C, const DEPTH: u8> BridgeTree<H, C, DEPTH> {
 impl<H: Hashable + Clone + Ord, C: Clone + Ord, const DEPTH: u8> BridgeTree<H, C, DEPTH> {
     /// Construct a new BridgeTree that will start recording changes from the state of
     /// the specified frontier.
-    pub fn from_frontier(max_checkpoints: usize, frontier: NonEmptyFrontier<H>) -> Self {
-        Self {
+    pub fn from_frontier(
+        max_checkpoints: usize,
+        frontier: NonEmptyFrontier<H>,
+        checkpoint_id: C,
+    ) -> Self {
+        let mut bridge = Self {
             prior_bridges: vec![],
             current_bridge: Some(MerkleBridge::from_parts(
                 None,
@@ -837,7 +551,9 @@ impl<H: Hashable + Clone + Ord, C: Clone + Ord, const DEPTH: u8> BridgeTree<H, C
             saved: BTreeMap::new(),
             checkpoints: VecDeque::new(),
             max_checkpoints,
-        }
+        };
+        bridge.checkpoint(checkpoint_id);
+        bridge
     }
 
     /// Construct a new BridgeTree from its constituent parts, checking for internal
@@ -1229,8 +945,10 @@ impl<H: Hashable + Clone + Ord, C: Clone + Ord, const DEPTH: u8> BridgeTree<H, C
 
                         // Add the elements of the auth path to the set of addresses we should
                         // continue to track and retain information for
-                        for (addr, source) in
-                            witness_addrs(cur_bridge.frontier.position(), Level::from(DEPTH))
+                        for (addr, source) in cur_bridge
+                            .frontier
+                            .position()
+                            .witness_addrs(Level::from(DEPTH))
                         {
                             if source == Source::Future {
                                 ommer_addrs.insert(addr);
@@ -1341,101 +1059,6 @@ mod tests {
         fn rewind(&mut self) -> bool {
             BridgeTree::rewind(self)
         }
-    }
-
-    #[test]
-    fn position_witness_addrs() {
-        use Source::*;
-        let path_elem = |l, i, s| (Address::from_parts(Level::from(l), i), s);
-        assert_eq!(
-            vec![path_elem(0, 1, Future), path_elem(1, 1, Future)],
-            witness_addrs(Position::from(0), Level::from(2)).collect::<Vec<_>>()
-        );
-        assert_eq!(
-            vec![path_elem(0, 3, Future), path_elem(1, 0, Past(0))],
-            witness_addrs(Position::from(2), Level::from(2)).collect::<Vec<_>>()
-        );
-        assert_eq!(
-            vec![
-                path_elem(0, 2, Past(0)),
-                path_elem(1, 0, Past(1)),
-                path_elem(2, 1, Future)
-            ],
-            witness_addrs(Position::from(3), Level::from(3)).collect::<Vec<_>>()
-        );
-        assert_eq!(
-            vec![
-                path_elem(0, 5, Future),
-                path_elem(1, 3, Future),
-                path_elem(2, 0, Past(0)),
-                path_elem(3, 1, Future)
-            ],
-            witness_addrs(Position::from(4), Level::from(4)).collect::<Vec<_>>()
-        );
-        assert_eq!(
-            vec![
-                path_elem(0, 7, Future),
-                path_elem(1, 2, Past(0)),
-                path_elem(2, 0, Past(1)),
-                path_elem(3, 1, Future)
-            ],
-            witness_addrs(Position::from(6), Level::from(4)).collect::<Vec<_>>()
-        );
-    }
-
-    #[test]
-    fn nonempty_frontier_root() {
-        let mut frontier = NonEmptyFrontier::new("a".to_string());
-        assert_eq!(frontier.root(None), "a");
-
-        frontier.append("b".to_string());
-        assert_eq!(frontier.root(None), "ab");
-
-        frontier.append("c".to_string());
-        assert_eq!(frontier.root(None), "abc_");
-    }
-
-    #[test]
-    fn frontier_from_parts() {
-        assert!(super::Frontier::<(), 1>::from_parts(0.into(), (), vec![]).is_ok());
-        assert!(super::Frontier::<(), 1>::from_parts(1.into(), (), vec![()]).is_ok());
-        assert!(super::Frontier::<(), 1>::from_parts(0.into(), (), vec![()]).is_err());
-    }
-
-    #[test]
-    fn frontier_root() {
-        let mut frontier: super::Frontier<String, 4> = super::Frontier::empty();
-        assert_eq!(frontier.root().len(), 16);
-        assert_eq!(frontier.root(), "________________");
-
-        frontier.append("a".to_string());
-        assert_eq!(frontier.root(), "a_______________");
-
-        frontier.append("b".to_string());
-        assert_eq!(frontier.root(), "ab______________");
-
-        frontier.append("c".to_string());
-        assert_eq!(frontier.root(), "abc_____________");
-    }
-
-    #[test]
-    fn frontier_witness() {
-        let mut frontier = NonEmptyFrontier::<String>::new("a".to_string());
-        for c in 'b'..'h' {
-            frontier.append(c.to_string());
-        }
-        let bridge_value_at = |addr: Address| match <u8>::from(addr.level()) {
-            0 => Some("h".to_string()),
-            3 => Some("xxxxxxxx".to_string()),
-            _ => None,
-        };
-
-        assert_eq!(
-            Ok(["h", "ef", "abcd", "xxxxxxxx"]
-                .map(|v| v.to_string())
-                .to_vec()),
-            frontier.witness(4, bridge_value_at)
-        );
     }
 
     #[test]

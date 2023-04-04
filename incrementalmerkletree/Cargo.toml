@@ -15,11 +15,11 @@ rust-version = "1.60"
 
 [dependencies]
 either = "1.8"
-serde = { version = "1", features = ["derive"] }
 proptest = { version = "1.0.0", optional = true }
 
 [dev-dependencies]
 proptest = "1.0.0"
 
 [features]
+legacy-api = []
 test-dependencies = ["proptest"]
