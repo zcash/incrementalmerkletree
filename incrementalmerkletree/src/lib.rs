@@ -464,6 +464,53 @@ impl<'a> From<&'a Address> for Option<Position> {
     }
 }
 
+/// A path from a position in a particular commitment tree to the root of that tree.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct MerklePath<H, const DEPTH: u8> {
+    path_elems: Vec<H>,
+    position: Position,
+}
+
+impl<H, const DEPTH: u8> MerklePath<H, DEPTH> {
+    /// Constructs a Merkle path directly from a path and position.
+    #[allow(clippy::result_unit_err)]
+    pub fn from_parts(path_elems: Vec<H>, position: Position) -> Result<Self, ()> {
+        if path_elems.len() == usize::from(DEPTH) {
+            Ok(MerklePath {
+                path_elems,
+                position,
+            })
+        } else {
+            Err(())
+        }
+    }
+
+    pub fn path_elems(&self) -> &[H] {
+        &self.path_elems
+    }
+
+    pub fn position(&self) -> Position {
+        self.position
+    }
+}
+
+impl<H: Hashable, const DEPTH: u8> MerklePath<H, DEPTH> {
+    /// Returns the root of the tree corresponding to this path applied to `leaf`.
+    pub fn root(&self, leaf: H) -> H {
+        self.path_elems
+            .iter()
+            .enumerate()
+            .fold(leaf, |root, (i, h)| {
+                let level = Level(i as u8);
+                if self.position.0 >> i & 0x1 == 0 {
+                    H::combine(level, &root, h)
+                } else {
+                    H::combine(level, h, &root)
+                }
+            })
+    }
+}
+
 /// A trait describing the operations that make a type suitable for use as
 /// a leaf or node value in a merkle tree.
 pub trait Hashable: Sized + core::fmt::Debug {
@@ -480,6 +527,8 @@ pub trait Hashable: Sized + core::fmt::Debug {
 
 #[cfg(test)]
 pub(crate) mod tests {
+    use crate::MerklePath;
+
     use super::{Address, Level, Position, Source};
     use core::ops::Range;
     use either::Either;
@@ -662,5 +711,24 @@ pub(crate) mod tests {
             Address::from_parts(Level(3), 4).context(Level(5)),
             Either::Left(Address::from_parts(Level(5), 1))
         );
+    }
+
+    #[test]
+    fn merkle_path_root() {
+        let path: MerklePath<String, 3> = MerklePath::from_parts(
+            vec!["a".to_string(), "cd".to_string(), "efgh".to_string()],
+            Position(1),
+        )
+        .unwrap();
+
+        assert_eq!(path.root("b".to_string()), "abcdefgh".to_string());
+
+        let path: MerklePath<String, 3> = MerklePath::from_parts(
+            vec!["d".to_string(), "ab".to_string(), "efgh".to_string()],
+            Position(2),
+        )
+        .unwrap();
+
+        assert_eq!(path.root("c".to_string()), "abcdefgh".to_string());
     }
 }
