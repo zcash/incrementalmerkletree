@@ -7,7 +7,7 @@ use either::Either;
 use std::collections::{BTreeMap, BTreeSet};
 use std::rc::Rc;
 
-use incrementalmerkletree::{Address, Hashable, Level, Position, Retention};
+use incrementalmerkletree::{Address, Hashable, Level, MerklePath, Position, Retention};
 
 bitflags! {
     pub struct RetentionFlags: u8 {
@@ -2078,7 +2078,7 @@ impl<
         &self,
         position: Position,
         checkpoint_depth: usize,
-    ) -> Result<Vec<H>, QueryError> {
+    ) -> Result<MerklePath<H, DEPTH>, QueryError> {
         let max_leaf_position = self
             .max_leaf_position(checkpoint_depth)
             .and_then(|v| v.ok_or_else(|| QueryError::TreeIncomplete(vec![Self::root_addr()])))?;
@@ -2105,7 +2105,7 @@ impl<
                 cur_addr = cur_addr.parent();
             }
 
-            Ok(witness)
+            Ok(MerklePath::from_parts(witness, position).unwrap())
         }
     }
 
@@ -2652,7 +2652,9 @@ mod tests {
         }
 
         fn witness(&self, position: Position, checkpoint_depth: usize) -> Option<Vec<H>> {
-            ShardTree::witness(self, position, checkpoint_depth).ok()
+            ShardTree::witness(self, position, checkpoint_depth)
+                .ok()
+                .map(|p| p.path_elems().to_vec())
         }
 
         fn remove_mark(&mut self, position: Position) -> bool {
