@@ -18,6 +18,7 @@ use crate::{
 /// use incrementalmerkletree::{
 ///     frontier::{CommitmentTree, testing::TestNode},
 ///     witness::IncrementalWitness,
+///     Position
 /// };
 ///
 /// let mut tree = CommitmentTree::<TestNode, 8>::empty();
@@ -25,7 +26,7 @@ use crate::{
 /// tree.append(TestNode(0));
 /// tree.append(TestNode(1));
 /// let mut witness = IncrementalWitness::from_tree(tree.clone());
-/// assert_eq!(witness.position(), 1);
+/// assert_eq!(witness.position(), Position::from(1));
 /// assert_eq!(tree.root(), witness.root());
 ///
 /// let next = TestNode(2);

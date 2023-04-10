@@ -502,7 +502,7 @@ impl<H: Hashable, const DEPTH: u8> MerklePath<H, DEPTH> {
             .enumerate()
             .fold(leaf, |root, (i, h)| {
                 let level = Level(i as u8);
-                if self.position.0 >> i & 0x1 == 0 {
+                if (self.position.0 >> i) & 0x1 == 0 {
                     H::combine(level, &root, h)
                 } else {
                     H::combine(level, h, &root)
