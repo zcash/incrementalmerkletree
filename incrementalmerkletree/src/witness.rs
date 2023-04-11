@@ -3,56 +3,8 @@ use std::iter::repeat;
 
 use crate::{
     frontier::{CommitmentTree, PathFiller},
-    Hashable, Level,
+    Hashable, Level, MerklePath, Position,
 };
-
-/// A path from a position in a particular commitment tree to the root of that tree.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct MerklePath<H, const DEPTH: u8> {
-    auth_path: Vec<(H, bool)>,
-    position: u64,
-}
-
-impl<H, const DEPTH: u8> MerklePath<H, DEPTH> {
-    /// Constructs a Merkle path directly from a path and position.
-    #[allow(clippy::result_unit_err)]
-    pub fn from_parts(auth_path: Vec<(H, bool)>, position: u64) -> Result<Self, ()> {
-        if auth_path.len() == usize::from(DEPTH) {
-            Ok(MerklePath {
-                auth_path,
-                position,
-            })
-        } else {
-            Err(())
-        }
-    }
-
-    pub fn auth_path(&self) -> &[(H, bool)] {
-        &self.auth_path
-    }
-
-    pub fn position(&self) -> u64 {
-        self.position
-    }
-}
-
-impl<H: Hashable, const DEPTH: u8> MerklePath<H, DEPTH> {
-    /// Returns the root of the tree corresponding to this path applied to `leaf`.
-    pub fn root(&self, leaf: H) -> H {
-        self.auth_path
-            .iter()
-            .enumerate()
-            .fold(leaf, |root, (i, (p, leaf_is_on_right))| {
-                let level = u8::try_from(i)
-                    .expect("Parents list length may not exceed what is representable by an u8")
-                    .into();
-                match leaf_is_on_right {
-                    false => H::combine(level, &root, p),
-                    true => H::combine(level, p, &root),
-                }
-            })
-    }
-}
 
 /// An updatable witness to a path from a position in a particular [`CommitmentTree`].
 ///
@@ -66,6 +18,7 @@ impl<H: Hashable, const DEPTH: u8> MerklePath<H, DEPTH> {
 /// use incrementalmerkletree::{
 ///     frontier::{CommitmentTree, testing::TestNode},
 ///     witness::IncrementalWitness,
+///     Position
 /// };
 ///
 /// let mut tree = CommitmentTree::<TestNode, 8>::empty();
@@ -73,7 +26,7 @@ impl<H: Hashable, const DEPTH: u8> MerklePath<H, DEPTH> {
 /// tree.append(TestNode(0));
 /// tree.append(TestNode(1));
 /// let mut witness = IncrementalWitness::from_tree(tree.clone());
-/// assert_eq!(witness.position(), 1);
+/// assert_eq!(witness.position(), Position::from(1));
 /// assert_eq!(tree.root(), witness.root());
 ///
 /// let next = TestNode(2);
@@ -131,8 +84,8 @@ impl<H, const DEPTH: u8> IncrementalWitness<H, DEPTH> {
     }
 
     /// Returns the position of the witnessed leaf node in the commitment tree.
-    pub fn position(&self) -> usize {
-        self.tree.size() - 1
+    pub fn position(&self) -> Position {
+        Position::from(self.tree.size() - 1)
     }
 
     /// Finds the next "depth" of an unfilled subtree.
@@ -233,9 +186,9 @@ impl<H: Hashable + Clone, const DEPTH: u8> IncrementalWitness<H, DEPTH> {
 
         if let Some(node) = &self.tree.left {
             if self.tree.right.is_some() {
-                auth_path.push((node.clone(), true));
+                auth_path.push(node.clone());
             } else {
-                auth_path.push((filler.next(0.into()), false));
+                auth_path.push(filler.next(0.into()));
             }
         } else {
             // Can't create an authentication path for the beginning of the tree
@@ -251,13 +204,13 @@ impl<H: Hashable + Clone, const DEPTH: u8> IncrementalWitness<H, DEPTH> {
             .enumerate()
         {
             auth_path.push(match p {
-                Some(node) => (node.clone(), true),
-                None => (filler.next(Level::from((i + 1) as u8)), false),
+                Some(node) => node.clone(),
+                None => filler.next(Level::from((i + 1) as u8)),
             });
         }
 
         assert_eq!(auth_path.len(), usize::from(depth));
 
-        MerklePath::from_parts(auth_path, self.position() as u64).ok()
+        MerklePath::from_parts(auth_path, self.position()).ok()
     }
 }
