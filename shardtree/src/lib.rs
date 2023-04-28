@@ -1476,6 +1476,29 @@ pub struct ShardTree<H, C: Ord, S: ShardStore<H>, const DEPTH: u8, const SHARD_H
     _hash_type: PhantomData<H>,
 }
 
+impl<H, S: ShardStore<H>> ShardStore<H> for &mut S {
+    type Error = S::Error;
+    fn get_shard(&self, shard_root: Address) -> Option<&LocatedPrunableTree<H>> {
+        S::get_shard(*self, shard_root)
+    }
+
+    fn last_shard(&self) -> Option<&LocatedPrunableTree<H>> {
+        S::last_shard(*self)
+    }
+
+    fn put_shard(&mut self, subtree: LocatedPrunableTree<H>) -> Result<(), Self::Error> {
+        S::put_shard(*self, subtree)
+    }
+
+    fn get_shard_roots(&self) -> Vec<Address> {
+        S::get_shard_roots(*self)
+    }
+
+    fn truncate(&mut self, from: Address) -> Result<(), Self::Error> {
+        S::truncate(*self, from)
+    }
+}
+
 impl<
         H: Hashable + Clone + PartialEq,
         C: Clone + Ord,
