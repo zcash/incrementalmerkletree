@@ -477,9 +477,9 @@ impl<H: Hashable + Clone, const DEPTH: u8> CommitmentTree<H, DEPTH> {
             .iter()
             .chain(repeat(&None))
             .take((depth - 1).into())
-            .enumerate()
-            .fold(leaf_root, |root, (i, p)| {
-                let level = Level::from(i as u8 + 1);
+            .zip(0u8..)
+            .fold(leaf_root, |root, (p, i)| {
+                let level = Level::from(i + 1);
                 match p {
                     Some(node) => H::combine(level, node, &root),
                     None => H::combine(level, &root, &filler.next(level)),

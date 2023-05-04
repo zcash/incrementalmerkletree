@@ -499,13 +499,12 @@ impl<H: Hashable, const DEPTH: u8> MerklePath<H, DEPTH> {
     pub fn root(&self, leaf: H) -> H {
         self.path_elems
             .iter()
-            .enumerate()
-            .fold(leaf, |root, (i, h)| {
-                let level = Level(i as u8);
+            .zip(0u8..)
+            .fold(leaf, |root, (h, i)| {
                 if (self.position.0 >> i) & 0x1 == 0 {
-                    H::combine(level, &root, h)
+                    H::combine(i.into(), &root, h)
                 } else {
-                    H::combine(level, h, &root)
+                    H::combine(i.into(), h, &root)
                 }
             })
     }
