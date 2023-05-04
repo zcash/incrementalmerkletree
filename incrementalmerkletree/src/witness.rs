@@ -195,17 +195,17 @@ impl<H: Hashable + Clone, const DEPTH: u8> IncrementalWitness<H, DEPTH> {
             return None;
         }
 
-        for (i, p) in self
+        for (p, i) in self
             .tree
             .parents
             .iter()
             .chain(repeat(&None))
             .take((depth - 1).into())
-            .enumerate()
+            .zip(0u8..)
         {
             auth_path.push(match p {
                 Some(node) => node.clone(),
-                None => filler.next(Level::from((i + 1) as u8)),
+                None => filler.next(Level::from(i + 1)),
             });
         }
 
