@@ -1691,8 +1691,9 @@ impl<
         const SHARD_HEIGHT: u8,
     > ShardTree<H, C, S, DEPTH, SHARD_HEIGHT>
 {
-    /// Creates a new empty tree.
-    pub fn new(
+    /// Creates a new empty tree and establishes a checkpoint for the empty tree at the given
+    /// checkpoint identifier.
+    pub fn empty(
         store: S,
         max_checkpoints: usize,
         initial_checkpoint_id: C,
@@ -1707,6 +1708,19 @@ impl<
             .store
             .add_checkpoint(initial_checkpoint_id, Checkpoint::tree_empty())?;
         Ok(result)
+    }
+
+    /// Constructs a wrapper around the provided shard store without initialization.
+    pub fn load(
+        store: S,
+        max_checkpoints: usize,
+    ) -> Self {
+        Self {
+            store,
+            max_checkpoints,
+            _hash_type: PhantomData,
+            _checkpoint_id_type: PhantomData,
+        }
     }
 
     /// Returns the root address of the tree.
@@ -2752,7 +2766,7 @@ mod tests {
     #[test]
     fn shardtree_insertion() {
         let mut tree: ShardTree<String, usize, MemoryShardStore<String, usize>, 4, 3> =
-            ShardTree::new(MemoryShardStore::empty(), 100, 0).unwrap();
+            ShardTree::empty(MemoryShardStore::empty(), 100, 0).unwrap();
         assert_matches!(
             tree.batch_insert(
                 Position::from(1),
@@ -2900,7 +2914,7 @@ mod tests {
     #[test]
     fn append() {
         check_append(|m| {
-            ShardTree::<String, usize, MemoryShardStore<String, usize>, 4, 3>::new(
+            ShardTree::<String, usize, MemoryShardStore<String, usize>, 4, 3>::empty(
                 MemoryShardStore::empty(),
                 m,
                 0,
@@ -2912,7 +2926,7 @@ mod tests {
     #[test]
     fn root_hashes() {
         check_root_hashes(|m| {
-            ShardTree::<String, usize, MemoryShardStore<String, usize>, 4, 3>::new(
+            ShardTree::<String, usize, MemoryShardStore<String, usize>, 4, 3>::empty(
                 MemoryShardStore::empty(),
                 m,
                 0,
@@ -2924,7 +2938,7 @@ mod tests {
     #[test]
     fn witnesses() {
         check_witnesses(|m| {
-            ShardTree::<String, usize, MemoryShardStore<String, usize>, 4, 3>::new(
+            ShardTree::<String, usize, MemoryShardStore<String, usize>, 4, 3>::empty(
                 MemoryShardStore::empty(),
                 m,
                 0,
@@ -2936,7 +2950,7 @@ mod tests {
     #[test]
     fn checkpoint_rewind() {
         check_checkpoint_rewind(|m| {
-            ShardTree::<String, usize, MemoryShardStore<String, usize>, 4, 3>::new(
+            ShardTree::<String, usize, MemoryShardStore<String, usize>, 4, 3>::empty(
                 MemoryShardStore::empty(),
                 m,
                 0,
@@ -2948,7 +2962,7 @@ mod tests {
     #[test]
     fn rewind_remove_mark() {
         check_rewind_remove_mark(|m| {
-            ShardTree::<String, usize, MemoryShardStore<String, usize>, 4, 3>::new(
+            ShardTree::<String, usize, MemoryShardStore<String, usize>, 4, 3>::empty(
                 MemoryShardStore::empty(),
                 m,
                 0,
@@ -2969,7 +2983,7 @@ mod tests {
     > {
         CombinedTree::new(
             CompleteTree::new(max_checkpoints, 0),
-            ShardTree::new(MemoryShardStore::empty(), max_checkpoints, 0).unwrap(),
+            ShardTree::empty(MemoryShardStore::empty(), max_checkpoints, 0).unwrap(),
         )
     }
 
