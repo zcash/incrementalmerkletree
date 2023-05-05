@@ -1,6 +1,6 @@
 use bitflags::bitflags;
 use core::convert::{Infallible, TryFrom};
-use core::fmt::Debug;
+use core::fmt::{self, Debug, Display};
 use core::marker::PhantomData;
 use core::ops::{Deref, Range};
 use either::Either;
@@ -641,10 +641,10 @@ pub struct BatchInsertionResult<H, C: Ord, I: Iterator<Item = (H, Retention<C>)>
 pub enum InsertionError<S> {
     /// The caller attempted to insert a subtree into a tree that does not contain
     /// the subtree's root address.
-    NotContained,
+    NotContained(Address),
     /// The start of the range of positions provided for insertion is not included
     /// in the range of positions within this subtree.
-    OutOfRange(Range<Position>),
+    OutOfRange(Position, Range<Position>),
     /// An existing root hash conflicts with the root hash of a node being inserted.
     Conflict(Address),
     /// An out-of-order checkpoint was detected
@@ -655,6 +655,37 @@ pub enum InsertionError<S> {
     TreeFull,
     /// An error was produced by the underlying [`ShardStore`]
     Storage(S),
+}
+
+impl<S: Display> fmt::Display for InsertionError<S> {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        match &self {
+            InsertionError::NotContained(addr) => {
+                write!(f, "Tree does not contain a root at address {:?}", addr)
+            }
+            InsertionError::OutOfRange(p, r) => {
+                write!(
+                    f,
+                    "Attempted insertion point {:?} is not in range {:?}",
+                    p, r
+                )
+            }
+            InsertionError::Conflict(addr) => write!(
+                f,
+                "Inserted root conflicts with existing root at address {:?}",
+                addr
+            ),
+            InsertionError::CheckpointOutOfOrder => {
+                write!(f, "Cannot append out-of-order checkpoint identifier.")
+            }
+            InsertionError::TreeFull => write!(f, "Note commitment tree is full."),
+            InsertionError::Storage(e) => write!(
+                f,
+                "An error occurred persisting tree data to storage: {}",
+                e
+            ),
+        }
+    }
 }
 
 /// Errors that may be returned in the process of querying a [`ShardTree`]
@@ -1005,7 +1036,7 @@ impl<H: Hashable + Clone + PartialEq> LocatedPrunableTree<H> {
                 )
             })
         } else {
-            Err(InsertionError::NotContained)
+            Err(InsertionError::NotContained(subtree.root_addr))
         }
     }
 
@@ -1288,7 +1319,7 @@ impl<H: Hashable + Clone + PartialEq> LocatedPrunableTree<H> {
                 })
                 .transpose()
         } else {
-            Err(InsertionError::OutOfRange(subtree_range))
+            Err(InsertionError::OutOfRange(start, subtree_range))
         }
     }
 
@@ -1711,10 +1742,7 @@ impl<
     }
 
     /// Constructs a wrapper around the provided shard store without initialization.
-    pub fn load(
-        store: S,
-        max_checkpoints: usize,
-    ) -> Self {
+    pub fn load(store: S, max_checkpoints: usize) -> Self {
         Self {
             store,
             max_checkpoints,
@@ -1822,7 +1850,7 @@ impl<
                     let addr = subtree.root_addr;
 
                     if addr.index() + 1 >= 0x1 << (SHARD_HEIGHT - 1) {
-                        return Err(InsertionError::OutOfRange(addr.position_range()));
+                        return Err(InsertionError::TreeFull);
                     } else {
                         LocatedTree::empty(addr.next_at_level()).append(value, retention)?
                     }
