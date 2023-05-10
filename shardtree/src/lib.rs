@@ -1678,7 +1678,7 @@ impl<H, C: Ord> ShardStore<H, C> for MemoryShardStore<H, C> {
             return Ok(true);
         }
 
-        return Ok(false);
+        Ok(false)
     }
 
     fn remove_checkpoint(&mut self, checkpoint_id: &C) -> Result<(), Self::Error> {
@@ -2349,6 +2349,7 @@ impl<
         position: Position,
         as_of_checkpoint: &C,
     ) -> Result<bool, S::Error> {
+        #[allow(clippy::blocks_in_if_conditions)]
         if self.get_marked_leaf(position).is_some() {
             if self
                 .store
