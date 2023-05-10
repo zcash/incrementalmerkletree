@@ -18,6 +18,22 @@ and this project adheres to Rust's notion of
   the `legacy-api` feature flag related to constructing witnesses for leaves
   of a Merkle tree.
 
+### Changed
+- `Position` has been made isomorphic to `u64` via introduction of `From`
+  implementations between these types.
+- `Address::index` now returns `u64` instead of `usize`
+- The `expected_ommers` field of `FrontierError::PositionMismatch` now
+  has type `u8` instead of `usize`.
+- `Address::context` now also uses `u64` instead of `usize` for when it returns 
+  a range of index values.
+
+### Removed
+- The `From<usize>` impl for `Position` has been removed, as has 
+  `From<Position> for usize`. In addition, `Add` and `Sub` impls
+  that previously allowed numeric operations between `usize` and
+  `Position` values have been removed in favor of similar operations
+  that instead allow computing with `u64`.
+
 ## [0.3.1] - 2023-02-28
 
 ### Fixed

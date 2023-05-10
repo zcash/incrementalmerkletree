@@ -4,6 +4,8 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use crate::{testing::Tree, Hashable, Level, Position, Retention};
 
+const MAX_COMPLETE_SIZE_ERROR: &str = "Positions of a `CompleteTree` must fit into the platform word size, because larger complete trees are not representable.";
+
 pub(crate) fn root<H: Hashable + Clone>(leaves: &[H], depth: u8) -> H {
     let empty_leaf = H::empty_leaf();
     let mut leaves = leaves
@@ -129,7 +131,9 @@ impl<H: Hashable, C: Clone + Ord + core::fmt::Debug, const DEPTH: u8> CompleteTr
         if self.leaves.is_empty() {
             None
         } else {
-            Some((self.leaves.len() - 1).into())
+            // this unwrap is safe because nobody is ever going to create a complete
+            // tree with more than 2^64 leaves
+            Some((self.leaves.len() - 1).try_into().unwrap())
         }
     }
 
@@ -158,7 +162,10 @@ impl<H: Hashable, C: Clone + Ord + core::fmt::Debug, const DEPTH: u8> CompleteTr
     fn checkpoint(&mut self, id: C, pos: Option<Position>) {
         self.checkpoints.insert(
             id,
-            Checkpoint::at_length(pos.map_or_else(|| 0, |p| usize::from(p) + 1)),
+            Checkpoint::at_length(pos.map_or_else(
+                || 0,
+                |p| usize::try_from(p).expect(MAX_COMPLETE_SIZE_ERROR) + 1,
+            )),
         );
         if self.checkpoints.len() > self.max_checkpoints {
             self.drop_oldest_checkpoint();
@@ -226,7 +233,7 @@ impl<H: Hashable + PartialEq + Clone, C: Ord + Clone + core::fmt::Debug, const D
     fn get_marked_leaf(&self, position: Position) -> Option<&H> {
         if self.marks.contains(&position) {
             self.leaves
-                .get(usize::from(position))
+                .get(usize::try_from(position).expect(MAX_COMPLETE_SIZE_ERROR))
                 .and_then(|opt: &Option<H>| opt.as_ref())
         } else {
             None
@@ -254,7 +261,7 @@ impl<H: Hashable + PartialEq + Clone, C: Ord + Clone + core::fmt::Debug, const D
             } else {
                 let mut path = vec![];
 
-                let mut leaf_idx: usize = position.into();
+                let mut leaf_idx: usize = position.try_into().expect(MAX_COMPLETE_SIZE_ERROR);
                 for bit in 0..DEPTH {
                     leaf_idx ^= 1 << bit;
                     path.push(if leaf_idx < leaves_len {

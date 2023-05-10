@@ -147,11 +147,11 @@ pub fn append_str<C>(x: &str, retention: Retention<C>) -> Operation<String, C> {
     Operation::Append(x.to_string(), retention)
 }
 
-pub fn unmark<H, C>(pos: usize) -> Operation<H, C> {
+pub fn unmark<H, C>(pos: u64) -> Operation<H, C> {
     Operation::Unmark(Position::from(pos))
 }
 
-pub fn witness<H, C>(pos: usize, depth: usize) -> Operation<H, C> {
+pub fn witness<H, C>(pos: u64, depth: usize) -> Operation<H, C> {
     Operation::Witness(Position::from(pos), depth)
 }
 
@@ -218,7 +218,7 @@ pub fn arb_retention() -> impl Strategy<Value = Retention<()>> {
 
 pub fn arb_operation<G: Strategy + Clone>(
     item_gen: G,
-    pos_gen: impl Strategy<Value = usize> + Clone,
+    pos_gen: impl Strategy<Value = Position> + Clone,
 ) -> impl Strategy<Value = Operation<G::Value, ()>>
 where
     G::Value: Clone + 'static,
@@ -230,17 +230,11 @@ where
             Just(Operation::MarkedPositions),
         ],
         Just(Operation::GarbageCollect),
-        pos_gen
-            .clone()
-            .prop_map(|i| Operation::MarkedLeaf(Position::from(i))),
-        pos_gen
-            .clone()
-            .prop_map(|i| Operation::Unmark(Position::from(i))),
+        pos_gen.clone().prop_map(Operation::MarkedLeaf),
+        pos_gen.clone().prop_map(Operation::Unmark),
         Just(Operation::Checkpoint(())),
         Just(Operation::Rewind),
-        pos_gen
-            .prop_flat_map(|i| (0usize..10)
-                .prop_map(move |depth| Operation::Witness(Position::from(i), depth))),
+        pos_gen.prop_flat_map(|i| (0usize..10).prop_map(move |depth| Operation::Witness(i, depth))),
     ]
 }
 
@@ -289,19 +283,20 @@ pub fn check_operations<H: Hashable + Ord + Clone, C: Clone, T: Tree<H, C>>(
                 } else {
                     prop_assert_eq!(
                         tree_size,
-                        tree.current_position().map_or(0, |p| usize::from(p) + 1)
+                        tree.current_position()
+                            .map_or(0, |p| usize::try_from(p).unwrap() + 1)
                     );
                 }
             }
             CurrentPosition => {
                 if let Some(pos) = tree.current_position() {
                     prop_assert!(tree_size > 0);
-                    prop_assert_eq!(tree_size - 1, pos.into());
+                    prop_assert_eq!(tree_size - 1, pos.try_into().unwrap());
                 }
             }
             MarkedLeaf(position) => {
                 if tree.get_marked_leaf(*position).is_some() {
-                    prop_assert!(<usize>::from(*position) < tree_size);
+                    prop_assert!(<usize>::try_from(*position).unwrap() < tree_size);
                 }
             }
             Unmark(position) => {
@@ -322,7 +317,7 @@ pub fn check_operations<H: Hashable + Ord + Clone, C: Clone, T: Tree<H, C>>(
             }
             Witness(position, depth) => {
                 if let Some(path) = tree.witness(*position, *depth) {
-                    let value: H = tree_values[<usize>::from(*position)].clone();
+                    let value: H = tree_values[<usize>::try_from(*position).unwrap()].clone();
                     let tree_root = tree.root(*depth);
 
                     if tree_checkpoints.len() >= *depth {
@@ -361,7 +356,7 @@ pub fn compute_root_from_witness<H: Hashable>(value: H, position: Position, path
     for (i, v) in path
         .iter()
         .enumerate()
-        .map(|(i, v)| (((<usize>::from(position) >> i) & 1) == 1, v))
+        .map(|(i, v)| (((<u64>::from(position) >> i) & 1) == 1, v))
     {
         if i {
             cur = H::combine(lvl, v, &cur);
@@ -719,7 +714,7 @@ pub fn check_witnesses<T: Tree<String, usize> + std::fmt::Debug, F: Fn(usize) ->
         .map(|c| Append(c.to_string(), Marked))
         .chain(Some(Append('m'.to_string(), Ephemeral)))
         .chain(Some(Append('n'.to_string(), Ephemeral)))
-        .chain(Some(Witness(11usize.into(), 0)))
+        .chain(Some(Witness(11u64.into(), 0)))
         .collect::<Vec<_>>();
 
     let mut tree = new_tree(100);
@@ -770,7 +765,7 @@ pub fn check_witnesses<T: Tree<String, usize> + std::fmt::Debug, F: Fn(usize) ->
                 is_marked: false,
             },
         ),
-        Witness(3usize.into(), 5),
+        Witness(3u64.into(), 5),
     ];
     let mut tree = new_tree(100);
     assert_eq!(
@@ -963,23 +958,23 @@ pub fn check_rewind_remove_mark<T: Tree<String, usize>, F: Fn(usize) -> T>(new_t
     tree.append("e".to_string(), Retention::Marked);
     tree.checkpoint(1);
     assert!(tree.rewind());
-    assert!(tree.remove_mark(0usize.into()));
+    assert!(tree.remove_mark(0u64.into()));
 
     // use a maximum number of checkpoints of 1
     let mut tree = new_tree(1);
     assert!(tree.append("e".to_string(), Retention::Marked));
     assert!(tree.checkpoint(1));
-    assert!(tree.marked_positions().contains(&0usize.into()));
+    assert!(tree.marked_positions().contains(&0u64.into()));
     assert!(tree.append("f".to_string(), Retention::Ephemeral));
     // simulate a spend of `e` at `f`
-    assert!(tree.remove_mark(0usize.into()));
+    assert!(tree.remove_mark(0u64.into()));
     // even though the mark has been staged for removal, it's not gone yet
-    assert!(tree.marked_positions().contains(&0usize.into()));
+    assert!(tree.marked_positions().contains(&0u64.into()));
     assert!(tree.checkpoint(2));
     // the newest checkpoint will have caused the oldest to roll off, and
     // so the forgotten node will be unmarked
-    assert!(!tree.marked_positions().contains(&0usize.into()));
-    assert!(!tree.remove_mark(0usize.into()));
+    assert!(!tree.marked_positions().contains(&0u64.into()));
+    assert!(!tree.remove_mark(0u64.into()));
 
     // The following check_operations tests cover errors where the
     // test framework itself previously did not correctly handle

@@ -85,7 +85,8 @@ impl<H, const DEPTH: u8> IncrementalWitness<H, DEPTH> {
 
     /// Returns the position of the witnessed leaf node in the commitment tree.
     pub fn position(&self) -> Position {
-        Position::from(self.tree.size() - 1)
+        Position::try_from(self.tree.size() - 1)
+            .expect("Commitment trees with more than 2^64 leaves are unsupported.")
     }
 
     /// Finds the next "depth" of an unfilled subtree.

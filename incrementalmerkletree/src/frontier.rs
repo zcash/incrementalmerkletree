@@ -12,7 +12,7 @@ use {std::collections::VecDeque, std::iter::repeat};
 pub enum FrontierError {
     /// An error representing that the number of ommers provided in frontier construction does not
     /// the expected length of the ommers list given the position.
-    PositionMismatch { expected_ommers: usize },
+    PositionMismatch { expected_ommers: u8 },
     /// An error representing that the position and/or list of ommers provided to frontier
     /// construction would result in a frontier that exceeds the maximum statically allowed depth
     /// of the tree. `depth` is the minimum tree depth that would be required in order for that
@@ -43,7 +43,7 @@ impl<H> NonEmptyFrontier<H> {
     /// Constructs a new frontier from its constituent parts.
     pub fn from_parts(position: Position, leaf: H, ommers: Vec<H>) -> Result<Self, FrontierError> {
         let expected_ommers = position.past_ommer_count();
-        if ommers.len() == expected_ommers {
+        if ommers.len() == expected_ommers.into() {
             Ok(Self {
                 position,
                 leaf,
@@ -89,25 +89,25 @@ impl<H: Hashable + Clone> NonEmptyFrontier<H> {
             let new_root_level = self.position.root_level();
 
             let mut carry = Some((prior_leaf, 0.into()));
-            let mut new_ommers = Vec::with_capacity(self.position.past_ommer_count());
+            let mut new_ommers = Vec::with_capacity(self.position.past_ommer_count().into());
             for (addr, source) in prior_position.witness_addrs(new_root_level) {
                 if let Source::Past(i) = source {
                     if let Some((carry_ommer, carry_lvl)) = carry.as_ref() {
                         if *carry_lvl == addr.level() {
                             carry = Some((
-                                H::combine(addr.level(), &self.ommers[i], carry_ommer),
+                                H::combine(addr.level(), &self.ommers[usize::from(i)], carry_ommer),
                                 addr.level() + 1,
                             ))
                         } else {
                             // insert the carry at the first empty slot; then the rest of the
                             // ommers will remain unchanged
                             new_ommers.push(carry_ommer.clone());
-                            new_ommers.push(self.ommers[i].clone());
+                            new_ommers.push(self.ommers[usize::from(i)].clone());
                             carry = None;
                         }
                     } else {
                         // when there's no carry, just push on the ommer value
-                        new_ommers.push(self.ommers[i].clone());
+                        new_ommers.push(self.ommers[usize::from(i)].clone());
                     }
                 }
             }
@@ -136,7 +136,9 @@ impl<H: Hashable + Clone> NonEmptyFrontier<H> {
                         .fold(digest, |d, l| H::combine(l, &d, &H::empty_root(l)));
 
                     let res_digest = match source {
-                        Source::Past(i) => H::combine(addr.level(), &self.ommers[i], &digest),
+                        Source::Past(i) => {
+                            H::combine(addr.level(), &self.ommers[usize::from(i)], &digest)
+                        }
                         Source::Future => {
                             H::combine(addr.level(), &digest, &H::empty_root(addr.level()))
                         }
@@ -162,7 +164,7 @@ impl<H: Hashable + Clone> NonEmptyFrontier<H> {
         self.position()
             .witness_addrs(depth.into())
             .map(|(addr, source)| match source {
-                Source::Past(i) => Ok(self.ommers[i].clone()),
+                Source::Past(i) => Ok(self.ommers[usize::from(i)].clone()),
                 Source::Future => complement_nodes(addr).ok_or(addr),
             })
             .collect::<Result<Vec<_>, _>>()
@@ -370,14 +372,13 @@ impl<H: Hashable + Clone, const DEPTH: u8> CommitmentTree<H, DEPTH> {
                 (f.leaf().clone(), None)
             };
 
-            let upos: usize = f.position().into();
             Self {
                 left: Some(left),
                 right,
                 parents: (1u8..DEPTH)
                     .into_iter()
                     .map(|i| {
-                        if upos & (1 << i) == 0 {
+                        if u64::from(f.position()) & (1 << i) == 0 {
                             None
                         } else {
                             ommers_iter.next()
@@ -404,7 +405,7 @@ impl<H: Hashable + Clone, const DEPTH: u8> CommitmentTree<H, DEPTH> {
 
             // If a frontier cannot be successfully constructed from the
             // parts of a commitment tree, it is a programming error.
-            Frontier::from_parts((self.size() - 1).into(), leaf, ommers)
+            Frontier::from_parts((self.size() - 1).try_into().unwrap(), leaf, ommers)
                 .expect("Frontier should be constructable from CommitmentTree.")
         }
     }

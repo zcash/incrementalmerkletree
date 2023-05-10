@@ -51,7 +51,7 @@ impl<C> Retention<C> {
 pub enum Source {
     /// The sibling to the address can be derived from the incremental frontier
     /// at the contained ommer index
-    Past(usize),
+    Past(u8),
     /// The sibling to the address must be obtained from values discovered by
     /// the addition of more nodes to the tree
     Future,
@@ -61,7 +61,7 @@ pub enum Source {
 struct WitnessAddrsIter {
     root_level: Level,
     current: Address,
-    ommer_count: usize,
+    ommer_count: u8,
 }
 
 impl Iterator for WitnessAddrsIter {
@@ -91,7 +91,7 @@ impl Iterator for WitnessAddrsIter {
 /// A type representing the position of a leaf in a Merkle tree.
 #[derive(Copy, Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 #[repr(transparent)]
-pub struct Position(usize);
+pub struct Position(u64);
 
 impl Position {
     /// Return whether the position is odd-valued.
@@ -102,15 +102,17 @@ impl Position {
     /// Returns the minimum possible level of the root of a binary tree containing at least
     /// `self + 1` nodes.
     pub fn root_level(&self) -> Level {
-        Level((usize::BITS - self.0.leading_zeros()) as u8)
+        Level((u64::BITS - self.0.leading_zeros()) as u8)
     }
 
     /// Returns the number of cousins and/or ommers required to construct an authentication
     /// path to the root of a merkle tree that has `self + 1` nodes.
-    pub fn past_ommer_count(&self) -> usize {
+    pub fn past_ommer_count(&self) -> u8 {
         (0..self.root_level().0)
             .filter(|i| (self.0 >> i) & 0x1 == 1)
             .count()
+            .try_into()
+            .unwrap() // this is safe because we're counting within a `u8` range
     }
 
     /// Returns whether the binary tree having `self` as the position of the rightmost leaf
@@ -133,34 +135,34 @@ impl Position {
     }
 }
 
-impl From<Position> for usize {
-    fn from(p: Position) -> usize {
+impl From<Position> for u64 {
+    fn from(p: Position) -> Self {
         p.0
     }
 }
 
-impl From<Position> for u64 {
-    fn from(p: Position) -> Self {
-        p.0 as u64
+impl From<u64> for Position {
+    fn from(sz: u64) -> Self {
+        Self(sz)
     }
 }
 
-impl Add<usize> for Position {
+impl Add<u64> for Position {
     type Output = Position;
-    fn add(self, other: usize) -> Self {
+    fn add(self, other: u64) -> Self {
         Position(self.0 + other)
     }
 }
 
-impl AddAssign<usize> for Position {
-    fn add_assign(&mut self, other: usize) {
+impl AddAssign<u64> for Position {
+    fn add_assign(&mut self, other: u64) {
         self.0 += other
     }
 }
 
-impl Sub<usize> for Position {
+impl Sub<u64> for Position {
     type Output = Position;
-    fn sub(self, other: usize) -> Self {
+    fn sub(self, other: u64) -> Self {
         if self.0 < other {
             panic!("position underflow");
         }
@@ -168,16 +170,17 @@ impl Sub<usize> for Position {
     }
 }
 
-impl From<usize> for Position {
-    fn from(sz: usize) -> Self {
-        Self(sz)
+impl TryFrom<usize> for Position {
+    type Error = TryFromIntError;
+    fn try_from(sz: usize) -> Result<Self, Self::Error> {
+        <u64>::try_from(sz).map(Self)
     }
 }
 
-impl TryFrom<u64> for Position {
+impl TryFrom<Position> for usize {
     type Error = TryFromIntError;
-    fn try_from(sz: u64) -> Result<Self, Self::Error> {
-        <usize>::try_from(sz).map(Self)
+    fn try_from(p: Position) -> Result<Self, Self::Error> {
+        <usize>::try_from(p.0)
     }
 }
 
@@ -216,6 +219,7 @@ impl From<Level> for u8 {
     }
 }
 
+// Supporting sub-8-bit platforms isn't on our
 impl From<Level> for usize {
     fn from(level: Level) -> usize {
         level.0 as usize
@@ -245,12 +249,12 @@ impl Sub<u8> for Level {
 #[derive(Copy, Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct Address {
     level: Level,
-    index: usize,
+    index: u64,
 }
 
 impl Address {
     /// Construct a new address from its constituent parts.
-    pub fn from_parts(level: Level, index: usize) -> Self {
+    pub fn from_parts(level: Level, index: u64) -> Self {
         Address { level, index }
     }
 
@@ -272,7 +276,7 @@ impl Address {
     /// The index of an address is defined as the number of subtrees with their roots
     /// at the address's level that appear to the left of this address in a binary
     /// tree of arbitrary height > level * 2 + 1.
-    pub fn index(&self) -> usize {
+    pub fn index(&self) -> u64 {
         self.index
     }
 
@@ -354,7 +358,7 @@ impl Address {
     /// than or equal to that of this address) or the range of indices of root addresses of
     /// subtrees with roots at the given level contained within the tree with its root at this
     /// address otherwise.
-    pub fn context(&self, level: Level) -> Either<Address, Range<usize>> {
+    pub fn context(&self, level: Level) -> Either<Address, Range<u64>> {
         if level >= self.level {
             Either::Left(Address {
                 level,
@@ -541,7 +545,7 @@ pub(crate) mod tests {
         assert!(Position(3).is_complete_subtree(Level(2)));
         assert!(!Position(4).is_complete_subtree(Level(2)));
         assert!(Position(7).is_complete_subtree(Level(3)));
-        assert!(Position(u32::MAX as usize).is_complete_subtree(Level(32)));
+        assert!(Position(u32::MAX as u64).is_complete_subtree(Level(32)));
     }
 
     #[test]

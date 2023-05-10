@@ -1,5 +1,5 @@
 use bitflags::bitflags;
-use core::convert::Infallible;
+use core::convert::{Infallible, TryFrom};
 use core::fmt::Debug;
 use core::marker::PhantomData;
 use core::ops::{Deref, Range};
@@ -1424,7 +1424,7 @@ impl<H> ShardStore<H> for Vec<LocatedPrunableTree<H>> {
     type Error = Infallible;
 
     fn get_shard(&self, shard_root: Address) -> Option<&LocatedPrunableTree<H>> {
-        self.get(shard_root.index())
+        self.get(usize::try_from(shard_root.index()).expect("SHARD_HEIGHT > 64 is unsupported"))
     }
 
     fn last_shard(&self) -> Option<&LocatedPrunableTree<H>> {
@@ -1440,7 +1440,8 @@ impl<H> ShardStore<H> for Vec<LocatedPrunableTree<H>> {
                 root: Tree(Node::Nil),
             })
         }
-        self[subtree_addr.index()] = subtree;
+        self[usize::try_from(subtree_addr.index()).expect("SHARD_HEIGHT > 64 is unsupported")] =
+            subtree;
         Ok(())
     }
 
@@ -1449,7 +1450,7 @@ impl<H> ShardStore<H> for Vec<LocatedPrunableTree<H>> {
     }
 
     fn truncate(&mut self, from: Address) -> Result<(), Self::Error> {
-        self.truncate(from.index());
+        self.truncate(usize::try_from(from.index()).expect("SHARD_HEIGHT > 64 is unsupported"));
         Ok(())
     }
 }
@@ -2741,7 +2742,10 @@ mod tests {
         #[test]
         fn check_randomized_u64_ops(
             ops in proptest::collection::vec(
-                arb_operation((0..32u64).prop_map(SipHashable), 0usize..100),
+                arb_operation(
+                    (0..32u64).prop_map(SipHashable),
+                    (0u64..100).prop_map(Position::from)
+                ),
                 1..100
             )
         ) {
@@ -2753,7 +2757,10 @@ mod tests {
         #[test]
         fn check_randomized_str_ops(
             ops in proptest::collection::vec(
-                arb_operation((97u8..123).prop_map(|c| char::from(c).to_string()), 0usize..100),
+                arb_operation(
+                    (97u8..123).prop_map(|c| char::from(c).to_string()),
+                    (0u64..100).prop_map(Position::from)
+                ),
                 1..100
             )
         ) {
