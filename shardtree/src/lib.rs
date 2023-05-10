@@ -3,6 +3,7 @@ use core::convert::TryFrom;
 use core::fmt::{self, Debug};
 use core::ops::{Deref, Range};
 use either::Either;
+use incrementalmerkletree::frontier::NonEmptyFrontier;
 use std::collections::{BTreeMap, BTreeSet};
 use std::rc::Rc;
 
@@ -139,6 +140,22 @@ impl<A, V> Deref for Tree<A, V> {
 }
 
 impl<A, V> Tree<A, V> {
+    pub fn empty() -> Self {
+        Tree(Node::Nil)
+    }
+
+    pub fn leaf(value: V) -> Self {
+        Tree(Node::Leaf { value })
+    }
+
+    pub fn parent(ann: A, left: Self, right: Self) -> Self {
+        Tree(Node::Parent {
+            ann,
+            left: Rc::new(left),
+            right: Rc::new(right),
+        })
+    }
+
     /// Replaces the annotation at the root of the tree, if the root is a `Node::Parent`; otherwise
     /// returns this tree unaltered.
     pub fn reannotate_root(self, ann: A) -> Tree<A, V> {
@@ -657,6 +674,9 @@ pub enum InsertionError {
     CheckpointOutOfOrder,
     /// An append operation has exceeded the capacity of the tree.
     TreeFull,
+    /// An input data structure had malformed data when attempting to insert a value
+    /// at the given address
+    InputMalformed(Address),
 }
 
 impl fmt::Display for InsertionError {
@@ -681,6 +701,9 @@ impl fmt::Display for InsertionError {
                 write!(f, "Cannot append out-of-order checkpoint identifier.")
             }
             InsertionError::TreeFull => write!(f, "Note commitment tree is full."),
+            InsertionError::InputMalformed(addr) => {
+                write!(f, "Input malformed for insertion at address {:?}", addr)
+            }
         }
     }
 }
@@ -1318,6 +1341,68 @@ impl<H: Hashable + Clone + PartialEq> LocatedPrunableTree<H> {
                 .transpose()
         } else {
             Err(InsertionError::OutOfRange(start, subtree_range))
+        }
+    }
+
+    /// Inserts leaves and subtree roots from the provided frontier into this tree, up to the level
+    /// of this tree's root.
+    ///
+    /// Returns the updated tree, or an error in the following cases:
+    /// * the leaf node of `frontier` is at a position that is not contained within this tree's
+    ///   position range
+    /// * a conflict occurs where an ommer of the frontier being inserted does not match the
+    ///   existing value for that node
+    pub fn insert_frontier_nodes<C>(
+        &self,
+        frontier: NonEmptyFrontier<H>,
+        leaf_retention: Retention<C>,
+    ) -> Result<Self, InsertionError> {
+        let subtree_range = self.root_addr.position_range();
+        if subtree_range.contains(&frontier.position()) {
+            let leaf_is_marked = leaf_retention.is_marked();
+            self.insert_subtree(
+                LocatedTree {
+                    root_addr: self.root_addr,
+                    root: {
+                        let mut addr = Address::from(frontier.position());
+                        let mut t = Tree(Node::Leaf {
+                            value: (frontier.leaf().clone(), leaf_retention.into()),
+                        });
+                        let mut ommers = frontier.take_ommers().into_iter();
+
+                        while addr.level() < self.root_addr.level() {
+                            if addr.index() & 0x1 == 0 {
+                                // the current address is a left note, so create a parent with
+                                // an empty right-hand tree
+                                t = Tree::parent(None, t, Tree::empty());
+                            } else {
+                                // the current
+                                t = Tree::parent(
+                                    None,
+                                    Tree::leaf((
+                                        ommers.next().ok_or_else(|| {
+                                            InsertionError::InputMalformed(addr.sibling())
+                                        })?,
+                                        RetentionFlags::EPHEMERAL,
+                                    )),
+                                    t,
+                                );
+                            }
+
+                            addr = addr.parent();
+                        }
+
+                        t
+                    },
+                },
+                leaf_is_marked,
+            )
+            .map(|(t, _)| t)
+        } else {
+            Err(InsertionError::OutOfRange(
+                frontier.position(),
+                subtree_range,
+            ))
         }
     }
 
@@ -2460,8 +2545,10 @@ mod tests {
         MemoryShardStoreError, Node, PrunableTree, QueryError, RetentionFlags, ShardStore,
         ShardTree, Tree,
     };
+
     use assert_matches::assert_matches;
     use incrementalmerkletree::{
+        frontier::NonEmptyFrontier,
         testing::{
             self, arb_operation, check_append, check_checkpoint_rewind, check_operations,
             check_rewind_remove_mark, check_root_hashes, check_witnesses,
@@ -2471,11 +2558,6 @@ mod tests {
     };
     use proptest::prelude::*;
     use std::collections::BTreeSet;
-    use std::rc::Rc;
-
-    fn nil<A, B>() -> Tree<A, B> {
-        Tree(Node::Nil)
-    }
 
     fn str_leaf<A>(c: &str) -> Tree<A, String> {
         Tree(Node::Leaf {
@@ -2483,16 +2565,16 @@ mod tests {
         })
     }
 
+    fn nil<A, B>() -> Tree<A, B> {
+        Tree::empty()
+    }
+
     fn leaf<A, B>(value: B) -> Tree<A, B> {
-        Tree(Node::Leaf { value })
+        Tree::leaf(value)
     }
 
     fn parent<A: Default, B>(left: Tree<A, B>, right: Tree<A, B>) -> Tree<A, B> {
-        Tree(Node::Parent {
-            ann: A::default(),
-            left: Rc::new(left),
-            right: Rc::new(right),
-        })
+        Tree::parent(A::default(), left, right)
     }
 
     #[test]
@@ -3024,5 +3106,42 @@ mod tests {
             let indexed_ops = ops.iter().enumerate().map(|(i, op)| op.map_checkpoint_id(|_| i)).collect::<Vec<_>>();
             check_operations(tree, &indexed_ops)?;
         }
+    }
+
+    #[test]
+    fn insert_frontier_nodes() {
+        let mut frontier = NonEmptyFrontier::new("a".to_string());
+        for c in 'b'..'z' {
+            frontier.append(c.to_string());
+        }
+
+        let root_addr = Address::from_parts(Level::from(4), 1);
+        let tree = LocatedPrunableTree::empty(root_addr);
+        let result = tree.insert_frontier_nodes::<()>(frontier.clone(), Retention::Ephemeral);
+        assert_matches!(result, Ok(_));
+
+        let mut tree1 = LocatedPrunableTree::empty(root_addr);
+        for c in 'q'..'z' {
+            let (t, _, _) = tree1
+                .append::<()>(c.to_string(), Retention::Ephemeral)
+                .unwrap();
+            tree1 = t;
+        }
+        assert_matches!(
+            tree1.insert_frontier_nodes::<()>(frontier.clone(), Retention::Ephemeral),
+            Ok(t) if t == result.unwrap()
+        );
+
+        let mut tree2 = LocatedPrunableTree::empty(root_addr);
+        for c in 'a'..'i' {
+            let (t, _, _) = tree2
+                .append::<()>(c.to_string(), Retention::Ephemeral)
+                .unwrap();
+            tree2 = t;
+        }
+        assert_matches!(
+            tree2.insert_frontier_nodes::<()>(frontier, Retention::Ephemeral),
+            Err(InsertionError::Conflict(_))
+        );
     }
 }

@@ -69,6 +69,11 @@ impl<H> NonEmptyFrontier<H> {
     pub fn ommers(&self) -> &[H] {
         &self.ommers
     }
+
+    /// Consumes this frontier and returns its contained ommers vector.
+    pub fn take_ommers(self) -> Vec<H> {
+        self.ommers
+    }
 }
 
 impl<H: Hashable + Clone> NonEmptyFrontier<H> {
@@ -515,11 +520,11 @@ impl<H: Hashable + Clone, const DEPTH: u8> CommitmentTree<H, DEPTH> {
 #[cfg(feature = "test-dependencies")]
 pub mod testing {
     use core::fmt::Debug;
-    use proptest::prelude::*;
+    use proptest::prelude::*; use proptest::collection::vec;
     use std::collections::hash_map::DefaultHasher;
     use std::hash::Hasher;
 
-    use crate::{Hashable, Level};
+    use crate::{Hashable, Level, frontier::{Frontier}};
 
     impl<H: Hashable + Clone, const DEPTH: u8> crate::testing::Frontier<H>
         for super::Frontier<H, DEPTH>
@@ -556,8 +561,27 @@ pub mod testing {
         }
     }
 
+    pub fn arb_frontier<
+        H: Hashable + Clone + Debug,
+        T: Strategy<Value = H>,
+        const DEPTH: u8,
+    >(
+        min_size: usize,
+        arb_node: T,
+    ) -> impl Strategy<Value = Frontier<H, DEPTH>> {
+        assert!((1 << DEPTH) >= min_size + 100);
+        vec(arb_node, min_size..(min_size + 100)).prop_map(move |v| {
+            let mut frontier = Frontier::empty();
+            for node in v.into_iter() {
+                frontier.append(node);
+            }
+            frontier
+        })
+    }
+
+
     #[cfg(feature = "legacy-api")]
-    use {crate::frontier::CommitmentTree, proptest::collection::vec};
+    use {crate::frontier::CommitmentTree};
 
     #[cfg(feature = "legacy-api")]
     pub fn arb_commitment_tree<
