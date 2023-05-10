@@ -1355,7 +1355,7 @@ impl<H: Hashable + Clone + PartialEq> LocatedPrunableTree<H> {
     pub fn insert_frontier_nodes<C>(
         &self,
         frontier: NonEmptyFrontier<H>,
-        leaf_retention: Retention<C>,
+        leaf_retention: &Retention<C>,
     ) -> Result<Self, InsertionError> {
         let subtree_range = self.root_addr.position_range();
         if subtree_range.contains(&frontier.position()) {
@@ -1986,6 +1986,38 @@ where
 
         self.prune_excess_checkpoints()?;
 
+        Ok(())
+    }
+
+    /// Add the leaf and ommers of the provided frontier as nodes within the subtree corresponding
+    /// to the frontier's position.
+    pub fn insert_frontier_nodes(
+        &mut self,
+        frontier: NonEmptyFrontier<H>,
+        leaf_retention: Retention<C>,
+    ) -> Result<(), S::Error>
+    where
+        S::Error: From<InsertionError>,
+    {
+        let leaf_position = frontier.position();
+        let subtree_root_addr = Address::above_position(Self::subtree_level(), leaf_position);
+
+        let updated_subtree = self
+            .store
+            .get_shard(subtree_root_addr)?
+            .unwrap_or_else(|| LocatedTree::empty(subtree_root_addr))
+            .insert_frontier_nodes(frontier, &leaf_retention)?;
+
+        self.store.put_shard(updated_subtree)?;
+
+        // TODO: Add the remainder of the frontier to the cap.
+
+        if let Retention::Checkpoint { id, is_marked: _ } = leaf_retention {
+            self.store
+                .add_checkpoint(id, Checkpoint::at_position(leaf_position))?;
+        }
+
+        self.prune_excess_checkpoints()?;
         Ok(())
     }
 
@@ -3117,7 +3149,7 @@ mod tests {
 
         let root_addr = Address::from_parts(Level::from(4), 1);
         let tree = LocatedPrunableTree::empty(root_addr);
-        let result = tree.insert_frontier_nodes::<()>(frontier.clone(), Retention::Ephemeral);
+        let result = tree.insert_frontier_nodes::<()>(frontier.clone(), &Retention::Ephemeral);
         assert_matches!(result, Ok(_));
 
         let mut tree1 = LocatedPrunableTree::empty(root_addr);
@@ -3128,7 +3160,7 @@ mod tests {
             tree1 = t;
         }
         assert_matches!(
-            tree1.insert_frontier_nodes::<()>(frontier.clone(), Retention::Ephemeral),
+            tree1.insert_frontier_nodes::<()>(frontier.clone(), &Retention::Ephemeral),
             Ok(t) if t == result.unwrap()
         );
 
@@ -3140,7 +3172,7 @@ mod tests {
             tree2 = t;
         }
         assert_matches!(
-            tree2.insert_frontier_nodes::<()>(frontier, Retention::Ephemeral),
+            tree2.insert_frontier_nodes::<()>(frontier, &Retention::Ephemeral),
             Err(InsertionError::Conflict(_))
         );
     }
