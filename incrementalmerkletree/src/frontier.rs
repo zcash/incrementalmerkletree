@@ -203,21 +203,23 @@ impl<H, const DEPTH: u8> Frontier<H, DEPTH> {
 
     /// Constructs a new frontier from its constituent parts.
     ///
-    /// Returns `None` if the new frontier would exceed the maximum
-    /// allowed depth or if the list of ommers provided is not consistent
-    /// with the position of the leaf.
+    /// Returns `None` if the new frontier would exceed the maximum allowed depth or if the list of
+    /// ommers provided is not consistent with the position of the leaf.
     pub fn from_parts(position: Position, leaf: H, ommers: Vec<H>) -> Result<Self, FrontierError> {
         NonEmptyFrontier::from_parts(position, leaf, ommers).and_then(Self::try_from)
     }
 
-    /// Return the wrapped NonEmptyFrontier reference, or None if
-    /// the frontier is empty.
+    /// Return the wrapped NonEmptyFrontier reference, or None if the frontier is empty.
     pub fn value(&self) -> Option<&NonEmptyFrontier<H>> {
         self.frontier.as_ref()
     }
 
-    /// Returns the amount of memory dynamically allocated for ommer
-    /// values within the frontier.
+    /// Consumes this wrapper and returns the underlying `Option<NonEmptyFrontier>`
+    pub fn take(self) -> Option<NonEmptyFrontier<H>> {
+        self.frontier
+    }
+
+    /// Returns the amount of memory dynamically allocated for ommer values within the frontier.
     pub fn dynamic_memory_usage(&self) -> usize {
         self.frontier.as_ref().map_or(0, |f| {
             size_of::<usize>() + (f.ommers.capacity() + 1) * size_of::<H>()
@@ -337,6 +339,10 @@ impl<H, const DEPTH: u8> CommitmentTree<H, DEPTH> {
         } else {
             Err(())
         }
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.left.is_none() && self.right.is_none()
     }
 
     pub fn left(&self) -> &Option<H> {

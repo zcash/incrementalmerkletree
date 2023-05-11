@@ -3,11 +3,12 @@ use core::convert::TryFrom;
 use core::fmt::{self, Debug};
 use core::ops::{Deref, Range};
 use either::Either;
-use incrementalmerkletree::frontier::NonEmptyFrontier;
 use std::collections::{BTreeMap, BTreeSet};
 use std::rc::Rc;
 
-use incrementalmerkletree::{Address, Hashable, Level, MerklePath, Position, Retention};
+use incrementalmerkletree::{
+    frontier::NonEmptyFrontier, Address, Hashable, Level, MerklePath, Position, Retention,
+};
 
 bitflags! {
     pub struct RetentionFlags: u8 {
@@ -154,6 +155,10 @@ impl<A, V> Tree<A, V> {
             left: Rc::new(left),
             right: Rc::new(right),
         })
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.0.is_nil()
     }
 
     /// Replaces the annotation at the root of the tree, if the root is a `Node::Parent`; otherwise
@@ -1344,10 +1349,86 @@ impl<H: Hashable + Clone + PartialEq> LocatedPrunableTree<H> {
         }
     }
 
+    // Constructs a pair of trees contains the leaf and ommers of the given frontier.
+    // The first element of the result is a tree with its root at a level less than
+    // or equal to `split_at`; the second element is a tree with its leaves at level
+    // `split_at` that is only returned if the frontier contains sufficient data to
+    // fill the first tree to the `split_at` level.
+    fn from_frontier<C>(
+        frontier: NonEmptyFrontier<H>,
+        leaf_retention: &Retention<C>,
+        split_at: Level,
+    ) -> (Self, Option<Self>) {
+        let mut addr = Address::from(frontier.position());
+        let mut subtree = Tree(Node::Leaf {
+            value: (frontier.leaf().clone(), leaf_retention.into()),
+        });
+        let mut ommers = frontier.take_ommers().into_iter();
+
+        while addr.level() < split_at {
+            if addr.index() & 0x1 == 0 {
+                // the current address is a left child, so create a parent with
+                // an empty right-hand tree
+                subtree = Tree::parent(None, subtree, Tree::empty());
+            } else {
+                if let Some(left) = ommers.next() {
+                    // the current address corresponds to a right child, so create a parent that
+                    // takes the left sibling to that child from the ommers
+                    subtree =
+                        Tree::parent(None, Tree::leaf((left, RetentionFlags::EPHEMERAL)), subtree);
+                } else {
+                    break;
+                }
+            }
+
+            addr = addr.parent();
+        }
+
+        let located_subtree = LocatedTree {
+            root_addr: addr,
+            root: subtree,
+        };
+
+        let located_supertree = if located_subtree.root_addr().level() == split_at {
+            let mut addr = located_subtree.root_addr();
+            let mut supertree = None;
+            while let Some(left) = ommers.next() {
+                // build up the left-biased tree until we get a right-hand node
+                while addr.index() & 0x1 == 0 {
+                    supertree = supertree.map(|t| Tree::parent(None, t, Tree::empty()));
+                    addr = addr.parent();
+                }
+
+                // once we have a right-hand root, add a parent with the current ommer as the
+                // left-hand sibling
+                supertree = Some(Tree::parent(
+                    None,
+                    Tree::leaf((left, RetentionFlags::EPHEMERAL)),
+                    supertree.unwrap_or_else(Tree::empty),
+                ));
+                addr = addr.parent();
+            }
+
+            supertree.map(|t| LocatedTree {
+                root_addr: addr,
+                root: t,
+            })
+        } else {
+            // if there were not enough ommers available from the frontier to reach the address
+            // of the root of this tree, there is no contribution to the cap
+            None
+        };
+
+        (located_subtree, located_supertree)
+    }
+
     /// Inserts leaves and subtree roots from the provided frontier into this tree, up to the level
     /// of this tree's root.
     ///
-    /// Returns the updated tree, or an error in the following cases:
+    /// Returns the updated tree, along with a `LocatedPrunableTree` containing only the remainder
+    /// of the frontier's ommers that had addresses at levels greater than the root of this tree.
+    ///
+    /// Returns an error in the following cases:
     /// * the leaf node of `frontier` is at a position that is not contained within this tree's
     ///   position range
     /// * a conflict occurs where an ommer of the frontier being inserted does not match the
@@ -1356,48 +1437,16 @@ impl<H: Hashable + Clone + PartialEq> LocatedPrunableTree<H> {
         &self,
         frontier: NonEmptyFrontier<H>,
         leaf_retention: &Retention<C>,
-    ) -> Result<Self, InsertionError> {
+    ) -> Result<(Self, Option<Self>), InsertionError> {
         let subtree_range = self.root_addr.position_range();
         if subtree_range.contains(&frontier.position()) {
             let leaf_is_marked = leaf_retention.is_marked();
-            self.insert_subtree(
-                LocatedTree {
-                    root_addr: self.root_addr,
-                    root: {
-                        let mut addr = Address::from(frontier.position());
-                        let mut t = Tree(Node::Leaf {
-                            value: (frontier.leaf().clone(), leaf_retention.into()),
-                        });
-                        let mut ommers = frontier.take_ommers().into_iter();
+            let (subtree, supertree) =
+                Self::from_frontier(frontier, leaf_retention, self.root_addr.level());
 
-                        while addr.level() < self.root_addr.level() {
-                            if addr.index() & 0x1 == 0 {
-                                // the current address is a left note, so create a parent with
-                                // an empty right-hand tree
-                                t = Tree::parent(None, t, Tree::empty());
-                            } else {
-                                // the current
-                                t = Tree::parent(
-                                    None,
-                                    Tree::leaf((
-                                        ommers.next().ok_or_else(|| {
-                                            InsertionError::InputMalformed(addr.sibling())
-                                        })?,
-                                        RetentionFlags::EPHEMERAL,
-                                    )),
-                                    t,
-                                );
-                            }
+            let subtree = self.insert_subtree(subtree, leaf_is_marked)?.0;
 
-                            addr = addr.parent();
-                        }
-
-                        t
-                    },
-                },
-                leaf_is_marked,
-            )
-            .map(|(t, _)| t)
+            Ok((subtree, supertree))
         } else {
             Err(InsertionError::OutOfRange(
                 frontier.position(),
@@ -1538,6 +1587,17 @@ pub trait ShardStore {
     /// provided has level `SHARD_HEIGHT - 1`.
     fn truncate(&mut self, from: Address) -> Result<(), Self::Error>;
 
+    /// A tree that is used to cache the known roots of subtrees in the "cap" of nodes between
+    /// `SHARD_HEIGHT` and `DEPTH` that are otherwise not directly represented in the tree.  
+    ///
+    /// This tree only contains data that is expected to be stable; i.e. any node whose value
+    /// might be altered as a consequence of the discovery of additional information from
+    /// branches of the tree will be `Nil` in this cache.
+    fn get_cap(&self) -> Result<PrunableTree<Self::H>, Self::Error>;
+
+    /// Persists the provided cap to the data store.
+    fn put_cap(&mut self, cap: PrunableTree<Self::H>) -> Result<(), Self::Error>;
+
     /// Returns the identifier for the checkpoint with the lowest associated position value.
     fn min_checkpoint_id(&self) -> Result<Option<Self::CheckpointId>, Self::Error>;
 
@@ -1615,6 +1675,14 @@ impl<S: ShardStore> ShardStore for &mut S {
         S::get_shard_roots(*self)
     }
 
+    fn get_cap(&self) -> Result<PrunableTree<Self::H>, Self::Error> {
+        S::get_cap(*self)
+    }
+
+    fn put_cap(&mut self, cap: PrunableTree<Self::H>) -> Result<(), Self::Error> {
+        S::put_cap(*self, cap)
+    }
+
     fn truncate(&mut self, from: Address) -> Result<(), Self::Error> {
         S::truncate(*self, from)
     }
@@ -1680,6 +1748,7 @@ impl<S: ShardStore> ShardStore for &mut S {
 pub struct MemoryShardStore<H, C: Ord> {
     shards: Vec<LocatedPrunableTree<H>>,
     checkpoints: BTreeMap<C, Checkpoint>,
+    cap: PrunableTree<H>,
 }
 
 impl<H, C: Ord> MemoryShardStore<H, C> {
@@ -1687,6 +1756,7 @@ impl<H, C: Ord> MemoryShardStore<H, C> {
         Self {
             shards: vec![],
             checkpoints: BTreeMap::new(),
+            cap: PrunableTree::empty(),
         }
     }
 }
@@ -1751,6 +1821,15 @@ impl<H: Clone, C: Clone + Ord> ShardStore for MemoryShardStore<H, C> {
     fn truncate(&mut self, from: Address) -> Result<(), Self::Error> {
         let shard_idx = usize::try_from(from.index()).expect("SHARD_HEIGHT > 64 is unsupported");
         self.shards.truncate(shard_idx);
+        Ok(())
+    }
+
+    fn get_cap(&self) -> Result<PrunableTree<H>, Self::Error> {
+        Ok(self.cap.clone())
+    }
+
+    fn put_cap(&mut self, cap: PrunableTree<H>) -> Result<(), Self::Error> {
+        self.cap = cap;
         Ok(())
     }
 
@@ -2002,7 +2081,7 @@ where
         let leaf_position = frontier.position();
         let subtree_root_addr = Address::above_position(Self::subtree_level(), leaf_position);
 
-        let updated_subtree = self
+        let (updated_subtree, supertree) = self
             .store
             .get_shard(subtree_root_addr)?
             .unwrap_or_else(|| LocatedTree::empty(subtree_root_addr))
@@ -2010,7 +2089,24 @@ where
 
         self.store.put_shard(updated_subtree)?;
 
-        // TODO: Add the remainder of the frontier to the cap.
+        // if the position of the frontier is such that it is not at risk of being rolled back,
+        // add the remainder of the frontier to the cap cache
+        if self
+            .store
+            .get_checkpoint_at_depth(self.store.checkpoint_count()?)
+            .and_then(|(_, c)| c.position())
+            >= Some(leaf_position)
+        {
+            if let Some(supertree) = supertree {
+                let new_cap = LocatedTree {
+                    root_addr: Self::root_addr(),
+                    root: self.store.get_cap()?,
+                }
+                .insert_subtree(supertree, leaf_retention.is_marked())?;
+
+                self.store.put_cap(new_cap.0.root)?;
+            }
+        }
 
         if let Retention::Checkpoint { id, is_marked: _ } = leaf_retention {
             self.store

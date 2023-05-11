@@ -24,6 +24,7 @@ incrementalmerkletree = { version = "0.4", path = "../incrementalmerkletree", fe
 proptest = "1.0.0"
 
 [features]
+legacy-api = ["incrementalmerkletree/legacy-api"]
 test-dependencies = ["proptest"]
 
 [target.'cfg(unix)'.dev-dependencies]
