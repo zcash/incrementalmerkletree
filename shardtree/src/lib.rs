@@ -1,7 +1,6 @@
 use bitflags::bitflags;
 use core::convert::TryFrom;
 use core::fmt::{self, Debug};
-use core::marker::PhantomData;
 use core::ops::{Deref, Range};
 use either::Either;
 use std::collections::{BTreeMap, BTreeSet};
@@ -1417,20 +1416,22 @@ impl Checkpoint {
 /// A capability for storage of fragment subtrees of the `ShardTree` type.
 ///
 /// All fragment subtrees must have roots at level `SHARD_HEIGHT - 1`
-pub trait ShardStore<H, C> {
+pub trait ShardStore {
+    type H;
+    type CheckpointId;
     type Error;
 
     /// Returns the subtree at the given root address, if any such subtree exists.
-    fn get_shard(&self, shard_root: Address) -> Option<&LocatedPrunableTree<H>>;
+    fn get_shard(&self, shard_root: Address) -> Option<&LocatedPrunableTree<Self::H>>;
 
     /// Returns the subtree containing the maximum inserted leaf position.
-    fn last_shard(&self) -> Option<&LocatedPrunableTree<H>>;
+    fn last_shard(&self) -> Option<&LocatedPrunableTree<Self::H>>;
 
     /// Inserts or replaces the subtree having the same root address as the provided tree.
     ///
     /// Implementations of this method MUST enforce the constraint that the root address
     /// of the provided subtree has level `SHARD_HEIGHT - 1`.
-    fn put_shard(&mut self, subtree: LocatedPrunableTree<H>) -> Result<(), Self::Error>;
+    fn put_shard(&mut self, subtree: LocatedPrunableTree<Self::H>) -> Result<(), Self::Error>;
 
     /// Returns the vector of addresses corresponding to the roots of subtrees stored in this
     /// store.
@@ -1450,15 +1451,15 @@ pub trait ShardStore<H, C> {
     // cap_cache: Tree<Option<Rc<H>>, ()>
 
     /// Returns the identifier for the checkpoint with the lowest associated position value.
-    fn min_checkpoint_id(&self) -> Option<&C>;
+    fn min_checkpoint_id(&self) -> Option<&Self::CheckpointId>;
 
     /// Returns the identifier for the checkpoint with the highest associated position value.
-    fn max_checkpoint_id(&self) -> Option<&C>;
+    fn max_checkpoint_id(&self) -> Option<&Self::CheckpointId>;
 
     /// Adds a checkpoint to the data store.
     fn add_checkpoint(
         &mut self,
-        checkpoint_id: C,
+        checkpoint_id: Self::CheckpointId,
         checkpoint: Checkpoint,
     ) -> Result<(), Self::Error>;
 
@@ -1468,13 +1469,16 @@ pub trait ShardStore<H, C> {
     /// Returns the position of the checkpoint, if any, along with the number of subsequent
     /// checkpoints at the same position. Returns `None` if `checkpoint_depth == 0` or if
     /// insufficient checkpoints exist to seek back to the requested depth.
-    fn get_checkpoint_at_depth(&self, checkpoint_depth: usize) -> Option<(&C, &Checkpoint)>;
+    fn get_checkpoint_at_depth(
+        &self,
+        checkpoint_depth: usize,
+    ) -> Option<(&Self::CheckpointId, &Checkpoint)>;
 
     /// Iterates in checkpoint ID order over the first `limit` checkpoints, applying the
     /// given callback to each.
     fn with_checkpoints<F>(&mut self, limit: usize, callback: F) -> Result<(), Self::Error>
     where
-        F: FnMut(&C, &Checkpoint) -> Result<(), Self::Error>;
+        F: FnMut(&Self::CheckpointId, &Checkpoint) -> Result<(), Self::Error>;
 
     /// Update the checkpoint having the given identifier by mutating it with the provided
     /// function, and persist the updated checkpoint to the data store.
@@ -1483,31 +1487,36 @@ pub trait ShardStore<H, C> {
     /// provided identifier exists in the data store, or an error if a storage error occurred.
     fn update_checkpoint_with<F>(
         &mut self,
-        checkpoint_id: &C,
+        checkpoint_id: &Self::CheckpointId,
         update: F,
     ) -> Result<bool, Self::Error>
     where
         F: Fn(&mut Checkpoint) -> Result<(), Self::Error>;
 
     /// Removes a checkpoint from the data store.
-    fn remove_checkpoint(&mut self, checkpoint_id: &C) -> Result<(), Self::Error>;
+    fn remove_checkpoint(&mut self, checkpoint_id: &Self::CheckpointId) -> Result<(), Self::Error>;
 
     /// Removes checkpoints with identifiers greater than or equal to the given identifier
-    fn truncate_checkpoints(&mut self, checkpoint_id: &C) -> Result<(), Self::Error>;
+    fn truncate_checkpoints(
+        &mut self,
+        checkpoint_id: &Self::CheckpointId,
+    ) -> Result<(), Self::Error>;
 }
 
-impl<H, C, S: ShardStore<H, C>> ShardStore<H, C> for &mut S {
+impl<S: ShardStore> ShardStore for &mut S {
+    type H = S::H;
+    type CheckpointId = S::CheckpointId;
     type Error = S::Error;
 
-    fn get_shard(&self, shard_root: Address) -> Option<&LocatedPrunableTree<H>> {
+    fn get_shard(&self, shard_root: Address) -> Option<&LocatedPrunableTree<Self::H>> {
         S::get_shard(*self, shard_root)
     }
 
-    fn last_shard(&self) -> Option<&LocatedPrunableTree<H>> {
+    fn last_shard(&self) -> Option<&LocatedPrunableTree<Self::H>> {
         S::last_shard(*self)
     }
 
-    fn put_shard(&mut self, subtree: LocatedPrunableTree<H>) -> Result<(), Self::Error> {
+    fn put_shard(&mut self, subtree: LocatedPrunableTree<Self::H>) -> Result<(), Self::Error> {
         S::put_shard(*self, subtree)
     }
 
@@ -1519,17 +1528,17 @@ impl<H, C, S: ShardStore<H, C>> ShardStore<H, C> for &mut S {
         S::truncate(*self, from)
     }
 
-    fn min_checkpoint_id(&self) -> Option<&C> {
+    fn min_checkpoint_id(&self) -> Option<&Self::CheckpointId> {
         S::min_checkpoint_id(self)
     }
 
-    fn max_checkpoint_id(&self) -> Option<&C> {
+    fn max_checkpoint_id(&self) -> Option<&Self::CheckpointId> {
         S::max_checkpoint_id(self)
     }
 
     fn add_checkpoint(
         &mut self,
-        checkpoint_id: C,
+        checkpoint_id: Self::CheckpointId,
         checkpoint: Checkpoint,
     ) -> Result<(), Self::Error> {
         S::add_checkpoint(self, checkpoint_id, checkpoint)
@@ -1539,20 +1548,23 @@ impl<H, C, S: ShardStore<H, C>> ShardStore<H, C> for &mut S {
         S::checkpoint_count(self)
     }
 
-    fn get_checkpoint_at_depth(&self, checkpoint_depth: usize) -> Option<(&C, &Checkpoint)> {
+    fn get_checkpoint_at_depth(
+        &self,
+        checkpoint_depth: usize,
+    ) -> Option<(&Self::CheckpointId, &Checkpoint)> {
         S::get_checkpoint_at_depth(self, checkpoint_depth)
     }
 
     fn with_checkpoints<F>(&mut self, limit: usize, callback: F) -> Result<(), Self::Error>
     where
-        F: FnMut(&C, &Checkpoint) -> Result<(), Self::Error>,
+        F: FnMut(&Self::CheckpointId, &Checkpoint) -> Result<(), Self::Error>,
     {
         S::with_checkpoints(self, limit, callback)
     }
 
     fn update_checkpoint_with<F>(
         &mut self,
-        checkpoint_id: &C,
+        checkpoint_id: &Self::CheckpointId,
         update: F,
     ) -> Result<bool, Self::Error>
     where
@@ -1561,11 +1573,14 @@ impl<H, C, S: ShardStore<H, C>> ShardStore<H, C> for &mut S {
         S::update_checkpoint_with(self, checkpoint_id, update)
     }
 
-    fn remove_checkpoint(&mut self, checkpoint_id: &C) -> Result<(), Self::Error> {
+    fn remove_checkpoint(&mut self, checkpoint_id: &Self::CheckpointId) -> Result<(), Self::Error> {
         S::remove_checkpoint(self, checkpoint_id)
     }
 
-    fn truncate_checkpoints(&mut self, checkpoint_id: &C) -> Result<(), Self::Error> {
+    fn truncate_checkpoints(
+        &mut self,
+        checkpoint_id: &Self::CheckpointId,
+    ) -> Result<(), Self::Error> {
         S::truncate_checkpoints(self, checkpoint_id)
     }
 }
@@ -1585,7 +1600,9 @@ impl<H, C: Ord> MemoryShardStore<H, C> {
     }
 }
 
-impl<H, C: Ord> ShardStore<H, C> for MemoryShardStore<H, C> {
+impl<H, C: Ord> ShardStore for MemoryShardStore<H, C> {
+    type H = H;
+    type CheckpointId = C;
     type Error = InsertionError;
 
     fn get_shard(&self, shard_root: Address) -> Option<&LocatedPrunableTree<H>> {
@@ -1699,22 +1716,20 @@ impl<H, C: Ord> ShardStore<H, C> for MemoryShardStore<H, C> {
 /// front of the tree, that are maintained such that it's possible to truncate nodes to the right
 /// of the specified position.
 #[derive(Debug)]
-pub struct ShardTree<H, C, S: ShardStore<H, C>, const DEPTH: u8, const SHARD_HEIGHT: u8> {
+pub struct ShardTree<S: ShardStore, const DEPTH: u8, const SHARD_HEIGHT: u8> {
     /// The vector of tree shards.
     store: S,
     /// The maximum number of checkpoints to retain before pruning.
     max_checkpoints: usize,
-    _hash_type: PhantomData<H>,
-    _checkpoint_id_type: PhantomData<C>,
 }
 
 impl<
         H: Hashable + Clone + PartialEq,
         C: Clone + Ord,
-        S: ShardStore<H, C>,
+        S: ShardStore<H = H, CheckpointId = C>,
         const DEPTH: u8,
         const SHARD_HEIGHT: u8,
-    > ShardTree<H, C, S, DEPTH, SHARD_HEIGHT>
+    > ShardTree<S, DEPTH, SHARD_HEIGHT>
 {
     /// Creates a new empty tree and establishes a checkpoint for the empty tree at the given
     /// checkpoint identifier.
@@ -1726,8 +1741,6 @@ impl<
         let mut result = Self {
             store,
             max_checkpoints,
-            _hash_type: PhantomData,
-            _checkpoint_id_type: PhantomData,
         };
         result
             .store
@@ -1740,8 +1753,6 @@ impl<
         Self {
             store,
             max_checkpoints,
-            _hash_type: PhantomData,
-            _checkpoint_id_type: PhantomData,
         }
     }
 
@@ -2770,7 +2781,7 @@ mod tests {
 
     #[test]
     fn shardtree_insertion() {
-        let mut tree: ShardTree<String, usize, MemoryShardStore<String, usize>, 4, 3> =
+        let mut tree: ShardTree<MemoryShardStore<String, usize>, 4, 3> =
             ShardTree::empty(MemoryShardStore::empty(), 100, 0).unwrap();
         assert_matches!(
             tree.batch_insert(
@@ -2862,10 +2873,10 @@ mod tests {
     impl<
             H: Hashable + Ord + Clone,
             C: Clone + Ord + core::fmt::Debug,
-            S: ShardStore<H, C>,
+            S: ShardStore<H = H, CheckpointId = C>,
             const DEPTH: u8,
             const SHARD_HEIGHT: u8,
-        > testing::Tree<H, C> for ShardTree<H, C, S, DEPTH, SHARD_HEIGHT>
+        > testing::Tree<H, C> for ShardTree<S, DEPTH, SHARD_HEIGHT>
     where
         S::Error: core::fmt::Debug + From<InsertionError>,
     {
@@ -2919,7 +2930,7 @@ mod tests {
     #[test]
     fn append() {
         check_append(|m| {
-            ShardTree::<String, usize, MemoryShardStore<String, usize>, 4, 3>::empty(
+            ShardTree::<MemoryShardStore<String, usize>, 4, 3>::empty(
                 MemoryShardStore::empty(),
                 m,
                 0,
@@ -2931,7 +2942,7 @@ mod tests {
     #[test]
     fn root_hashes() {
         check_root_hashes(|m| {
-            ShardTree::<String, usize, MemoryShardStore<String, usize>, 4, 3>::empty(
+            ShardTree::<MemoryShardStore<String, usize>, 4, 3>::empty(
                 MemoryShardStore::empty(),
                 m,
                 0,
@@ -2943,7 +2954,7 @@ mod tests {
     #[test]
     fn witnesses() {
         check_witnesses(|m| {
-            ShardTree::<String, usize, MemoryShardStore<String, usize>, 4, 3>::empty(
+            ShardTree::<MemoryShardStore<String, usize>, 4, 3>::empty(
                 MemoryShardStore::empty(),
                 m,
                 0,
@@ -2955,7 +2966,7 @@ mod tests {
     #[test]
     fn checkpoint_rewind() {
         check_checkpoint_rewind(|m| {
-            ShardTree::<String, usize, MemoryShardStore<String, usize>, 4, 3>::empty(
+            ShardTree::<MemoryShardStore<String, usize>, 4, 3>::empty(
                 MemoryShardStore::empty(),
                 m,
                 0,
@@ -2967,7 +2978,7 @@ mod tests {
     #[test]
     fn rewind_remove_mark() {
         check_rewind_remove_mark(|m| {
-            ShardTree::<String, usize, MemoryShardStore<String, usize>, 4, 3>::empty(
+            ShardTree::<MemoryShardStore<String, usize>, 4, 3>::empty(
                 MemoryShardStore::empty(),
                 m,
                 0,
@@ -2984,7 +2995,7 @@ mod tests {
         H,
         usize,
         CompleteTree<H, usize, 4>,
-        ShardTree<H, usize, MemoryShardStore<H, usize>, 4, 3>,
+        ShardTree<MemoryShardStore<H, usize>, 4, 3>,
     > {
         CombinedTree::new(
             CompleteTree::new(max_checkpoints, 0),
