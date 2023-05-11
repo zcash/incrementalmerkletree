@@ -1093,15 +1093,14 @@ mod tests {
     where
         G::Value: Hashable + Clone + Ord + Debug + 'static,
     {
-        proptest::collection::vec(arb_operation(item_gen, 0..max_count), 0..max_count).prop_map(
-            |ops| {
-                let mut tree: BridgeTree<G::Value, usize, 8> = BridgeTree::new(10, 0);
-                for (i, op) in ops.into_iter().enumerate() {
-                    apply_operation(&mut tree, op.map_checkpoint_id(|_| i));
-                }
-                tree
-            },
-        )
+        let pos_gen = (0..max_count).prop_map(|p| Position::try_from(p).unwrap());
+        proptest::collection::vec(arb_operation(item_gen, pos_gen), 0..max_count).prop_map(|ops| {
+            let mut tree: BridgeTree<G::Value, usize, 8> = BridgeTree::new(10, 0);
+            for (i, op) in ops.into_iter().enumerate() {
+                apply_operation(&mut tree, op.map_checkpoint_id(|_| i));
+            }
+            tree
+        })
     }
 
     proptest! {
@@ -1171,11 +1170,11 @@ mod tests {
         let mut t = BridgeTree::<String, usize, 7>::new(10, 0);
         let mut to_unmark = vec![];
         let mut has_witness = vec![];
-        for i in 0usize..100 {
+        for i in 0u64..100 {
             let elem: String = format!("{},", i);
             assert!(t.append(elem), "Append should succeed.");
             if i % 5 == 0 {
-                t.checkpoint(i + 1);
+                t.checkpoint(usize::try_from(i).unwrap() + 1);
             }
             if i % 7 == 0 {
                 t.mark();
@@ -1235,7 +1234,10 @@ mod tests {
         #[test]
         fn check_randomized_u64_ops(
             ops in proptest::collection::vec(
-                arb_operation((0..32u64).prop_map(SipHashable), 0usize..100),
+                arb_operation(
+                    (0..32u64).prop_map(SipHashable),
+                    (0u64..100).prop_map(Position::from)
+                ),
                 1..100
             )
         ) {
@@ -1247,7 +1249,10 @@ mod tests {
         #[test]
         fn check_randomized_str_ops(
             ops in proptest::collection::vec(
-                arb_operation((97u8..123).prop_map(|c| char::from(c).to_string()), 0usize..100),
+                arb_operation(
+                    (97u8..123).prop_map(|c| char::from(c).to_string()),
+                    (0u64..100).prop_map(Position::from)
+                ),
                 1..100
             )
         ) {
