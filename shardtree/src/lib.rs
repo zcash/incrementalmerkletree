@@ -10,6 +10,9 @@ use incrementalmerkletree::{
     frontier::NonEmptyFrontier, Address, Hashable, Level, MerklePath, Position, Retention,
 };
 
+#[cfg(feature = "legacy-api")]
+use incrementalmerkletree::witness::IncrementalWitness;
+
 bitflags! {
     pub struct RetentionFlags: u8 {
         /// An leaf with `EPHEMERAL` retention can be pruned as soon as we are certain that it is not part
@@ -1066,6 +1069,21 @@ impl<H: Hashable + Clone + PartialEq> LocatedPrunableTree<H> {
         }
     }
 
+    #[cfg(feature = "legacy-api")]
+    fn combine_optional(
+        t0: Option<Self>,
+        t1: Option<Self>,
+        t1_contains_marked: bool,
+    ) -> Result<(Option<Self>, Vec<IncompleteAt>), InsertionError> {
+        Ok(t0
+            .as_ref()
+            .zip(t1)
+            .map(|(t0, t1)| t0.insert_subtree(t1, t1_contains_marked))
+            .transpose()?
+            .map(|(t, v)| (Some(t), v))
+            .unwrap_or((t0, vec![])))
+    }
+
     /// Append a single value at the first available position in the tree.
     ///
     /// Prefer to use [`Self::batch_append`] or [`Self::batch_insert`] when appending multiple
@@ -1422,6 +1440,74 @@ impl<H: Hashable + Clone + PartialEq> LocatedPrunableTree<H> {
         (located_subtree, located_supertree)
     }
 
+    #[cfg(feature = "legacy-api")]
+    fn from_witness_filled_nodes(
+        leaf_addr: Address,
+        mut filled: impl Iterator<Item = H>,
+        split_at: Level,
+    ) -> (Self, Option<Self>) {
+        // add filled nodes to the subtree; here, we do not need to worry about
+        // whether or not these nodes can be invalidated by a rewind
+        let mut addr = leaf_addr;
+        let mut subtree = Tree::empty();
+        while addr.level() < split_at {
+            if addr.index() & 0x1 == 0 {
+                // the current  root is a left child, so take the right sibling from the
+                // filled iterator
+                if let Some(right) = filled.next() {
+                    // once we have a right-hand node, add a parent with the current tree
+                    // as the left-hand sibling
+                    subtree = Tree::parent(
+                        None,
+                        subtree,
+                        Tree::leaf((right.clone(), RetentionFlags::EPHEMERAL)),
+                    );
+                } else {
+                    break;
+                }
+            } else {
+                // the current address is for a right child, so add an empty left sibling
+                subtree = Tree::parent(None, Tree::empty(), subtree);
+            }
+
+            addr = addr.parent();
+        }
+
+        let subtree = LocatedTree {
+            root_addr: addr,
+            root: subtree,
+        };
+
+        // add filled nodes to the supertree
+        let supertree = if addr.level() == split_at {
+            let mut supertree = None;
+            while let Some(right) = filled.next() {
+                // build up the right-biased tree until we get a left-hand node
+                while addr.index() & 0x1 == 1 {
+                    supertree = supertree.map(|t| Tree::parent(None, Tree::empty(), t));
+                    addr = addr.parent();
+                }
+
+                // once we have a left-hand root, add a parent with the current ommer as the right-hand sibling
+                supertree = Some(Tree::parent(
+                    None,
+                    supertree.unwrap_or_else(PrunableTree::empty),
+                    Tree::leaf((right.clone(), RetentionFlags::EPHEMERAL)),
+                ));
+                addr = addr.parent();
+            }
+
+            supertree.map(|t| LocatedTree {
+                root_addr: addr,
+                root: t,
+            })
+        } else {
+            None
+        };
+
+        (subtree, supertree)
+    }
+
     /// Inserts leaves and subtree roots from the provided frontier into this tree, up to the level
     /// of this tree's root.
     ///
@@ -1450,6 +1536,76 @@ impl<H: Hashable + Clone + PartialEq> LocatedPrunableTree<H> {
         } else {
             Err(InsertionError::OutOfRange(
                 frontier.position(),
+                subtree_range,
+            ))
+        }
+    }
+
+    /// Insert the nodes belonging to the given incremental witness to this tree, truncating the
+    /// witness to the given position.
+    #[cfg(feature = "legacy-api")]
+    pub fn insert_witness_nodes<C, const DEPTH: u8>(
+        &self,
+        witness: IncrementalWitness<H, DEPTH>,
+        checkpoint_id: C,
+    ) -> Result<(Self, Option<Self>, Option<Self>), InsertionError> {
+        let subtree_range = self.root_addr.position_range();
+        if subtree_range.contains(&witness.position()) {
+            // construct the subtree and cap based on the frontier containing the
+            // witnessed position
+            let (past_subtree, past_supertree) = self.insert_frontier_nodes::<C>(
+                witness.tree().to_frontier().take().unwrap(),
+                &Retention::Marked,
+            )?;
+
+            // construct subtrees from the `filled` nodes of the witness
+            let (future_subtree, future_supertree) = Self::from_witness_filled_nodes(
+                Address::from(witness.position()),
+                witness.filled().iter().cloned(),
+                self.root_addr.level(),
+            );
+
+            // construct subtrees from the `cursor` part of the witness
+            let cursor_trees = witness
+                .cursor()
+                .as_ref()
+                .and_then(|c| c.to_frontier().take())
+                .map(|cursor_frontier| {
+                    Self::from_frontier(
+                        cursor_frontier,
+                        &Retention::Checkpoint {
+                            id: checkpoint_id,
+                            is_marked: false,
+                        },
+                        self.root_addr.level(),
+                    )
+                });
+
+            let (subtree, _) = past_subtree.insert_subtree(future_subtree, true)?;
+
+            let supertree =
+                LocatedPrunableTree::combine_optional(past_supertree, future_supertree, true)?.0;
+
+            Ok(if let Some((cursor_sub, cursor_super)) = cursor_trees {
+                let (complete_subtree, fragment) =
+                    if subtree.root_addr().contains(&cursor_sub.root_addr()) {
+                        // the cursor subtree can be absorbed into the current subtree
+                        (subtree.insert_subtree(cursor_sub, false)?.0, None)
+                    } else {
+                        // the cursor subtree must be maintained separately
+                        (subtree, Some(cursor_sub))
+                    };
+
+                let complete_supertree =
+                    LocatedPrunableTree::combine_optional(supertree, cursor_super, false)?.0;
+
+                (complete_subtree, complete_supertree, fragment)
+            } else {
+                (subtree, supertree, None)
+            })
+        } else {
+            Err(InsertionError::OutOfRange(
+                witness.position(),
                 subtree_range,
             ))
         }
