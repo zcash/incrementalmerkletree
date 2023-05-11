@@ -1422,10 +1422,10 @@ pub trait ShardStore {
     type Error;
 
     /// Returns the subtree at the given root address, if any such subtree exists.
-    fn get_shard(&self, shard_root: Address) -> Option<&LocatedPrunableTree<Self::H>>;
+    fn get_shard(&self, shard_root: Address) -> Option<LocatedPrunableTree<Self::H>>;
 
     /// Returns the subtree containing the maximum inserted leaf position.
-    fn last_shard(&self) -> Option<&LocatedPrunableTree<Self::H>>;
+    fn last_shard(&self) -> Option<LocatedPrunableTree<Self::H>>;
 
     /// Inserts or replaces the subtree having the same root address as the provided tree.
     ///
@@ -1444,17 +1444,11 @@ pub trait ShardStore {
     /// provided has level `SHARD_HEIGHT - 1`.
     fn truncate(&mut self, from: Address) -> Result<(), Self::Error>;
 
-    // /// TODO: Add a tree that is used to cache the known roots of subtrees in the "cap" of nodes between
-    // /// `SHARD_HEIGHT` and `DEPTH` that are otherwise not directly represented in the tree.  This
-    // /// cache will be automatically updated when computing roots and witnesses. Leaf nodes are empty
-    // /// because the annotation slot is consistently used to store the subtree hashes at each node.
-    // cap_cache: Tree<Option<Rc<H>>, ()>
-
     /// Returns the identifier for the checkpoint with the lowest associated position value.
-    fn min_checkpoint_id(&self) -> Option<&Self::CheckpointId>;
+    fn min_checkpoint_id(&self) -> Option<Self::CheckpointId>;
 
     /// Returns the identifier for the checkpoint with the highest associated position value.
-    fn max_checkpoint_id(&self) -> Option<&Self::CheckpointId>;
+    fn max_checkpoint_id(&self) -> Option<Self::CheckpointId>;
 
     /// Adds a checkpoint to the data store.
     fn add_checkpoint(
@@ -1472,7 +1466,7 @@ pub trait ShardStore {
     fn get_checkpoint_at_depth(
         &self,
         checkpoint_depth: usize,
-    ) -> Option<(&Self::CheckpointId, &Checkpoint)>;
+    ) -> Option<(Self::CheckpointId, Checkpoint)>;
 
     /// Iterates in checkpoint ID order over the first `limit` checkpoints, applying the
     /// given callback to each.
@@ -1508,11 +1502,11 @@ impl<S: ShardStore> ShardStore for &mut S {
     type CheckpointId = S::CheckpointId;
     type Error = S::Error;
 
-    fn get_shard(&self, shard_root: Address) -> Option<&LocatedPrunableTree<Self::H>> {
+    fn get_shard(&self, shard_root: Address) -> Option<LocatedPrunableTree<Self::H>> {
         S::get_shard(*self, shard_root)
     }
 
-    fn last_shard(&self) -> Option<&LocatedPrunableTree<Self::H>> {
+    fn last_shard(&self) -> Option<LocatedPrunableTree<Self::H>> {
         S::last_shard(*self)
     }
 
@@ -1528,11 +1522,11 @@ impl<S: ShardStore> ShardStore for &mut S {
         S::truncate(*self, from)
     }
 
-    fn min_checkpoint_id(&self) -> Option<&Self::CheckpointId> {
+    fn min_checkpoint_id(&self) -> Option<Self::CheckpointId> {
         S::min_checkpoint_id(self)
     }
 
-    fn max_checkpoint_id(&self) -> Option<&Self::CheckpointId> {
+    fn max_checkpoint_id(&self) -> Option<Self::CheckpointId> {
         S::max_checkpoint_id(self)
     }
 
@@ -1551,7 +1545,7 @@ impl<S: ShardStore> ShardStore for &mut S {
     fn get_checkpoint_at_depth(
         &self,
         checkpoint_depth: usize,
-    ) -> Option<(&Self::CheckpointId, &Checkpoint)> {
+    ) -> Option<(Self::CheckpointId, Checkpoint)> {
         S::get_checkpoint_at_depth(self, checkpoint_depth)
     }
 
@@ -1600,19 +1594,19 @@ impl<H, C: Ord> MemoryShardStore<H, C> {
     }
 }
 
-impl<H, C: Ord> ShardStore for MemoryShardStore<H, C> {
+impl<H: Clone, C: Clone + Ord> ShardStore for MemoryShardStore<H, C> {
     type H = H;
     type CheckpointId = C;
     type Error = InsertionError;
 
-    fn get_shard(&self, shard_root: Address) -> Option<&LocatedPrunableTree<H>> {
+    fn get_shard(&self, shard_root: Address) -> Option<LocatedPrunableTree<H>> {
         let shard_idx =
             usize::try_from(shard_root.index()).expect("SHARD_HEIGHT > 64 is unsupported");
-        self.shards.get(shard_idx)
+        self.shards.get(shard_idx).cloned()
     }
 
-    fn last_shard(&self) -> Option<&LocatedPrunableTree<H>> {
-        self.shards.last()
+    fn last_shard(&self) -> Option<LocatedPrunableTree<H>> {
+        self.shards.last().cloned()
     }
 
     fn put_shard(&mut self, subtree: LocatedPrunableTree<H>) -> Result<(), Self::Error> {
@@ -1655,20 +1649,24 @@ impl<H, C: Ord> ShardStore for MemoryShardStore<H, C> {
         Ok(self.checkpoints.len())
     }
 
-    fn get_checkpoint_at_depth(&self, checkpoint_depth: usize) -> Option<(&C, &Checkpoint)> {
+    fn get_checkpoint_at_depth(&self, checkpoint_depth: usize) -> Option<(C, Checkpoint)> {
         if checkpoint_depth == 0 {
             None
         } else {
-            self.checkpoints.iter().rev().nth(checkpoint_depth - 1)
+            self.checkpoints
+                .iter()
+                .rev()
+                .nth(checkpoint_depth - 1)
+                .map(|(id, c)| (id.clone(), c.clone()))
         }
     }
 
-    fn min_checkpoint_id(&self) -> Option<&C> {
-        self.checkpoints.keys().next()
+    fn min_checkpoint_id(&self) -> Option<C> {
+        self.checkpoints.keys().next().cloned()
     }
 
-    fn max_checkpoint_id(&self) -> Option<&C> {
-        self.checkpoints.keys().last()
+    fn max_checkpoint_id(&self) -> Option<C> {
+        self.checkpoints.keys().last().cloned()
     }
 
     fn with_checkpoints<F>(&mut self, limit: usize, mut callback: F) -> Result<(), Self::Error>
@@ -1768,10 +1766,10 @@ impl<
     }
 
     /// Returns the leaf value at the specified position, if it is a marked leaf.
-    pub fn get_marked_leaf(&self, position: Position) -> Option<&H> {
+    pub fn get_marked_leaf(&self, position: Position) -> Option<H> {
         self.store
             .get_shard(Address::above_position(Self::subtree_level(), position))
-            .and_then(|t| t.value_at_position(position))
+            .and_then(|t| t.value_at_position(position).cloned())
             .and_then(|(v, r)| if r.is_marked() { Some(v) } else { None })
     }
 
@@ -1843,7 +1841,7 @@ impl<
         S::Error: From<InsertionError>,
     {
         if let Retention::Checkpoint { id, .. } = &retention {
-            if self.store.max_checkpoint_id() >= Some(id) {
+            if self.store.max_checkpoint_id().as_ref() >= Some(id) {
                 return Err(InsertionError::CheckpointOutOfOrder.into());
             }
         }
@@ -1906,11 +1904,10 @@ impl<
         let mut all_incomplete = vec![];
         loop {
             if values.peek().is_some() {
-                let empty = LocatedTree::empty(subtree_root_addr);
                 let mut res = self
                     .store
                     .get_shard(subtree_root_addr)
-                    .unwrap_or(&empty)
+                    .unwrap_or_else(|| LocatedTree::empty(subtree_root_addr))
                     .batch_insert(start, values)?
                     .expect(
                         "Iterator containing leaf values to insert was verified to be nonempty.",
@@ -1948,11 +1945,10 @@ impl<
         for subtree in tree.decompose_to_level(Self::subtree_level()).into_iter() {
             let root_addr = subtree.root_addr;
             let contains_marked = subtree.root.contains_marked();
-            let empty = LocatedTree::empty(root_addr);
             let (new_subtree, mut incomplete) = self
                 .store
                 .get_shard(root_addr)
-                .unwrap_or(&empty)
+                .unwrap_or_else(|| LocatedTree::empty(root_addr))
                 .insert_subtree(subtree, contains_marked)?;
             self.store.put_shard(new_subtree)?;
             all_incomplete.append(&mut incomplete);
@@ -2010,7 +2006,7 @@ impl<
         }
 
         // checkpoint identifiers at the tip must be in increasing order
-        if self.store.max_checkpoint_id() >= Some(&checkpoint_id) {
+        if self.store.max_checkpoint_id().as_ref() >= Some(&checkpoint_id) {
             return Ok(false);
         }
 
@@ -2125,35 +2121,31 @@ impl<
             Ok(true)
         } else if self.store.checkpoint_count()? > 1 {
             Ok(match self.store.get_checkpoint_at_depth(checkpoint_depth) {
-                Some((checkpoint_id, c)) => {
-                    let checkpoint_id = checkpoint_id.clone();
-                    match c.tree_state {
-                        TreeState::Empty => {
-                            self.store
-                                .truncate(Address::from_parts(Self::subtree_level(), 0))?;
-                            self.store.truncate_checkpoints(&checkpoint_id)?;
-                            true
-                        }
-                        TreeState::AtPosition(position) => {
-                            let subtree_addr =
-                                Address::above_position(Self::subtree_level(), position);
-                            let replacement = self
-                                .store
-                                .get_shard(subtree_addr)
-                                .and_then(|s| s.truncate_to_position(position));
+                Some((checkpoint_id, c)) => match c.tree_state {
+                    TreeState::Empty => {
+                        self.store
+                            .truncate(Address::from_parts(Self::subtree_level(), 0))?;
+                        self.store.truncate_checkpoints(&checkpoint_id)?;
+                        true
+                    }
+                    TreeState::AtPosition(position) => {
+                        let subtree_addr = Address::above_position(Self::subtree_level(), position);
+                        let replacement = self
+                            .store
+                            .get_shard(subtree_addr)
+                            .and_then(|s| s.truncate_to_position(position));
 
-                            match replacement {
-                                Some(truncated) => {
-                                    self.store.truncate(subtree_addr)?;
-                                    self.store.put_shard(truncated)?;
-                                    self.store.truncate_checkpoints(&checkpoint_id)?;
-                                    true
-                                }
-                                None => false,
+                        match replacement {
+                            Some(truncated) => {
+                                self.store.truncate(subtree_addr)?;
+                                self.store.put_shard(truncated)?;
+                                self.store.truncate_checkpoints(&checkpoint_id)?;
+                                true
                             }
+                            None => false,
                         }
                     }
-                }
+                },
                 None => false,
             })
         } else {
@@ -2372,7 +2364,7 @@ impl<
                 return Ok(true);
             }
 
-            if let Some(cid) = self.store.min_checkpoint_id().cloned() {
+            if let Some(cid) = self.store.min_checkpoint_id() {
                 if self.store.update_checkpoint_with(&cid, |checkpoint| {
                     checkpoint.marks_removed.insert(position);
                     Ok(())
@@ -2892,7 +2884,7 @@ mod tests {
             ShardTree::max_leaf_position(self, 0).ok().flatten()
         }
 
-        fn get_marked_leaf(&self, position: Position) -> Option<&H> {
+        fn get_marked_leaf(&self, position: Position) -> Option<H> {
             ShardTree::get_marked_leaf(self, position)
         }
 
@@ -2911,7 +2903,7 @@ mod tests {
         }
 
         fn remove_mark(&mut self, position: Position) -> bool {
-            if let Some(c) = self.store.max_checkpoint_id().cloned() {
+            if let Some(c) = self.store.max_checkpoint_id() {
                 ShardTree::remove_mark(self, position, &c).unwrap()
             } else {
                 false

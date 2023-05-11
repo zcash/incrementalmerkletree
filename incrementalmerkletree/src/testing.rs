@@ -42,7 +42,7 @@ pub trait Tree<H, C> {
 
     /// Returns the leaf at the specified position if the tree can produce
     /// a witness for it.
-    fn get_marked_leaf(&self, position: Position) -> Option<&H>;
+    fn get_marked_leaf(&self, position: Position) -> Option<H>;
 
     /// Return a set of all the positions for which we have marked.
     fn marked_positions(&self) -> BTreeSet<Position>;
@@ -420,7 +420,7 @@ impl<H: Hashable + Ord + Clone + Debug, C: Clone, I: Tree<H, C>, E: Tree<H, C>> 
         a
     }
 
-    fn get_marked_leaf(&self, position: Position) -> Option<&H> {
+    fn get_marked_leaf(&self, position: Position) -> Option<H> {
         let a = self.inefficient.get_marked_leaf(position);
         let b = self.efficient.get_marked_leaf(position);
         assert_eq!(a, b);
