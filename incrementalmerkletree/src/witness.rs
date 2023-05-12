@@ -3,7 +3,7 @@ use std::iter::repeat;
 
 use crate::{
     frontier::{CommitmentTree, PathFiller},
-    Hashable, Level, MerklePath, Position,
+    Hashable, Level, MerklePath, Position, Source,
 };
 
 /// An updatable witness to a path from a position in a particular [`CommitmentTree`].
@@ -26,7 +26,7 @@ use crate::{
 /// tree.append(TestNode(0));
 /// tree.append(TestNode(1));
 /// let mut witness = IncrementalWitness::from_tree(tree.clone());
-/// assert_eq!(witness.position(), Position::from(1));
+/// assert_eq!(witness.witnessed_position(), Position::from(1));
 /// assert_eq!(tree.root(), witness.root());
 ///
 /// let next = TestNode(2);
@@ -84,9 +84,32 @@ impl<H, const DEPTH: u8> IncrementalWitness<H, DEPTH> {
     }
 
     /// Returns the position of the witnessed leaf node in the commitment tree.
-    pub fn position(&self) -> Position {
+    pub fn witnessed_position(&self) -> Position {
         Position::try_from(self.tree.size() - 1)
             .expect("Commitment trees with more than 2^64 leaves are unsupported.")
+    }
+
+    /// Returns the position of the last leaf appended to the witness.
+    pub fn tip_position(&self) -> Position {
+        let leaves_to_cursor_start = self
+            .witnessed_position()
+            .witness_addrs(Level::from(DEPTH))
+            .filter_map(|(addr, source)| {
+                if source == Source::Future {
+                    Some(addr)
+                } else {
+                    None
+                }
+            })
+            .take(self.filled.len())
+            .fold(0u64, |acc, addr| acc + 2u64.pow(addr.level().into()));
+
+        self.witnessed_position()
+            + leaves_to_cursor_start
+            + self.cursor.as_ref().map_or(0, |c| {
+                u64::try_from(c.size())
+                    .expect("Note commitment trees with > 2^64 leaves are not supported.")
+            })
     }
 
     /// Finds the next "depth" of an unfilled subtree.
@@ -212,6 +235,24 @@ impl<H: Hashable + Clone, const DEPTH: u8> IncrementalWitness<H, DEPTH> {
 
         assert_eq!(auth_path.len(), usize::from(depth));
 
-        MerklePath::from_parts(auth_path, self.position()).ok()
+        MerklePath::from_parts(auth_path, self.witnessed_position()).ok()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::{frontier::CommitmentTree, witness::IncrementalWitness, Position};
+    #[test]
+    fn witness_tip_position() {
+        let mut base_tree = CommitmentTree::<String, 6>::empty();
+        for c in 'a'..'h' {
+            base_tree.append(c.to_string()).unwrap();
+        }
+        let mut witness = IncrementalWitness::from_tree(base_tree);
+        for c in 'h'..'z' {
+            witness.append(c.to_string()).unwrap();
+        }
+
+        assert_eq!(witness.tip_position(), Position::from(24));
     }
 }

@@ -1071,17 +1071,23 @@ impl<H: Hashable + Clone + PartialEq> LocatedPrunableTree<H> {
 
     #[cfg(feature = "legacy-api")]
     fn combine_optional(
-        t0: Option<Self>,
-        t1: Option<Self>,
-        t1_contains_marked: bool,
-    ) -> Result<(Option<Self>, Vec<IncompleteAt>), InsertionError> {
-        Ok(t0
-            .as_ref()
-            .zip(t1)
-            .map(|(t0, t1)| t0.insert_subtree(t1, t1_contains_marked))
-            .transpose()?
-            .map(|(t, v)| (Some(t), v))
-            .unwrap_or((t0, vec![])))
+        opt_t0: Option<Self>,
+        opt_t1: Option<Self>,
+        contains_marked: bool,
+    ) -> Result<Option<Self>, InsertionError> {
+        match (opt_t0, opt_t1) {
+            (Some(t0), Some(t1)) => {
+                let into = LocatedTree {
+                    root_addr: t0.root_addr().common_ancestor(&t1.root_addr()),
+                    root: Tree::empty(),
+                };
+
+                into.insert_subtree(t0, contains_marked)
+                    .and_then(|(into, _)| into.insert_subtree(t1, contains_marked))
+                    .map(|(t, _)| Some(t))
+            }
+            (t0, t1) => Ok(t0.or(t1)),
+        }
     }
 
     /// Append a single value at the first available position in the tree.
@@ -1377,11 +1383,24 @@ impl<H: Hashable + Clone + PartialEq> LocatedPrunableTree<H> {
         leaf_retention: &Retention<C>,
         split_at: Level,
     ) -> (Self, Option<Self>) {
-        let mut addr = Address::from(frontier.position());
+        let (position, leaf, ommers) = frontier.into_parts();
+        Self::from_frontier_parts(position, leaf, ommers.into_iter(), leaf_retention, split_at)
+    }
+
+    // Permits construction of a subtree from legacy `CommitmentTree` data that may
+    // have inaccurate position information (e.g. in the case that the tree is the
+    // cursor for an `IncrementalWitness`).
+    fn from_frontier_parts<C>(
+        position: Position,
+        leaf: H,
+        mut ommers: impl Iterator<Item = H>,
+        leaf_retention: &Retention<C>,
+        split_at: Level,
+    ) -> (Self, Option<Self>) {
+        let mut addr = Address::from(position);
         let mut subtree = Tree(Node::Leaf {
-            value: (frontier.leaf().clone(), leaf_retention.into()),
+            value: (leaf, leaf_retention.into()),
         });
-        let mut ommers = frontier.take_ommers().into_iter();
 
         while addr.level() < split_at {
             if addr.index() & 0x1 == 0 {
@@ -1550,7 +1569,7 @@ impl<H: Hashable + Clone + PartialEq> LocatedPrunableTree<H> {
         checkpoint_id: C,
     ) -> Result<(Self, Option<Self>, Option<Self>), InsertionError> {
         let subtree_range = self.root_addr.position_range();
-        if subtree_range.contains(&witness.position()) {
+        if subtree_range.contains(&witness.witnessed_position()) {
             // construct the subtree and cap based on the frontier containing the
             // witnessed position
             let (past_subtree, past_supertree) = self.insert_frontier_nodes::<C>(
@@ -1560,31 +1579,31 @@ impl<H: Hashable + Clone + PartialEq> LocatedPrunableTree<H> {
 
             // construct subtrees from the `filled` nodes of the witness
             let (future_subtree, future_supertree) = Self::from_witness_filled_nodes(
-                Address::from(witness.position()),
+                Address::from(witness.witnessed_position()),
                 witness.filled().iter().cloned(),
                 self.root_addr.level(),
             );
 
             // construct subtrees from the `cursor` part of the witness
-            let cursor_trees = witness
-                .cursor()
-                .as_ref()
-                .and_then(|c| c.to_frontier().take())
-                .map(|cursor_frontier| {
-                    Self::from_frontier(
-                        cursor_frontier,
-                        &Retention::Checkpoint {
-                            id: checkpoint_id,
-                            is_marked: false,
-                        },
-                        self.root_addr.level(),
-                    )
-                });
+            let cursor_trees = witness.cursor().as_ref().filter(|c| c.size() > 0).map(|c| {
+                Self::from_frontier_parts(
+                    witness.tip_position(),
+                    c.leaf()
+                        .cloned()
+                        .expect("Cannot have an empty leaf for a non-empty tree"),
+                    c.ommers_iter().cloned(),
+                    &Retention::Checkpoint {
+                        id: checkpoint_id,
+                        is_marked: false,
+                    },
+                    self.root_addr.level(),
+                )
+            });
 
             let (subtree, _) = past_subtree.insert_subtree(future_subtree, true)?;
 
             let supertree =
-                LocatedPrunableTree::combine_optional(past_supertree, future_supertree, true)?.0;
+                LocatedPrunableTree::combine_optional(past_supertree, future_supertree, true)?;
 
             Ok(if let Some((cursor_sub, cursor_super)) = cursor_trees {
                 let (complete_subtree, fragment) =
@@ -1597,7 +1616,7 @@ impl<H: Hashable + Clone + PartialEq> LocatedPrunableTree<H> {
                     };
 
                 let complete_supertree =
-                    LocatedPrunableTree::combine_optional(supertree, cursor_super, false)?.0;
+                    LocatedPrunableTree::combine_optional(supertree, cursor_super, false)?;
 
                 (complete_subtree, complete_supertree, fragment)
             } else {
@@ -1605,7 +1624,7 @@ impl<H: Hashable + Clone + PartialEq> LocatedPrunableTree<H> {
             })
         } else {
             Err(InsertionError::OutOfRange(
-                witness.position(),
+                witness.witnessed_position(),
                 subtree_range,
             ))
         }
@@ -2225,7 +2244,8 @@ where
     }
 
     /// Add the leaf and ommers of the provided frontier as nodes within the subtree corresponding
-    /// to the frontier's position.
+    /// to the frontier's position, and update the cap to include the ommer nodes at levels greater
+    /// than or equal to the shard height.
     pub fn insert_frontier_nodes(
         &mut self,
         frontier: NonEmptyFrontier<H>,
@@ -2245,23 +2265,14 @@ where
 
         self.store.put_shard(updated_subtree)?;
 
-        // if the position of the frontier is such that it is not at risk of being rolled back,
-        // add the remainder of the frontier to the cap cache
-        if self
-            .store
-            .get_checkpoint_at_depth(self.store.checkpoint_count()?)
-            .and_then(|(_, c)| c.position())
-            >= Some(leaf_position)
-        {
-            if let Some(supertree) = supertree {
-                let new_cap = LocatedTree {
-                    root_addr: Self::root_addr(),
-                    root: self.store.get_cap()?,
-                }
-                .insert_subtree(supertree, leaf_retention.is_marked())?;
-
-                self.store.put_cap(new_cap.0.root)?;
+        if let Some(supertree) = supertree {
+            let new_cap = LocatedTree {
+                root_addr: Self::root_addr(),
+                root: self.store.get_cap()?,
             }
+            .insert_subtree(supertree, leaf_retention.is_marked())?;
+
+            self.store.put_cap(new_cap.0.root)?;
         }
 
         if let Retention::Checkpoint { id, is_marked: _ } = leaf_retention {
@@ -2270,6 +2281,60 @@ where
         }
 
         self.prune_excess_checkpoints()?;
+        Ok(())
+    }
+
+    /// Add the leaf and ommers of the provided witness as nodes within the subtree corresponding
+    /// to the frontier's position, and update the cap to include the nodes of the witness at
+    /// levels greater than or equal to the shard height. Also, if the witness spans multiple
+    /// subtrees, update the subtree corresponding to the current witness "tip" accordingly.
+    #[cfg(feature = "legacy-api")]
+    pub fn insert_witness_nodes(
+        &mut self,
+        witness: IncrementalWitness<H, DEPTH>,
+        checkpoint_id: S::CheckpointId,
+    ) -> Result<(), S::Error>
+    where
+        S::Error: From<InsertionError>,
+    {
+        let leaf_position = witness.witnessed_position();
+        let subtree_root_addr = Address::above_position(Self::subtree_level(), leaf_position);
+
+        let shard = self
+            .store
+            .get_shard(subtree_root_addr)
+            .unwrap_or_else(|| LocatedTree::empty(subtree_root_addr));
+
+        let (updated_subtree, supertree, tip_subtree) =
+            shard.insert_witness_nodes(witness, checkpoint_id)?;
+
+        self.store.put_shard(updated_subtree)?;
+
+        if let Some(supertree) = supertree {
+            let new_cap = LocatedTree {
+                root_addr: Self::root_addr(),
+                root: self.store.get_cap()?,
+            }
+            .insert_subtree(supertree, true)?;
+
+            self.store.put_cap(new_cap.0.root)?;
+        }
+
+        if let Some(tip_subtree) = tip_subtree {
+            let tip_subtree_addr = Address::above_position(
+                Self::subtree_level(),
+                tip_subtree.root_addr().position_range_start(),
+            );
+
+            let tip_shard = self
+                .store
+                .get_shard(tip_subtree_addr)
+                .unwrap_or_else(|| LocatedTree::empty(tip_subtree_addr));
+
+            self.store
+                .put_shard(tip_shard.insert_subtree(tip_subtree, false)?.0)?;
+        }
+
         Ok(())
     }
 
@@ -2842,6 +2907,9 @@ mod tests {
     };
     use proptest::prelude::*;
     use std::collections::BTreeSet;
+
+    #[cfg(feature = "legacy-api")]
+    use incrementalmerkletree::{frontier::CommitmentTree, witness::IncrementalWitness};
 
     fn str_leaf<A>(c: &str) -> Tree<A, String> {
         Tree(Node::Leaf {
@@ -3427,5 +3495,53 @@ mod tests {
             tree2.insert_frontier_nodes::<()>(frontier, &Retention::Ephemeral),
             Err(InsertionError::Conflict(_))
         );
+    }
+
+    #[test]
+    #[cfg(feature = "legacy-api")]
+    fn insert_witness_nodes() {
+        let mut base_tree = CommitmentTree::<String, 6>::empty();
+        for c in 'a'..'h' {
+            base_tree.append(c.to_string()).unwrap();
+        }
+        let mut witness = IncrementalWitness::from_tree(base_tree);
+        for c in 'h'..'z' {
+            witness.append(c.to_string()).unwrap();
+        }
+
+        let root_addr = Address::from_parts(Level::from(3), 0);
+        let tree = LocatedPrunableTree::empty(root_addr);
+        let result = tree.insert_witness_nodes(witness, 3usize);
+        assert_matches!(result, Ok((ref _t, Some(ref _c), Some(ref _r))));
+
+        if let Ok((t, Some(c), Some(r))) = result {
+            // verify that we can find the "marked" leaf
+            assert_eq!(
+                t.root.root_hash(root_addr, Position::from(7)),
+                Ok("abcdefg_".to_string())
+            );
+
+            assert_eq!(
+                c.root,
+                Tree::parent(
+                    None,
+                    Tree::parent(
+                        None,
+                        Tree::empty(),
+                        Tree::leaf(("ijklmnop".to_string(), RetentionFlags::EPHEMERAL)),
+                    ),
+                    Tree::parent(
+                        None,
+                        Tree::leaf(("qrstuvwx".to_string(), RetentionFlags::EPHEMERAL)),
+                        Tree::empty()
+                    )
+                )
+            );
+
+            assert_eq!(
+                r.root.root_hash(Address::from_parts(Level::from(3), 3), Position::from(25)), 
+                Ok("y_______".to_string())
+            );
+        }
     }
 }

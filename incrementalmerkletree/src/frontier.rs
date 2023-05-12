@@ -54,6 +54,11 @@ impl<H> NonEmptyFrontier<H> {
         }
     }
 
+    /// Decomposes the frontier into its constituent parts
+    pub fn into_parts(self) -> (Position, H, Vec<H>) {
+        (self.position, self.leaf, self.ommers)
+    }
+
     /// Returns the position of the most recently appended leaf.
     pub fn position(&self) -> Position {
         self.position
@@ -68,11 +73,6 @@ impl<H> NonEmptyFrontier<H> {
     /// leaf most recently appended to the frontier.
     pub fn ommers(&self) -> &[H] {
         &self.ommers
-    }
-
-    /// Consumes this frontier and returns its contained ommers vector.
-    pub fn take_ommers(self) -> Vec<H> {
-        self.ommers
     }
 }
 
@@ -355,6 +355,22 @@ impl<H, const DEPTH: u8> CommitmentTree<H, DEPTH> {
 
     pub fn parents(&self) -> &Vec<Option<H>> {
         &self.parents
+    }
+
+    pub fn leaf(&self) -> Option<&H> {
+        self.right.as_ref().or_else(|| self.left.as_ref())
+    }
+
+    pub fn ommers_iter(&self) -> Box<dyn Iterator<Item = &'_ H> + '_> {
+        if self.right.is_some() {
+            Box::new(
+                self.left
+                    .iter()
+                    .chain(self.parents.iter().filter_map(|v| v.as_ref())),
+            )
+        } else {
+            Box::new(self.parents.iter().filter_map(|v| v.as_ref()))
+        }
     }
 
     /// Returns the number of leaf nodes in the tree.
