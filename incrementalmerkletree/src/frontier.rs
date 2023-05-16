@@ -358,7 +358,7 @@ impl<H, const DEPTH: u8> CommitmentTree<H, DEPTH> {
     }
 
     pub fn leaf(&self) -> Option<&H> {
-        self.right.as_ref().or_else(|| self.left.as_ref())
+        self.right.as_ref().or(self.left.as_ref())
     }
 
     pub fn ommers_iter(&self) -> Box<dyn Iterator<Item = &'_ H> + '_> {
