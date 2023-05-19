@@ -71,11 +71,11 @@ pub struct CompleteTree<H, C: Ord, const DEPTH: u8> {
 
 impl<H: Hashable, C: Clone + Ord + core::fmt::Debug, const DEPTH: u8> CompleteTree<H, C, DEPTH> {
     /// Creates a new, empty binary tree
-    pub fn new(max_checkpoints: usize, initial_checkpoint_id: C) -> Self {
+    pub fn new(max_checkpoints: usize) -> Self {
         Self {
             leaves: vec![],
             marks: BTreeSet::new(),
-            checkpoints: BTreeMap::from([(initial_checkpoint_id, Checkpoint::at_length(0))]),
+            checkpoints: BTreeMap::new(),
             max_checkpoints,
         }
     }
@@ -140,22 +140,18 @@ impl<H: Hashable, C: Clone + Ord + core::fmt::Debug, const DEPTH: u8> CompleteTr
     /// Marks the current tree state leaf as a value that we're interested in
     /// marking. Returns the current position if the tree is non-empty.
     fn mark(&mut self) -> Option<Position> {
-        match self.current_position() {
-            Some(pos) => {
-                if !self.marks.contains(&pos) {
-                    self.marks.insert(pos);
-                    self.checkpoints
-                        .iter_mut()
-                        .rev()
-                        .next()
-                        .unwrap()
-                        .1
-                        .marked
-                        .insert(pos);
+        if let Some(pos) = self.current_position() {
+            if !self.marks.contains(&pos) {
+                self.marks.insert(pos);
+
+                if let Some(checkpoint) = self.checkpoints.values_mut().rev().next() {
+                    checkpoint.marked.insert(pos);
                 }
-                Some(pos)
             }
-            None => None,
+
+            Some(pos)
+        } else {
+            None
         }
     }
 
@@ -282,14 +278,11 @@ impl<H: Hashable + PartialEq + Clone, C: Ord + Clone + core::fmt::Debug, const D
 
     fn remove_mark(&mut self, position: Position) -> bool {
         if self.marks.contains(&position) {
-            self.checkpoints
-                .iter_mut()
-                .rev()
-                .next()
-                .unwrap()
-                .1
-                .forgotten
-                .insert(position);
+            if let Some(c) = self.checkpoints.values_mut().rev().next() {
+                c.forgotten.insert(position);
+            } else {
+                self.marks.remove(&position);
+            }
             true
         } else {
             false
@@ -297,7 +290,7 @@ impl<H: Hashable + PartialEq + Clone, C: Ord + Clone + core::fmt::Debug, const D
     }
 
     fn checkpoint(&mut self, id: C) -> bool {
-        if Some(&id) > self.checkpoints.iter().rev().next().map(|(id, _)| id) {
+        if Some(&id) > self.checkpoints.keys().rev().next() {
             Self::checkpoint(self, id, self.current_position());
             true
         } else {
@@ -306,8 +299,7 @@ impl<H: Hashable + PartialEq + Clone, C: Ord + Clone + core::fmt::Debug, const D
     }
 
     fn rewind(&mut self) -> bool {
-        if self.checkpoints.len() > 1 {
-            let (id, c) = self.checkpoints.iter().rev().next().unwrap();
+        if let Some((id, c)) = self.checkpoints.iter().rev().next() {
             self.leaves.truncate(c.leaves_len);
             for pos in c.marked.iter() {
                 self.marks.remove(pos);
@@ -342,7 +334,7 @@ mod tests {
             expected = SipHashable::combine(lvl.into(), &expected, &expected);
         }
 
-        let tree = CompleteTree::<SipHashable, (), DEPTH>::new(100, ());
+        let tree = CompleteTree::<SipHashable, (), DEPTH>::new(100);
         assert_eq!(tree.root(0).unwrap(), expected);
     }
 
@@ -351,7 +343,7 @@ mod tests {
         const DEPTH: u8 = 3;
         let values = (0..(1 << DEPTH)).map(SipHashable);
 
-        let mut tree = CompleteTree::<SipHashable, (), DEPTH>::new(100, ());
+        let mut tree = CompleteTree::<SipHashable, (), DEPTH>::new(100);
         for value in values {
             assert!(tree.append(value, Retention::Ephemeral).is_ok());
         }
@@ -376,21 +368,17 @@ mod tests {
 
     #[test]
     fn append() {
-        check_append(|max_checkpoints| CompleteTree::<String, usize, 4>::new(max_checkpoints, 0));
+        check_append(CompleteTree::<String, usize, 4>::new);
     }
 
     #[test]
     fn root_hashes() {
-        check_root_hashes(|max_checkpoints| {
-            CompleteTree::<String, usize, 4>::new(max_checkpoints, 0)
-        });
+        check_root_hashes(CompleteTree::<String, usize, 4>::new);
     }
 
     #[test]
     fn witnesses() {
-        check_witnesses(|max_checkpoints| {
-            CompleteTree::<String, usize, 4>::new(max_checkpoints, 0)
-        });
+        check_witnesses(CompleteTree::<String, usize, 4>::new);
     }
 
     #[test]
@@ -400,7 +388,7 @@ mod tests {
         const DEPTH: u8 = 3;
         let values = (0..(1 << DEPTH)).map(SipHashable);
 
-        let mut tree = CompleteTree::<SipHashable, (), DEPTH>::new(100, ());
+        let mut tree = CompleteTree::<SipHashable, (), DEPTH>::new(100);
         for value in values {
             assert!(Tree::append(&mut tree, value, Retention::Marked));
         }
@@ -435,14 +423,14 @@ mod tests {
     #[test]
     fn checkpoint_rewind() {
         check_checkpoint_rewind(|max_checkpoints| {
-            CompleteTree::<String, usize, 4>::new(max_checkpoints, 0)
+            CompleteTree::<String, usize, 4>::new(max_checkpoints)
         });
     }
 
     #[test]
     fn rewind_remove_mark() {
         check_rewind_remove_mark(|max_checkpoints| {
-            CompleteTree::<String, usize, 4>::new(max_checkpoints, 0)
+            CompleteTree::<String, usize, 4>::new(max_checkpoints)
         });
     }
 }
