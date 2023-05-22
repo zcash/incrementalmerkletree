@@ -2028,6 +2028,8 @@ where
             return Ok(false);
         }
 
+        // Update the rightmost subtree to add the `CHECKPOINT` flag to the right-most leaf (which
+        // need not be a level-0 leaf; it's fine to rewind to a pruned state).
         if let Some(subtree) = self.store.last_shard()? {
             if let Some((replacement, checkpoint_position)) = go(subtree.root_addr, &subtree.root) {
                 if self
