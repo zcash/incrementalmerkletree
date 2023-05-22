@@ -230,11 +230,11 @@ impl<H: Hashable + PartialEq + Clone, C: Ord + Clone + core::fmt::Debug, const D
         self.marks.clone()
     }
 
-    fn get_marked_leaf(&self, position: Position) -> Option<&H> {
+    fn get_marked_leaf(&self, position: Position) -> Option<H> {
         if self.marks.contains(&position) {
             self.leaves
                 .get(usize::try_from(position).expect(MAX_COMPLETE_SIZE_ERROR))
-                .and_then(|opt: &Option<H>| opt.as_ref())
+                .and_then(|opt: &Option<H>| opt.clone())
         } else {
             None
         }

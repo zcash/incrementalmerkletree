@@ -1032,8 +1032,8 @@ mod tests {
             BridgeTree::current_position(self)
         }
 
-        fn get_marked_leaf(&self, position: Position) -> Option<&H> {
-            BridgeTree::get_marked_leaf(self, position)
+        fn get_marked_leaf(&self, position: Position) -> Option<H> {
+            BridgeTree::get_marked_leaf(self, position).cloned()
         }
 
         fn marked_positions(&self) -> BTreeSet<Position> {
