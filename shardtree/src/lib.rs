@@ -1761,21 +1761,12 @@ impl<
 where
     S::Error: From<InsertionError> + From<QueryError>,
 {
-    /// Creates a new empty tree and establishes a checkpoint for the empty tree at the given
-    /// checkpoint identifier.
-    pub fn empty(
-        store: S,
-        max_checkpoints: usize,
-        initial_checkpoint_id: C,
-    ) -> Result<Self, S::Error> {
-        let mut result = Self {
+    /// Creates a new empty tree.
+    pub fn empty(store: S, max_checkpoints: usize) -> Self {
+        Self {
             store,
             max_checkpoints,
-        };
-        result
-            .store
-            .add_checkpoint(initial_checkpoint_id, Checkpoint::tree_empty())?;
-        Ok(result)
+        }
     }
 
     /// Constructs a wrapper around the provided shard store without initialization.
@@ -1797,11 +1788,16 @@ where
         Level::from(SHARD_HEIGHT - 1)
     }
 
+    /// Returns the root address of the subtree that contains the specified position.
+    pub fn subtree_addr(pos: Position) -> Address {
+        Address::above_position(Self::subtree_level(), pos)
+    }
+
     /// Returns the leaf value at the specified position, if it is a marked leaf.
     pub fn get_marked_leaf(&self, position: Position) -> Result<Option<H>, S::Error> {
         Ok(self
             .store
-            .get_shard(Address::above_position(Self::subtree_level(), position))?
+            .get_shard(Self::subtree_addr(position))?
             .and_then(|t| t.value_at_position(position).cloned())
             .and_then(|(v, r)| if r.is_marked() { Some(v) } else { None }))
     }
@@ -1923,7 +1919,7 @@ where
         values: I,
     ) -> Result<Option<(Position, Vec<IncompleteAt>)>, S::Error> {
         let mut values = values.peekable();
-        let mut subtree_root_addr = Address::above_position(Self::subtree_level(), start);
+        let mut subtree_root_addr = Self::subtree_addr(start);
         let mut max_insert_position = None;
         let mut all_incomplete = vec![];
         loop {
@@ -2031,19 +2027,13 @@ where
         // Update the rightmost subtree to add the `CHECKPOINT` flag to the right-most leaf (which
         // need not be a level-0 leaf; it's fine to rewind to a pruned state).
         if let Some(subtree) = self.store.last_shard()? {
-            if let Some((replacement, checkpoint_position)) = go(subtree.root_addr, &subtree.root) {
-                if self
-                    .store
-                    .put_shard(LocatedTree {
-                        root_addr: subtree.root_addr,
-                        root: replacement,
-                    })
-                    .is_err()
-                {
-                    return Ok(false);
-                }
+            if let Some((replacement, pos)) = go(subtree.root_addr, &subtree.root) {
+                self.store.put_shard(LocatedTree {
+                    root_addr: subtree.root_addr,
+                    root: replacement,
+                })?;
                 self.store
-                    .add_checkpoint(checkpoint_id, Checkpoint::at_position(checkpoint_position))?;
+                    .add_checkpoint(checkpoint_id, Checkpoint::at_position(pos))?;
 
                 // early return once we've updated the tree state
                 self.prune_excess_checkpoints()?;
@@ -2075,7 +2065,7 @@ where
                     checkpoints_to_delete.push(cid.clone());
 
                     let mut clear_at = |pos, flags_to_clear| {
-                        let subtree_addr = Address::above_position(Self::subtree_level(), pos);
+                        let subtree_addr = Self::subtree_addr(pos);
                         clear_positions
                             .entry(subtree_addr)
                             .and_modify(|to_clear| {
@@ -2132,36 +2122,32 @@ where
     ) -> Result<bool, S::Error> {
         Ok(if checkpoint_depth == 0 {
             true
-        } else if self.store.checkpoint_count()? > 1 {
-            if let Some((checkpoint_id, c)) =
-                self.store.get_checkpoint_at_depth(checkpoint_depth)?
-            {
-                match c.tree_state {
-                    TreeState::Empty => {
-                        self.store
-                            .truncate(Address::from_parts(Self::subtree_level(), 0))?;
+        } else if let Some((checkpoint_id, c)) =
+            self.store.get_checkpoint_at_depth(checkpoint_depth)?
+        {
+            match c.tree_state {
+                TreeState::Empty => {
+                    self.store
+                        .truncate(Address::from_parts(Self::subtree_level(), 0))?;
+                    self.store.truncate_checkpoints(&checkpoint_id)?;
+                    true
+                }
+                TreeState::AtPosition(position) => {
+                    let subtree_addr = Self::subtree_addr(position);
+                    let replacement = self
+                        .store
+                        .get_shard(subtree_addr)?
+                        .and_then(|s| s.truncate_to_position(position));
+
+                    if let Some(truncated) = replacement {
+                        self.store.truncate(subtree_addr)?;
+                        self.store.put_shard(truncated)?;
                         self.store.truncate_checkpoints(&checkpoint_id)?;
                         true
-                    }
-                    TreeState::AtPosition(position) => {
-                        let subtree_addr = Address::above_position(Self::subtree_level(), position);
-                        let replacement = self
-                            .store
-                            .get_shard(subtree_addr)?
-                            .and_then(|s| s.truncate_to_position(position));
-
-                        if let Some(truncated) = replacement {
-                            self.store.truncate(subtree_addr)?;
-                            self.store.put_shard(truncated)?;
-                            self.store.truncate_checkpoints(&checkpoint_id)?;
-                            true
-                        } else {
-                            false
-                        }
+                    } else {
+                        false
                     }
                 }
-            } else {
-                false
             }
         } else {
             false
@@ -2332,7 +2318,7 @@ where
                 Address::from_parts(Level::from(0), position.into()),
             )))
         } else {
-            let subtree_addr = Address::above_position(Self::subtree_level(), position);
+            let subtree_addr = Self::subtree_addr(position);
 
             // compute the witness for the specified position up to the subtree root
             let mut witness = self.store.get_shard(subtree_addr)?.map_or_else(
@@ -2355,37 +2341,44 @@ where
     /// Make a marked leaf at a position eligible to be pruned.
     ///
     /// If the checkpoint associated with the specified identifier does not exist because the
-    /// corresponding checkpoint would have been more than `max_checkpoints` deep, the removal
-    /// is recorded as of the first existing checkpoint and the associated leaves will be pruned
-    /// when that checkpoint is subsequently removed.
+    /// corresponding checkpoint would have been more than `max_checkpoints` deep, the removal is
+    /// recorded as of the first existing checkpoint and the associated leaves will be pruned when
+    /// that checkpoint is subsequently removed.
+    ///
+    /// Returns `Ok(true)` if a mark was successfully removed from the leaf at the specified
+    /// position, `Ok(false)` if the tree does not contain a leaf at the specified position or is
+    /// not marked, or an error if one is produced by the underlying data store.
     pub fn remove_mark(
         &mut self,
         position: Position,
-        as_of_checkpoint: &C,
+        as_of_checkpoint: Option<&C>,
     ) -> Result<bool, S::Error> {
-        #[allow(clippy::blocks_in_if_conditions)]
-        if self.get_marked_leaf(position)?.is_some() {
-            if self
-                .store
-                .update_checkpoint_with(as_of_checkpoint, |checkpoint| {
-                    checkpoint.marks_removed.insert(position);
-                    Ok(())
-                })?
+        match self.store.get_shard(Self::subtree_addr(position))? {
+            Some(shard)
+                if shard
+                    .value_at_position(position)
+                    .iter()
+                    .any(|(_, r)| r.is_marked()) =>
             {
-                return Ok(true);
-            }
-
-            if let Some(cid) = self.store.min_checkpoint_id()? {
-                if self.store.update_checkpoint_with(&cid, |checkpoint| {
-                    checkpoint.marks_removed.insert(position);
-                    Ok(())
-                })? {
-                    return Ok(true);
+                match as_of_checkpoint {
+                    Some(cid) if Some(cid) >= self.store.min_checkpoint_id()?.as_ref() => {
+                        self.store.update_checkpoint_with(cid, |checkpoint| {
+                            checkpoint.marks_removed.insert(position);
+                            Ok(())
+                        })
+                    }
+                    _ => {
+                        // if no checkpoint was provided, or if the checkpoint is too far in the past,
+                        // remove the mark directly.
+                        self.store.put_shard(
+                            shard.clear_flags(BTreeMap::from([(position, RetentionFlags::MARKED)])),
+                        )?;
+                        Ok(true)
+                    }
                 }
             }
+            _ => Ok(false),
         }
-
-        Ok(false)
     }
 }
 
@@ -2786,7 +2779,7 @@ mod tests {
     #[test]
     fn shardtree_insertion() {
         let mut tree: ShardTree<MemoryShardStore<String, usize>, 4, 3> =
-            ShardTree::empty(MemoryShardStore::empty(), 100, 0).unwrap();
+            ShardTree::empty(MemoryShardStore::empty(), 100);
         assert_matches!(
             tree.batch_insert(
                 Position::from(1),
@@ -2915,11 +2908,12 @@ mod tests {
         }
 
         fn remove_mark(&mut self, position: Position) -> bool {
-            if let Ok(Some(c)) = self.store.max_checkpoint_id() {
-                ShardTree::remove_mark(self, position, &c).unwrap()
-            } else {
-                false
-            }
+            ShardTree::remove_mark(
+                self,
+                position,
+                self.store.max_checkpoint_id().unwrap().as_ref(),
+            )
+            .unwrap()
         }
 
         fn checkpoint(&mut self, checkpoint_id: C) -> bool {
@@ -2934,60 +2928,35 @@ mod tests {
     #[test]
     fn append() {
         check_append(|m| {
-            ShardTree::<MemoryShardStore<String, usize>, 4, 3>::empty(
-                MemoryShardStore::empty(),
-                m,
-                0,
-            )
-            .unwrap()
+            ShardTree::<MemoryShardStore<String, usize>, 4, 3>::empty(MemoryShardStore::empty(), m)
         });
     }
 
     #[test]
     fn root_hashes() {
         check_root_hashes(|m| {
-            ShardTree::<MemoryShardStore<String, usize>, 4, 3>::empty(
-                MemoryShardStore::empty(),
-                m,
-                0,
-            )
-            .unwrap()
+            ShardTree::<MemoryShardStore<String, usize>, 4, 3>::empty(MemoryShardStore::empty(), m)
         });
     }
 
     #[test]
     fn witnesses() {
         check_witnesses(|m| {
-            ShardTree::<MemoryShardStore<String, usize>, 4, 3>::empty(
-                MemoryShardStore::empty(),
-                m,
-                0,
-            )
-            .unwrap()
+            ShardTree::<MemoryShardStore<String, usize>, 4, 3>::empty(MemoryShardStore::empty(), m)
         });
     }
 
     #[test]
     fn checkpoint_rewind() {
         check_checkpoint_rewind(|m| {
-            ShardTree::<MemoryShardStore<String, usize>, 4, 3>::empty(
-                MemoryShardStore::empty(),
-                m,
-                0,
-            )
-            .unwrap()
+            ShardTree::<MemoryShardStore<String, usize>, 4, 3>::empty(MemoryShardStore::empty(), m)
         });
     }
 
     #[test]
     fn rewind_remove_mark() {
         check_rewind_remove_mark(|m| {
-            ShardTree::<MemoryShardStore<String, usize>, 4, 3>::empty(
-                MemoryShardStore::empty(),
-                m,
-                0,
-            )
-            .unwrap()
+            ShardTree::<MemoryShardStore<String, usize>, 4, 3>::empty(MemoryShardStore::empty(), m)
         });
     }
 
@@ -3002,8 +2971,8 @@ mod tests {
         ShardTree<MemoryShardStore<H, usize>, 4, 3>,
     > {
         CombinedTree::new(
-            CompleteTree::new(max_checkpoints, 0),
-            ShardTree::empty(MemoryShardStore::empty(), max_checkpoints, 0).unwrap(),
+            CompleteTree::new(max_checkpoints),
+            ShardTree::empty(MemoryShardStore::empty(), max_checkpoints),
         )
     }
 
