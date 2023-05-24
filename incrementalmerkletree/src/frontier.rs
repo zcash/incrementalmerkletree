@@ -1,7 +1,7 @@
 use std::convert::TryFrom;
 use std::mem::size_of;
 
-use crate::{Address, Hashable, Level, Position, Source};
+use crate::{Address, Hashable, Level, MerklePath, Position, Source};
 
 #[cfg(feature = "legacy-api")]
 use {std::collections::VecDeque, std::iter::repeat};
@@ -247,6 +247,27 @@ impl<H: Hashable + Clone, const DEPTH: u8> Frontier<H, DEPTH> {
             .map_or(H::empty_root(DEPTH.into()), |frontier| {
                 frontier.root(Some(DEPTH.into()))
             })
+    }
+
+    /// Constructs a Merkle path that is suitable as a witness for the leaf at the tip of this
+    /// frontier by using empty roots for the right-hand ommers. This is generally only useful
+    /// for testing, so is not exposed in the public API.
+    ///
+    /// Returns `Ok(Some(MerklePath))` if successful, `Ok(None)` if the frontier is empty,
+    /// or an error containing the address of the failure.
+    pub fn witness<F>(&self, complement_nodes: F) -> Result<Option<MerklePath<H, DEPTH>>, Address>
+    where
+        F: Fn(Address) -> Option<H>,
+    {
+        self.frontier
+            .as_ref()
+            .map(|f| {
+                f.witness(DEPTH, complement_nodes).map(|path_elems| {
+                    MerklePath::from_parts(path_elems, f.position())
+                        .expect("Path length should be equal to frontier depth.")
+                })
+            })
+            .transpose()
     }
 }
 
@@ -604,9 +625,9 @@ mod tests {
     }
 
     #[test]
-    fn frontier_witness() {
+    fn nonempty_frontier_witness() {
         let mut frontier = NonEmptyFrontier::<String>::new("a".to_string());
-        for c in 'b'..'h' {
+        for c in 'b'..='g' {
             frontier.append(c.to_string());
         }
         let bridge_value_at = |addr: Address| match <u8>::from(addr.level()) {
@@ -620,6 +641,25 @@ mod tests {
                 .map(|v| v.to_string())
                 .to_vec()),
             frontier.witness(4, bridge_value_at)
+        );
+    }
+
+    #[test]
+    fn frontier_witness() {
+        let mut frontier = Frontier::<String, 4>::empty();
+        for c in 'a'..='g' {
+            frontier.append(c.to_string());
+        }
+
+        assert_eq!(
+            frontier
+                .witness(|addr| Some(String::empty_root(addr.level())))
+                .map(|maybe_p| maybe_p.map(|p| p.path_elems().to_vec())),
+            Ok(Some(
+                ["_", "ef", "abcd", "________"]
+                    .map(|v| v.to_string())
+                    .to_vec()
+            )),
         );
     }
 
