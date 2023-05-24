@@ -249,9 +249,11 @@ impl<H: Hashable + Clone, const DEPTH: u8> Frontier<H, DEPTH> {
             })
     }
 
-    /// Constructs a Merkle path that is suitable as a witness for the leaf at the tip of this
-    /// frontier by using empty roots for the right-hand ommers. This is generally only useful
-    /// for testing, so is not exposed in the public API.
+    /// Constructs a [`MerklePath`] to the leaf at the tip of this frontier, given a source of node
+    /// values that complement this frontier.
+    ///
+    /// If the `complement_nodes` function returns `None` when the value is requested at a given
+    /// tree address, the address at which the failure occurs will be returned as an error.
     ///
     /// Returns `Ok(Some(MerklePath))` if successful, `Ok(None)` if the frontier is empty,
     /// or an error containing the address of the failure.

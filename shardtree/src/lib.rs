@@ -11,7 +11,10 @@ use incrementalmerkletree::{Address, Hashable, Level, MerklePath, Position, Rete
 bitflags! {
     pub struct RetentionFlags: u8 {
         /// An leaf with `EPHEMERAL` retention can be pruned as soon as we are certain that it is not part
-        /// of the witness for a leaf with `CHECKPOINT` or `MARKED` retention.
+        /// of the witness for a leaf with [`CHECKPOINT`] or `MARKED` retention.
+        ///
+        /// [`CHECKPOINT`]: RetentionFlags::CHECKPOINT
+        /// [`MARKED`]: RetentionFlags::MARKED
         const EPHEMERAL = 0b00000000;
 
         /// A leaf with `CHECKPOINT` retention can be pruned when there are more than `max_checkpoints`
@@ -203,7 +206,7 @@ impl<H: Hashable + Clone + PartialEq> PrunableTree<H> {
             .map_or(false, |(_, retention)| retention.is_marked())
     }
 
-    /// Determines whether a tree has any `MARKED` nodes.
+    /// Determines whether a tree has any [`Retention::Marked`] nodes.
     pub fn contains_marked(&self) -> bool {
         match &self.0 {
             Node::Parent { left, right, .. } => left.contains_marked() || right.contains_marked(),
@@ -265,8 +268,8 @@ impl<H: Hashable + Clone + PartialEq> PrunableTree<H> {
         }
     }
 
-    /// Returns a vector of the positions of [`Node::Leaf`] values in the tree having [`MARKED`]
-    /// retention.
+    /// Returns a vector of the positions of [`Node::Leaf`] values in the tree having
+    /// [`Retention::Marked`] retention.
     ///
     /// Computing the set of marked positions requires a full traversal of the tree, and so should
     /// be considered to be a somewhat expensive operation.
@@ -608,6 +611,8 @@ pub struct IncompleteAt {
     pub address: Address,
     /// A flag identifying whether or not the missing node is required in order to construct a
     /// witness for a node with [`MARKED`] retention.
+    ///
+    /// [`MARKED`]: RetentionFlags::MARKED
     pub required_for_witness: bool,
 }
 
@@ -624,11 +629,11 @@ pub struct BatchInsertionResult<H, C: Ord, I: Iterator<Item = (H, Retention<C>)>
     pub contains_marked: bool,
     /// The vector of addresses of [`Node::Nil`] nodes that were inserted into the tree as part of
     /// the insertion operation, for nodes that are required in order to construct a witness for
-    /// each inserted leaf with [`MARKED`] retention.
+    /// each inserted leaf with [`Retention::Marked`] retention.
     pub incomplete: Vec<IncompleteAt>,
     /// The maximum position at which a leaf was inserted.
     pub max_insert_position: Option<Position>,
-    /// The positions of all leaves with [`CHECKPOINT`] retention that were inserted.
+    /// The positions of all leaves with [`Retention::Checkpoint`] retention that were inserted.
     pub checkpoints: BTreeMap<C, Position>,
     /// The unconsumed remainder of the iterator from which leaves were inserted, if the tree
     /// was completely filled before the iterator was fully consumed.
@@ -749,8 +754,9 @@ impl<H: Hashable + Clone + PartialEq> LocatedPrunableTree<H> {
 
     /// Compute the witness for the leaf at the specified position.
     ///
-    /// This tree will be truncated to the `truncate_at` position, and then empty
-    /// roots corresponding to later positions will be filled by [`H::empty_root`].
+    /// This tree will be truncated to the `truncate_at` position, and then empty roots
+    /// corresponding to later positions will be filled by the [`Hashable::empty_root`]
+    /// implementation for `H`.
     ///
     /// Returns either the witness for the leaf at the specified position, or an error that
     /// describes the causes of failure.
@@ -1087,11 +1093,11 @@ impl<H: Hashable + Clone + PartialEq> LocatedPrunableTree<H> {
     /// * `position_range` - The range of leaf positions at which values will be inserted. This
     ///   range is also used to place an upper bound on the number of items that will be consumed
     ///   from the `values` iterator.
-    /// * `prune_below` - Nodes with [`EPHEMERAL`] retention that are not required to be retained
+    /// * `prune_below` - Nodes with [`Retention::Ephemeral`] retention that are not required to be retained
     ///   in order to construct a witness for a marked node or to make it possible to rewind to a
     ///   checkpointed node may be pruned so long as their address is at less than the specified
     ///   level.
-    /// * `values` The iterator of `(H, Retention)` pairs from which to construct the tree.
+    /// * `values` The iterator of `(H, [`Retention`])` pairs from which to construct the tree.
     pub fn from_iter<C: Clone + Ord, I: Iterator<Item = (H, Retention<C>)>>(
         position_range: Range<Position>,
         prune_below: Level,
@@ -1903,15 +1909,15 @@ where
     /// This operation will pad the tree until it contains enough subtrees to reach the starting
     /// position. It will fully consume the provided iterator, constructing successive subtrees
     /// until no more values are available. It aggressively prunes the tree as it goes, retaining
-    /// only nodes that either have [`MARKED`] retention, are required to construct a witness for
-    /// such marked nodes, or that must be retained in order to make it possible to truncate the
-    /// tree to any position with [`CHECKPOINT`] retention.
+    /// only nodes that either have [`Retention::Marked`] retention, are required to construct a
+    /// witness for such marked nodes, or that must be retained in order to make it possible to
+    /// truncate the tree to any position with [`Retention::Checkpoint`] retention.
     ///
     /// This operation returns the final position at which a leaf was inserted, and the vector of
     /// [`IncompleteAt`] values that identify addresses at which [`Node::Nil`] nodes were
     /// introduced to the tree, as well as whether or not those newly introduced nodes will need to
-    /// be filled with values in order to produce witnesses for inserted leaves with [`MARKED`]
-    /// retention.
+    /// be filled with values in order to produce witnesses for inserted leaves with
+    /// [`Retention::Marked`] retention.
     #[allow(clippy::type_complexity)]
     pub fn batch_insert<I: Iterator<Item = (H, Retention<C>)>>(
         &mut self,
@@ -1952,7 +1958,7 @@ where
         Ok(max_insert_position.map(|p| (p, all_incomplete)))
     }
 
-    /// Insert a tree by decomposing it into its [`SHARD_HEIGHT`] or smaller parts (if necessary)
+    /// Insert a tree by decomposing it into its `SHARD_HEIGHT` or smaller parts (if necessary)
     /// and inserting those at their appropriate locations.
     pub fn insert_tree(
         &mut self,
