@@ -1797,7 +1797,7 @@ where
     pub fn get_marked_leaf(&self, position: Position) -> Result<Option<H>, S::Error> {
         Ok(self
             .store
-            .get_shard(Address::above_position(Self::subtree_level(), position))?
+            .get_shard(Self::subtree_addr(position))?
             .and_then(|t| t.value_at_position(position).cloned())
             .and_then(|(v, r)| if r.is_marked() { Some(v) } else { None }))
     }
@@ -1919,7 +1919,7 @@ where
         values: I,
     ) -> Result<Option<(Position, Vec<IncompleteAt>)>, S::Error> {
         let mut values = values.peekable();
-        let mut subtree_root_addr = Address::above_position(Self::subtree_level(), start);
+        let mut subtree_root_addr = Self::subtree_addr(start);
         let mut max_insert_position = None;
         let mut all_incomplete = vec![];
         loop {
@@ -2065,7 +2065,7 @@ where
                     checkpoints_to_delete.push(cid.clone());
 
                     let mut clear_at = |pos, flags_to_clear| {
-                        let subtree_addr = Address::above_position(Self::subtree_level(), pos);
+                        let subtree_addr = Self::subtree_addr(pos);
                         clear_positions
                             .entry(subtree_addr)
                             .and_modify(|to_clear| {
@@ -2133,7 +2133,7 @@ where
                     true
                 }
                 TreeState::AtPosition(position) => {
-                    let subtree_addr = Address::above_position(Self::subtree_level(), position);
+                    let subtree_addr = Self::subtree_addr(position);
                     let replacement = self
                         .store
                         .get_shard(subtree_addr)?
@@ -2318,7 +2318,7 @@ where
                 Address::from_parts(Level::from(0), position.into()),
             )))
         } else {
-            let subtree_addr = Address::above_position(Self::subtree_level(), position);
+            let subtree_addr = Self::subtree_addr(position);
 
             // compute the witness for the specified position up to the subtree root
             let mut witness = self.store.get_shard(subtree_addr)?.map_or_else(
@@ -2341,48 +2341,43 @@ where
     /// Make a marked leaf at a position eligible to be pruned.
     ///
     /// If the checkpoint associated with the specified identifier does not exist because the
-    /// corresponding checkpoint would have been more than `max_checkpoints` deep, the removal
-    /// is recorded as of the first existing checkpoint and the associated leaves will be pruned
-    /// when that checkpoint is subsequently removed.
+    /// corresponding checkpoint would have been more than `max_checkpoints` deep, the removal is
+    /// recorded as of the first existing checkpoint and the associated leaves will be pruned when
+    /// that checkpoint is subsequently removed.
+    ///
+    /// Returns `Ok(true)` if a mark was successfully removed from the leaf at the specified
+    /// position, `Ok(false)` if the tree does not contain a leaf at the specified position or is
+    /// not marked, or an error if one is produced by the underlying data store.
     pub fn remove_mark(
         &mut self,
         position: Position,
         as_of_checkpoint: Option<&C>,
-    ) -> Result<bool, S::Error>
-    where
-        C: std::fmt::Debug,
-    {
-        #[allow(clippy::blocks_in_if_conditions)]
-        if self.get_marked_leaf(position)?.is_some() {
-            match as_of_checkpoint {
-                Some(cid) if Some(cid) >= self.store.min_checkpoint_id()?.as_ref() => {
-                    self.store.update_checkpoint_with(cid, |checkpoint| {
-                        checkpoint.marks_removed.insert(position);
-                        Ok(())
-                    })
-                }
-                _ => {
-                    // if no checkpoint was provided, or if the checkpoint is too far in the past,
-                    // remove the mark directly.
-                    let cleared =
-                        self.store
-                            .get_shard(Self::subtree_addr(position))?
-                            .map(|subtree| {
-                                subtree.clear_flags(BTreeMap::from([(
-                                    position,
-                                    RetentionFlags::MARKED,
-                                )]))
-                            });
-                    if let Some(cleared) = cleared {
-                        self.store.put_shard(cleared)?;
+    ) -> Result<bool, S::Error> {
+        match self.store.get_shard(Self::subtree_addr(position))? {
+            Some(shard)
+                if shard
+                    .value_at_position(position)
+                    .iter()
+                    .any(|(_, r)| r.is_marked()) =>
+            {
+                match as_of_checkpoint {
+                    Some(cid) if Some(cid) >= self.store.min_checkpoint_id()?.as_ref() => {
+                        self.store.update_checkpoint_with(cid, |checkpoint| {
+                            checkpoint.marks_removed.insert(position);
+                            Ok(())
+                        })
+                    }
+                    _ => {
+                        // if no checkpoint was provided, or if the checkpoint is too far in the past,
+                        // remove the mark directly.
+                        self.store.put_shard(
+                            shard.clear_flags(BTreeMap::from([(position, RetentionFlags::MARKED)])),
+                        )?;
                         Ok(true)
-                    } else {
-                        Ok(false)
                     }
                 }
             }
-        } else {
-            Ok(false)
+            _ => Ok(false),
         }
     }
 }
