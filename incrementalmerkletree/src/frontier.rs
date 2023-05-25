@@ -578,10 +578,8 @@ pub mod testing {
         }
     }
 
-    prop_compose! {
-        pub fn arb_test_node()(i in any::<u64>()) -> TestNode {
-            TestNode(i)
-        }
+    pub fn arb_test_node() -> impl Strategy<Value = TestNode> + Clone {
+        any::<u64>().prop_map(TestNode)
     }
 
     pub fn arb_frontier<H: Hashable + Clone + Debug, T: Strategy<Value = H>, const DEPTH: u8>(

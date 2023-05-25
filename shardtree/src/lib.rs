@@ -3280,7 +3280,7 @@ pub mod testing {
     use proptest::prelude::*;
     use proptest::sample::select;
 
-    pub fn arb_retention_flags() -> impl Strategy<Value = RetentionFlags> {
+    pub fn arb_retention_flags() -> impl Strategy<Value = RetentionFlags> + Clone {
         select(vec![
             RetentionFlags::EPHEMERAL,
             RetentionFlags::CHECKPOINT,
@@ -3289,15 +3289,15 @@ pub mod testing {
         ])
     }
 
-    pub fn arb_tree<A: Strategy + Clone + 'static, V: Strategy + Clone + 'static>(
+    pub fn arb_tree<A: Strategy + Clone + 'static, V: Strategy + 'static>(
         arb_annotation: A,
         arb_leaf: V,
         depth: u32,
         size: u32,
-    ) -> impl Strategy<Value = Tree<A::Value, V::Value>>
+    ) -> impl Strategy<Value = Tree<A::Value, V::Value>> + Clone
     where
         A::Value: Clone + 'static,
-        V::Value: Hashable + Clone + 'static,
+        V::Value: Clone + 'static,
     {
         let leaf = prop_oneof![
             Just(Tree(Node::Nil)),
@@ -3319,9 +3319,25 @@ pub mod testing {
         })
     }
 
+    pub fn arb_prunable_tree<H: Strategy + Clone + 'static>(
+        arb_leaf: H,
+        depth: u32,
+        size: u32,
+    ) -> impl Strategy<Value = PrunableTree<H::Value>> + Clone
+    where
+        H::Value: Clone + 'static,
+    {
+        arb_tree(
+            proptest::option::of(arb_leaf.clone().prop_map(Rc::new)),
+            (arb_leaf, arb_retention_flags()),
+            depth,
+            size,
+        )
+    }
+
     /// Constructs a random shardtree of size up to 2^6 with shards of size 2^3. Returns the tree,
     /// along with vectors of the checkpoint and mark positions.
-    pub fn arb_shardtree<H: Strategy>(
+    pub fn arb_shardtree<H: Strategy + Clone>(
         arb_leaf: H,
     ) -> impl Strategy<
         Value = (
@@ -3372,7 +3388,7 @@ pub mod testing {
         })
     }
 
-    pub fn arb_char_str() -> impl Strategy<Value = String> {
+    pub fn arb_char_str() -> impl Strategy<Value = String> + Clone {
         let chars = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ";
         (0usize..chars.len()).prop_map(move |i| chars.get(i..=i).unwrap().to_string())
     }
