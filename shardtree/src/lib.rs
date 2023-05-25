@@ -460,6 +460,11 @@ pub struct LocatedTree<A, V> {
 }
 
 impl<A, V> LocatedTree<A, V> {
+    /// Constructs a new LocatedTree from its constituent parts
+    pub fn from_parts(root_addr: Address, root: Tree<A, V>) -> Self {
+        LocatedTree { root_addr, root }
+    }
+
     /// Returns the root address of this tree.
     pub fn root_addr(&self) -> Address {
         self.root_addr
