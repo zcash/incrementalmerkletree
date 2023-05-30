@@ -11,7 +11,7 @@ use incrementalmerkletree::{Address, Hashable, Level, MerklePath, Position, Rete
 bitflags! {
     pub struct RetentionFlags: u8 {
         /// An leaf with `EPHEMERAL` retention can be pruned as soon as we are certain that it is not part
-        /// of the witness for a leaf with [`CHECKPOINT`] or `MARKED` retention.
+        /// of the witness for a leaf with [`CHECKPOINT`] or [`MARKED`] retention.
         ///
         /// [`CHECKPOINT`]: RetentionFlags::CHECKPOINT
         /// [`MARKED`]: RetentionFlags::MARKED
