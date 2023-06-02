@@ -914,7 +914,9 @@ impl<H: Hashable + Clone + PartialEq> LocatedPrunableTree<H> {
     /// Prunes this tree by replacing all nodes that are right-hand children along the path
     /// to the specified position with [`Node::Nil`].
     ///
-    /// The leaf at the specified position is retained.
+    /// The leaf at the specified position is retained. Returns the truncated tree if a leaf or
+    /// subtree root with the specified position as its maximum position exists, or `None`
+    /// otherwise.
     pub fn truncate_to_position(&self, position: Position) -> Option<Self> {
         fn go<H: Hashable + Clone + PartialEq>(
             position: Position,
@@ -1836,6 +1838,12 @@ pub trait ShardStore {
         checkpoint_depth: usize,
     ) -> Result<Option<(Self::CheckpointId, Checkpoint)>, Self::Error>;
 
+    /// Returns the checkpoint corresponding to the specified checkpoint identifier.
+    fn get_checkpoint(
+        &self,
+        checkpoint_id: &Self::CheckpointId,
+    ) -> Result<Option<Checkpoint>, Self::Error>;
+
     /// Iterates in checkpoint ID order over the first `limit` checkpoints, applying the
     /// given callback to each.
     fn with_checkpoints<F>(&mut self, limit: usize, callback: F) -> Result<(), Self::Error>
@@ -1926,6 +1934,13 @@ impl<S: ShardStore> ShardStore for &mut S {
         checkpoint_depth: usize,
     ) -> Result<Option<(Self::CheckpointId, Checkpoint)>, Self::Error> {
         S::get_checkpoint_at_depth(self, checkpoint_depth)
+    }
+
+    fn get_checkpoint(
+        &self,
+        checkpoint_id: &Self::CheckpointId,
+    ) -> Result<Option<Checkpoint>, Self::Error> {
+        S::get_checkpoint(self, checkpoint_id)
     }
 
     fn with_checkpoints<F>(&mut self, limit: usize, callback: F) -> Result<(), Self::Error>
@@ -2040,6 +2055,13 @@ impl<H: Clone, C: Clone + Ord> ShardStore for MemoryShardStore<H, C> {
 
     fn checkpoint_count(&self) -> Result<usize, Self::Error> {
         Ok(self.checkpoints.len())
+    }
+
+    fn get_checkpoint(
+        &self,
+        checkpoint_id: &Self::CheckpointId,
+    ) -> Result<Option<Checkpoint>, Self::Error> {
+        Ok(self.checkpoints.get(checkpoint_id).cloned())
     }
 
     fn get_checkpoint_at_depth(
@@ -2681,69 +2703,97 @@ impl<
     /// This will also discard all checkpoints with depth <= the specified depth. Returns `true`
     /// if the truncation succeeds or has no effect, or `false` if no checkpoint exists at the
     /// specified depth.
-    pub fn truncate_removing_checkpoint(
+    pub fn truncate_to_depth(
         &mut self,
         checkpoint_depth: usize,
     ) -> Result<bool, ShardTreeError<S::Error>> {
-        Ok(if checkpoint_depth == 0 {
-            true
+        if checkpoint_depth == 0 {
+            Ok(true)
         } else if let Some((checkpoint_id, c)) = self
             .store
             .get_checkpoint_at_depth(checkpoint_depth)
             .map_err(ShardTreeError::Storage)?
         {
-            match c.tree_state {
-                TreeState::Empty => {
+            self.truncate_removing_checkpoint_internal(&checkpoint_id, &c)?;
+            Ok(true)
+        } else {
+            Ok(false)
+        }
+    }
+
+    /// Truncates the tree, discarding all information after the specified checkpoint.
+    ///
+    /// This will also discard all checkpoints with depth <= the specified depth. Returns `true`
+    /// if the truncation succeeds or has no effect, or `false` if no checkpoint exists for the
+    /// specified checkpoint identifier.
+    pub fn truncate_removing_checkpoint(
+        &mut self,
+        checkpoint_id: &C,
+    ) -> Result<bool, ShardTreeError<S::Error>> {
+        match self
+            .store
+            .get_checkpoint(checkpoint_id)
+            .map_err(ShardTreeError::Storage)?
+        {
+            Some(c) => {
+                self.truncate_removing_checkpoint_internal(checkpoint_id, &c)?;
+                Ok(true)
+            }
+            None => Ok(false),
+        }
+    }
+
+    fn truncate_removing_checkpoint_internal(
+        &mut self,
+        checkpoint_id: &C,
+        checkpoint: &Checkpoint,
+    ) -> Result<(), ShardTreeError<S::Error>> {
+        match checkpoint.tree_state {
+            TreeState::Empty => {
+                self.store
+                    .truncate(Address::from_parts(Self::subtree_level(), 0))
+                    .map_err(ShardTreeError::Storage)?;
+                self.store
+                    .truncate_checkpoints(checkpoint_id)
+                    .map_err(ShardTreeError::Storage)?;
+                self.store
+                    .put_cap(Tree::empty())
+                    .map_err(ShardTreeError::Storage)?;
+            }
+            TreeState::AtPosition(position) => {
+                let subtree_addr = Self::subtree_addr(position);
+                let replacement = self
+                    .store
+                    .get_shard(subtree_addr)
+                    .map_err(ShardTreeError::Storage)?
+                    .and_then(|s| s.truncate_to_position(position));
+
+                let cap_tree = LocatedTree {
+                    root_addr: Self::root_addr(),
+                    root: self.store.get_cap().map_err(ShardTreeError::Storage)?,
+                };
+
+                if let Some(truncated) = cap_tree.truncate_to_position(position) {
                     self.store
-                        .truncate(Address::from_parts(Self::subtree_level(), 0))
+                        .put_cap(truncated.root)
+                        .map_err(ShardTreeError::Storage)?;
+                };
+
+                if let Some(truncated) = replacement {
+                    self.store
+                        .truncate(subtree_addr)
                         .map_err(ShardTreeError::Storage)?;
                     self.store
-                        .truncate_checkpoints(&checkpoint_id)
+                        .put_shard(truncated)
                         .map_err(ShardTreeError::Storage)?;
                     self.store
-                        .put_cap(Tree::empty())
+                        .truncate_checkpoints(checkpoint_id)
                         .map_err(ShardTreeError::Storage)?;
-                    true
-                }
-                TreeState::AtPosition(position) => {
-                    let subtree_addr = Self::subtree_addr(position);
-                    let replacement = self
-                        .store
-                        .get_shard(subtree_addr)
-                        .map_err(ShardTreeError::Storage)?
-                        .and_then(|s| s.truncate_to_position(position));
-
-                    let cap_tree = LocatedTree {
-                        root_addr: Self::root_addr(),
-                        root: self.store.get_cap().map_err(ShardTreeError::Storage)?,
-                    };
-
-                    if let Some(truncated) = cap_tree.truncate_to_position(position) {
-                        self.store
-                            .put_cap(truncated.root)
-                            .map_err(ShardTreeError::Storage)?;
-                    };
-
-                    match replacement {
-                        Some(truncated) => {
-                            self.store
-                                .truncate(subtree_addr)
-                                .map_err(ShardTreeError::Storage)?;
-                            self.store
-                                .put_shard(truncated)
-                                .map_err(ShardTreeError::Storage)?;
-                            self.store
-                                .truncate_checkpoints(&checkpoint_id)
-                                .map_err(ShardTreeError::Storage)?;
-                            true
-                        }
-                        None => false,
-                    }
                 }
             }
-        } else {
-            false
-        })
+        }
+
+        Ok(())
     }
 
     /// Computes the root of any subtree of this tree rooted at the given address, with the overall
@@ -3811,7 +3861,7 @@ mod tests {
             ]
         );
 
-        assert_matches!(tree.truncate_removing_checkpoint(1), Ok(true));
+        assert_matches!(tree.truncate_to_depth(1), Ok(true));
     }
 
     impl<
@@ -3868,7 +3918,7 @@ mod tests {
         }
 
         fn rewind(&mut self) -> bool {
-            ShardTree::truncate_removing_checkpoint(self, 1).unwrap()
+            ShardTree::truncate_to_depth(self, 1).unwrap()
         }
     }
 
