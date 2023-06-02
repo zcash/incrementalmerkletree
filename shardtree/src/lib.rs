@@ -294,8 +294,8 @@ impl<H: Hashable + Clone + PartialEq> PrunableTree<H> {
         }
     }
 
-    /// Returns a vector of the positions of [`Node::Leaf`] values in the tree having [`MARKED`](RetentionFlags::MARKED)
-    /// retention.
+    /// Returns a vector of the positions of [`Node::Leaf`] values in the tree having
+    /// [`MARKED`](RetentionFlags::MARKED) retention.
     ///
     /// Computing the set of marked positions requires a full traversal of the tree, and so should
     /// be considered to be a somewhat expensive operation.
