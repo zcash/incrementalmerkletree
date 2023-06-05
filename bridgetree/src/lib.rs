@@ -1057,7 +1057,7 @@ mod tests {
         assert!(!tree.append('i'.to_string()));
     }
 
-    fn check_garbage_collect<H: Hashable + Clone + Ord, const DEPTH: u8>(
+    fn check_garbage_collect<H: Hashable + Clone + Ord + Debug, const DEPTH: u8>(
         mut tree: BridgeTree<H, usize, DEPTH>,
     ) {
         // Add checkpoints until we're sure everything that can be gc'ed will be gc'ed
