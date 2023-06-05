@@ -1757,6 +1757,21 @@ impl Checkpoint {
         }
     }
 
+    pub fn from_parts(tree_state: TreeState, marks_removed: BTreeSet<Position>) -> Self {
+        Checkpoint {
+            tree_state,
+            marks_removed,
+        }
+    }
+
+    pub fn tree_state(&self) -> TreeState {
+        self.tree_state
+    }
+
+    pub fn marks_removed(&self) -> &BTreeSet<Position> {
+        &self.marks_removed
+    }
+
     pub fn is_tree_empty(&self) -> bool {
         matches!(self.tree_state, TreeState::Empty)
     }
@@ -3862,6 +3877,21 @@ mod tests {
         );
 
         assert_matches!(tree.truncate_to_depth(1), Ok(true));
+    }
+
+    #[test]
+    fn shard_sizes() {
+        let mut tree: ShardTree<MemoryShardStore<String, usize>, 4, 2> =
+            ShardTree::new(MemoryShardStore::empty(), 100);
+        for c in 'a'..'p' {
+            tree.append(c.to_string(), Retention::Ephemeral).unwrap();
+        }
+
+        assert_eq!(tree.store.shards.len(), 4);
+        assert_eq!(
+            tree.store.shards[3].max_position(),
+            Some(Position::from(14))
+        );
     }
 
     impl<
