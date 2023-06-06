@@ -260,7 +260,7 @@ pub fn apply_operation<H, C, T: Tree<H, C>>(tree: &mut T, op: Operation<H, C>) {
     }
 }
 
-pub fn check_operations<H: Hashable + Ord + Clone, C: Clone, T: Tree<H, C>>(
+pub fn check_operations<H: Hashable + Ord + Clone + Debug, C: Clone, T: Tree<H, C>>(
     mut tree: T,
     ops: &[Operation<H, C>],
 ) -> Result<(), TestCaseError> {
