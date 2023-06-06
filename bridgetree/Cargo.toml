@@ -1,6 +1,6 @@
 [package]
 name = "bridgetree"
-version = "0.2.0"
+version = "0.2.1"
 authors = [
     "Kris Nuttycombe <kris@nutty.land>",
     "Sean Bowe <ewillbefull@gmail.com>",

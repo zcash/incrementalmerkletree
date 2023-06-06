@@ -20,6 +20,13 @@ and this project adheres to Rust's notion of
   `incrementalmerkletree::testing`.
 - `serde` serialization and parsing are no longer supported.
 
+## [bridgetree-v0.2.1] - 2023-06-05
+
+This release has no known changes from `bridgetree-v0.2.0`. It exists because
+the source code used for the `bridgetree-v0.2.0` release was not properly
+persisted and tagged in the source repository at the time that the release was
+made, and as a consequence the `bridgetree-v0.2.0` release has been yanked.
+
 ## [bridgetree-v0.2.0] - 2022-05-10
 
 The `bridgetree` crate is a fork of `incrementalmerkletree`, with the contents
