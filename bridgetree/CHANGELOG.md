@@ -7,18 +7,42 @@ and this project adheres to Rust's notion of
 
 ## [Unreleased]
 
+## [bridgetree-v0.3.0] - 2023-06-05
+
 ### Changed
 
 - `BridgeTree::witness` now takes a checkpoint depth rather than a root hash to
   identify the tree state with respect to which the witness should be constructed.
+- `bridgetree::Checkpoint` has been substantially modified to reflect the addition
+  of checkpoint identifiers and a new approach to tracking when marked nodes are
+  removed.
+- `BridgeTree` is now parameterized by a checkpoint identifier type in addition to
+  the leaf value type and tree depth.
+- `BridgeTree::checkpoint` now takes a checkpoint identifier argument.
+- `BridgeTree::checkpoints` now returns a `VecDeque<Checkpoint<C>>` rather than 
+  a slice. 
+- `BridgeTree::append` now takes its argument as an owned value, rather than by
+  reference.
+- `BridgeTree::witness` now takes a checkpoint depth rather than a root to match
+  for identifying the state of the tree for which the witness is to be computed.
 
 ### Removed
 
 - The `NonEmptyFrontier`, `Frontier`, and `FrontierError` types have
   been moved to the `incrementalmerkletree` crate.
+- `bridgetree::FrontierError`
+- `bridgetree::hashing::Hashable` has been moved to the `incrementalmerkletree` 
+  crate and `bridgetree::hashing` has been removed.
 - The `testing` module has been removed in favor of depending on
   `incrementalmerkletree::testing`.
 - `serde` serialization and parsing are no longer supported.
+
+## [bridgetree-v0.2.1] - 2023-06-05
+
+This release has no known changes from `bridgetree-v0.2.0`. It exists because
+the source code used for the `bridgetree-v0.2.0` release was not properly
+persisted and tagged in the source repository at the time that the release was
+made, and as a consequence the `bridgetree-v0.2.0` release has been yanked.
 
 ## [bridgetree-v0.2.0] - 2022-05-10
 

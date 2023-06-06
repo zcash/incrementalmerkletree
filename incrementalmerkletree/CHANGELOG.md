@@ -5,34 +5,56 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to Rust's notion of
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [0.4.0] - 2023-06-05
+
+Release 0.4.0 represents a substantial rewrite of the `incrementalmerkletree`
+crate. The contents of the `bridgetree` module has been moved out to a new
+`bridgetree` crate, and most of the types in this crate have undergone
+substantial changes. The following changelog is not necessarily comprehensive,
+but identifies many of the most notable changes.
 
 ### Added
 - `incrementalmerkletree::frontier` Types that model the state at the rightmost
   node of a Merkle tree that is filled sequentially from the left. These have
-  been migrated here from the `bridgetree` crate as they are useful outside
-  of the context of the `bridgetree` data structures. Additional legacy types
-  used for this modeling have been moved here from the `librustzcash` crate;
-  these migrated types are available under a `legacy-api` feature flag.
-- `incrementalmerkletree::witness` Types migrated from `librustzcash` under
+  been migrated here from the (removed) `bridgetree` module as they are useful
+  outside of the context of the `bridgetree` data structures. Additional legacy
+  types used for this modeling have also been moved here from the
+  `zcash_primitives` crate; these migrated types are available under a
+  `legacy-api` feature flag.
+- `incrementalmerkletree::witness` Types migrated from `zcash_primitives` under
   the `legacy-api` feature flag related to constructing witnesses for leaves
   of a Merkle tree.
+- `incrementalmerkletree::Address`
+- `incrementalmerkletree::Level` replaces `incrementalmerkletree::Altitude`
+- `incrementalmerkletree::Retention`
+- `incrementalmerkletree::Source`
+- A new `test-dependencies` feature flag, which makes available utilities
+  and types for testing incremental merkle tree implementations.
 
 ### Changed
 - `Position` has been made isomorphic to `u64` via introduction of `From`
   implementations between these types.
-- `Address::index` now returns `u64` instead of `usize`
 - The `expected_ommers` field of `FrontierError::PositionMismatch` now
   has type `u8` instead of `usize`.
-- `Address::context` now also uses `u64` instead of `usize` for when it returns 
+- `Address::context` now also uses `u64` instead of `usize` for when it returns
   a range of index values.
 
 ### Removed
-- The `From<usize>` impl for `Position` has been removed, as has 
+- The `bridgetree` module has been removed, and its contents are now available
+  from the `bridgetree` crate.
+- The `sample` module has been removed. Replacement functionality has been
+  made available under a new `test-dependencies` feature flag in the
+  `incrementalmerkletree::testing::complete_tree` module.
+- The `Frontier` and `Tree` traits have been removed as they did not represent
+  sufficiently flexible abstractions. Heavily modified versions of these traits
+  are still availalbe under the `test-dependencies` feature flag in the
+  `incrementalmerkletree::testing` module.
+- The `From<usize>` impl for `Position` has been removed, as has
   `From<Position> for usize`. In addition, `Add` and `Sub` impls
   that previously allowed numeric operations between `usize` and
   `Position` values have been removed in favor of similar operations
   that instead allow computing with `u64`.
+- The `incrementalmerkletree::Altitude` type has been removed
 
 ## [0.3.1] - 2023-02-28
 
