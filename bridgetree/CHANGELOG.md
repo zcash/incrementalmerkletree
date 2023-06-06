@@ -7,6 +7,8 @@ and this project adheres to Rust's notion of
 
 ## [Unreleased]
 
+## [bridgetree-v0.3.0] - 2023-06-05
+
 ### Changed
 
 - `BridgeTree::witness` now takes a checkpoint depth rather than a root hash to
