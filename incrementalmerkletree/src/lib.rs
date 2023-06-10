@@ -33,8 +33,7 @@
 //! - `root` - the single node with the largest [Level].
 //! - `ancestor` - the parent or an ancestor of the parent; the root is an ancestor of every other node.
 //!
-//! Note: when refering to `emmers` (plural) we typically mean the node's emmer, plus each ancestor's emmer.
-
+//! Note: we often refer to `emmers` (plural) when describing leaf-to-root paths, so in that context `emmers` refers to the node's emmer, plus each ancestor's emmer.
 
 use either::Either;
 use std::cmp::Ordering;
