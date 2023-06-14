@@ -193,6 +193,10 @@ impl TryFrom<Position> for usize {
 pub struct Level(u8);
 
 impl Level {
+    pub const fn new(value: u8) -> Self {
+        Self(value)
+    }
+
     // TODO: replace with an instance for `Step<Level>` once `step_trait`
     // is stabilized
     pub fn iter_to(self, other: Level) -> impl Iterator<Item = Self> {

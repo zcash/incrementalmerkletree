@@ -1786,7 +1786,7 @@ impl Checkpoint {
 
 /// A capability for storage of fragment subtrees of the `ShardTree` type.
 ///
-/// All fragment subtrees must have roots at level `SHARD_HEIGHT - 1`
+/// All fragment subtrees must have roots at level `SHARD_HEIGHT`
 pub trait ShardStore {
     type H;
     type CheckpointId;
@@ -1804,7 +1804,7 @@ pub trait ShardStore {
     /// Inserts or replaces the subtree having the same root address as the provided tree.
     ///
     /// Implementations of this method MUST enforce the constraint that the root address
-    /// of the provided subtree has level `SHARD_HEIGHT - 1`.
+    /// of the provided subtree has level `SHARD_HEIGHT`.
     fn put_shard(&mut self, subtree: LocatedPrunableTree<Self::H>) -> Result<(), Self::Error>;
 
     /// Returns the vector of addresses corresponding to the roots of subtrees stored in this
@@ -1815,7 +1815,7 @@ pub trait ShardStore {
     /// than or equal to that of the specified address.
     ///
     /// Implementations of this method MUST enforce the constraint that the root address
-    /// provided has level `SHARD_HEIGHT - 1`.
+    /// provided has level `SHARD_HEIGHT`.
     fn truncate(&mut self, from: Address) -> Result<(), Self::Error>;
 
     /// A tree that is used to cache the known roots of subtrees in the "cap" of nodes between
@@ -2229,12 +2229,16 @@ impl<
     /// Returns the fixed level of subtree roots within the vector of subtrees used as this tree's
     /// representation.
     pub fn subtree_level() -> Level {
-        Level::from(SHARD_HEIGHT - 1)
+        Level::from(SHARD_HEIGHT)
     }
 
     /// Returns the root address of the subtree that contains the specified position.
     pub fn subtree_addr(pos: Position) -> Address {
         Address::above_position(Self::subtree_level(), pos)
+    }
+
+    pub fn max_subtree_index() -> u64 {
+        (0x1 << (DEPTH - SHARD_HEIGHT)) - 1
     }
 
     /// Returns the leaf value at the specified position, if it is a marked leaf.
@@ -2344,10 +2348,10 @@ impl<
                 if subtree.root.is_complete() {
                     let addr = subtree.root_addr;
 
-                    if addr.index() + 1 >= 0x1 << (SHARD_HEIGHT - 1) {
-                        return Err(InsertionError::TreeFull.into());
-                    } else {
+                    if addr.index() < Self::max_subtree_index() {
                         LocatedTree::empty(addr.next_at_level()).append(value, retention)?
+                    } else {
+                        return Err(InsertionError::TreeFull.into());
                     }
                 } else {
                     subtree.append(value, retention)?
@@ -3792,6 +3796,7 @@ mod tests {
     fn shardtree_insertion() {
         let mut tree: ShardTree<MemoryShardStore<String, usize>, 4, 3> =
             ShardTree::new(MemoryShardStore::empty(), 100);
+
         assert_matches!(
             tree.batch_insert(
                 Position::from(1),
@@ -3806,6 +3811,10 @@ mod tests {
                 incomplete == vec![
                     IncompleteAt {
                         address: Address::from_parts(Level::from(0), 0),
+                        required_for_witness: true
+                    },
+                    IncompleteAt {
+                        address: Address::from_parts(Level::from(2), 1),
                         required_for_witness: true
                     }
                 ]
@@ -3851,15 +3860,15 @@ mod tests {
                 pos == Position::from(12) &&
                 incomplete == vec![
                     IncompleteAt {
-                        address: Address::from_parts(Level::from(1), 4),
-                        required_for_witness: false
-                    },
-                    IncompleteAt {
                         address: Address::from_parts(Level::from(0), 13),
                         required_for_witness: false
                     },
                     IncompleteAt {
                         address: Address::from_parts(Level::from(1), 7),
+                        required_for_witness: false
+                    },
+                    IncompleteAt {
+                        address: Address::from_parts(Level::from(1), 4),
                         required_for_witness: false
                     },
                 ]
