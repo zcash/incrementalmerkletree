@@ -467,58 +467,126 @@ impl<H: Hashable + Ord + Clone + Debug, C: Clone, I: Tree<H, C>, E: Tree<H, C>> 
 // Shared example tests
 //
 
-pub fn check_root_hashes<T: Tree<String, usize>, F: Fn(usize) -> T>(new_tree: F) {
-    let mut tree = new_tree(100);
-    assert_eq!(tree.root(0).unwrap(), "________________");
+pub trait TestHashable: Hashable + Ord + Clone + Debug {
+    fn from_u64(value: u64) -> Self;
 
-    tree.append("a".to_string(), Retention::Ephemeral);
-    assert_eq!(tree.root(0).unwrap().len(), 16);
-    assert_eq!(tree.root(0).unwrap(), "a_______________");
+    fn combine_all(depth: u8, values: &[u64]) -> Self {
+        let values: Vec<Self> = values.iter().map(|v| Self::from_u64(*v)).collect();
+        complete_tree::root(&values, depth)
+    }
+}
 
-    tree.append("b".to_string(), Retention::Ephemeral);
-    assert_eq!(tree.root(0).unwrap(), "ab______________");
+impl TestHashable for String {
+    fn from_u64(value: u64) -> Self {
+        ('a'..)
+            .nth(
+                value
+                    .try_into()
+                    .expect("we do not use test value indices larger than usize::MAX"),
+            )
+            .expect("we do not choose test value indices larger than the iterable character range")
+            .to_string()
+    }
+}
 
-    tree.append("c".to_string(), Retention::Ephemeral);
-    assert_eq!(tree.root(0).unwrap(), "abc_____________");
+pub trait TestCheckpoint: Ord + Clone + Debug {
+    fn from_u64(value: u64) -> Self;
+}
 
-    let mut t = new_tree(100);
-    t.append(
-        "a".to_string(),
-        Retention::Checkpoint {
-            id: 1,
-            is_marked: true,
-        },
-    );
-    t.append("a".to_string(), Retention::Ephemeral);
-    t.append("a".to_string(), Retention::Ephemeral);
-    t.append("a".to_string(), Retention::Ephemeral);
-    assert_eq!(t.root(0).unwrap(), "aaaa____________");
+impl TestCheckpoint for usize {
+    fn from_u64(value: u64) -> Self {
+        value
+            .try_into()
+            .expect("we do not use test checkpoint identifiers greater than usize::MAX")
+    }
+}
+
+trait TestTree<H: TestHashable, C: TestCheckpoint> {
+    fn assert_root(&self, checkpoint_depth: usize, values: &[u64]);
+
+    fn assert_append(&mut self, value: u64, retention: Retention<u64>);
+}
+
+impl<H: TestHashable, C: TestCheckpoint, T: Tree<H, C>> TestTree<H, C> for T {
+    fn assert_root(&self, checkpoint_depth: usize, values: &[u64]) {
+        assert_eq!(
+            self.root(checkpoint_depth).unwrap(),
+            H::combine_all(self.depth(), values)
+        );
+    }
+
+    fn assert_append(&mut self, value: u64, retention: Retention<u64>) {
+        assert!(
+            self.append(H::from_u64(value), retention.map(|id| C::from_u64(*id))),
+            "append failed for value {}",
+            value
+        );
+    }
+}
+
+/// This checks basic append and root computation functionality
+pub fn check_root_hashes<H: TestHashable, C: TestCheckpoint, T: Tree<H, C>, F: Fn(usize) -> T>(
+    new_tree: F,
+) {
+    use Retention::*;
+
+    {
+        let mut tree = new_tree(100);
+        tree.assert_root(0, &[]);
+        tree.assert_append(0, Ephemeral);
+        tree.assert_root(0, &[0]);
+        tree.assert_append(1, Ephemeral);
+        tree.assert_root(0, &[0, 1]);
+        tree.assert_append(2, Ephemeral);
+        tree.assert_root(0, &[0, 1, 2]);
+    }
+
+    {
+        let mut t = new_tree(100);
+        t.assert_append(
+            0,
+            Retention::Checkpoint {
+                id: 1,
+                is_marked: true,
+            },
+        );
+        for _ in 0..3 {
+            t.assert_append(0, Ephemeral);
+        }
+        t.assert_root(0, &[0, 0, 0, 0]);
+    }
 }
 
 /// This test expects a depth-4 tree and verifies that the tree reports itself as full after 2^4
 /// appends.
-pub fn check_append<T: Tree<String, usize> + std::fmt::Debug, F: Fn(usize) -> T>(new_tree: F) {
+pub fn check_append<H: TestHashable, C: TestCheckpoint, T: Tree<H, C>, F: Fn(usize) -> T>(
+    new_tree: F,
+) {
     use Retention::*;
 
-    let mut tree = new_tree(100);
-    assert_eq!(tree.depth(), 4);
+    {
+        let mut tree = new_tree(100);
+        assert_eq!(tree.depth(), 4);
 
-    // 16 appends should succeed
-    for i in 0..16 {
-        assert!(tree.append(i.to_string(), Ephemeral));
-        assert_eq!(tree.current_position(), Some(Position::from(i)));
+        // 16 appends should succeed
+        for i in 0..16 {
+            tree.assert_append(i, Ephemeral);
+            assert_eq!(tree.current_position(), Some(Position::from(i)));
+        }
+
+        // 17th append should fail
+        assert!(!tree.append(H::from_u64(16), Ephemeral));
     }
 
-    // 17th append should fail
-    assert!(!tree.append("16".to_string(), Ephemeral));
-
-    // The following checks a condition on state restoration in the case that an append fails.
-    // We want to ensure that a failed append does not cause a loss of information.
-    let ops = (0..17)
-        .map(|i| Append(i.to_string(), Ephemeral))
-        .collect::<Vec<_>>();
-    let tree = new_tree(100);
-    check_operations(tree, &ops).unwrap();
+    {
+        // The following checks a condition on state restoration in the case that an append fails.
+        // We want to ensure that a failed append does not cause a loss of information.
+        let ops = (0..17)
+            .map(|i| Append(H::from_u64(i), Ephemeral))
+            .collect::<Vec<_>>();
+        let tree = new_tree(100);
+        check_operations(tree, &ops).unwrap();
+    }
 }
 
 pub fn check_witnesses<T: Tree<String, usize> + std::fmt::Debug, F: Fn(usize) -> T>(new_tree: F) {

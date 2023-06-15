@@ -4037,7 +4037,7 @@ mod tests {
 
     #[test]
     fn combined_append() {
-        check_append(new_combined_tree);
+        check_append::<String, usize, _, _>(new_combined_tree);
     }
 
     #[test]
