@@ -3477,38 +3477,61 @@ pub mod testing {
         }
 
         fn append(&mut self, value: H, retention: Retention<C>) -> bool {
-            ShardTree::append(self, value, retention).is_ok()
+            match ShardTree::append(self, value, retention) {
+                Ok(_) => true,
+                Err(ShardTreeError::Insert(InsertionError::TreeFull)) => false,
+                Err(other) => panic!("append failed due to error: {:?}", other),
+            }
         }
 
         fn current_position(&self) -> Option<Position> {
-            ShardTree::max_leaf_position(self, 0).ok().flatten()
+            match ShardTree::max_leaf_position(self, 0) {
+                Ok(v) => v,
+                Err(err) => panic!("current position query failed: {:?}", err),
+            }
         }
 
         fn get_marked_leaf(&self, position: Position) -> Option<H> {
-            ShardTree::get_marked_leaf(self, position).ok().flatten()
+            match ShardTree::get_marked_leaf(self, position) {
+                Ok(v) => v,
+                Err(err) => panic!("marked leaf query failed: {:?}", err),
+            }
         }
 
         fn marked_positions(&self) -> BTreeSet<Position> {
-            ShardTree::marked_positions(self).unwrap_or_else(|_| BTreeSet::new())
+            match ShardTree::marked_positions(&self) {
+                Ok(v) => v,
+                Err(err) => panic!("marked positions query failed: {:?}", err),
+            }
         }
 
         fn root(&self, checkpoint_depth: usize) -> Option<H> {
-            ShardTree::root_at_checkpoint(self, checkpoint_depth).ok()
+            match ShardTree::root_at_checkpoint(self, checkpoint_depth) {
+                Ok(v) => Some(v),
+                Err(err) => panic!("root computation failed: {:?}", err),
+            }
         }
 
         fn witness(&self, position: Position, checkpoint_depth: usize) -> Option<Vec<H>> {
-            ShardTree::witness(self, position, checkpoint_depth)
-                .ok()
-                .map(|p| p.path_elems().to_vec())
+            match ShardTree::witness(self, position, checkpoint_depth) {
+                Ok(p) => Some(p.path_elems().to_vec()),
+                Err(ShardTreeError::Query(
+                    QueryError::NotContained(_) | QueryError::TreeIncomplete(_) | QueryError::CheckpointPruned
+                )) => None,
+                Err(err) => panic!("witness computation failed: {:?}", err),
+            }
         }
 
         fn remove_mark(&mut self, position: Position) -> bool {
-            ShardTree::remove_mark(
-                self,
-                position,
-                self.store.max_checkpoint_id().unwrap().as_ref(),
-            )
-            .unwrap()
+            let max_checkpoint = self
+                .store
+                .max_checkpoint_id()
+                .unwrap_or_else(|err| panic!("checkpoint retrieval failed: {:?}", err));
+
+            match ShardTree::remove_mark(self, position, max_checkpoint.as_ref()) {
+                Ok(result) => result,
+                Err(err) => panic!("mark removal failed: {:?}", err),
+            }
         }
 
         fn checkpoint(&mut self, checkpoint_id: C) -> bool {
