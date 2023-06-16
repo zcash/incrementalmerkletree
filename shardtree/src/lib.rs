@@ -3516,7 +3516,9 @@ pub mod testing {
             match ShardTree::witness(self, position, checkpoint_depth) {
                 Ok(p) => Some(p.path_elems().to_vec()),
                 Err(ShardTreeError::Query(
-                    QueryError::NotContained(_) | QueryError::TreeIncomplete(_) | QueryError::CheckpointPruned
+                    QueryError::NotContained(_)
+                    | QueryError::TreeIncomplete(_)
+                    | QueryError::CheckpointPruned,
                 )) => None,
                 Err(err) => panic!("witness computation failed: {:?}", err),
             }
@@ -3557,8 +3559,9 @@ mod tests {
         frontier::NonEmptyFrontier,
         testing::{
             arb_operation, check_append, check_checkpoint_rewind, check_operations,
-            check_rewind_remove_mark, check_root_hashes, check_witnesses,
-            complete_tree::CompleteTree, CombinedTree, SipHashable,
+            check_remove_mark, check_rewind_remove_mark, check_root_hashes,
+            check_witness_consistency, check_witnesses, complete_tree::CompleteTree, CombinedTree,
+            SipHashable,
         },
         Address, Hashable, Level, Position, Retention,
     };
@@ -3984,39 +3987,43 @@ mod tests {
         );
     }
 
+    fn new_tree(m: usize) -> ShardTree<MemoryShardStore<String, usize>, 4, 3> {
+        ShardTree::new(MemoryShardStore::empty(), m)
+    }
+
     #[test]
     fn append() {
-        check_append(|m| {
-            ShardTree::<MemoryShardStore<String, usize>, 4, 3>::new(MemoryShardStore::empty(), m)
-        });
+        check_append(new_tree);
     }
 
     #[test]
     fn root_hashes() {
-        check_root_hashes(|m| {
-            ShardTree::<MemoryShardStore<String, usize>, 4, 3>::new(MemoryShardStore::empty(), m)
-        });
+        check_root_hashes(new_tree);
     }
 
     #[test]
     fn witnesses() {
-        check_witnesses(|m| {
-            ShardTree::<MemoryShardStore<String, usize>, 4, 3>::new(MemoryShardStore::empty(), m)
-        });
+        check_witnesses(new_tree);
+    }
+
+    #[test]
+    fn witness_consistency() {
+        check_witness_consistency(new_tree);
     }
 
     #[test]
     fn checkpoint_rewind() {
-        check_checkpoint_rewind(|m| {
-            ShardTree::<MemoryShardStore<String, usize>, 4, 3>::new(MemoryShardStore::empty(), m)
-        });
+        check_checkpoint_rewind(new_tree);
+    }
+
+    #[test]
+    fn remove_mark() {
+        check_remove_mark(new_tree);
     }
 
     #[test]
     fn rewind_remove_mark() {
-        check_rewind_remove_mark(|m| {
-            ShardTree::<MemoryShardStore<String, usize>, 4, 3>::new(MemoryShardStore::empty(), m)
-        });
+        check_rewind_remove_mark(new_tree);
     }
 
     // Combined tree tests

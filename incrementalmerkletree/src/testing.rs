@@ -1061,25 +1061,25 @@ pub fn check_remove_mark<C: TestCheckpoint, T: Tree<String, C>, F: Fn(usize) -> 
     }
 }
 
-pub fn check_rewind_remove_mark<T: Tree<String, usize>, F: Fn(usize) -> T>(new_tree: F) {
+pub fn check_rewind_remove_mark<C: TestCheckpoint, T: Tree<String, C>, F: Fn(usize) -> T>(new_tree: F) {
     // rewinding doesn't remove a mark
     let mut tree = new_tree(100);
     tree.append("e".to_string(), Retention::Marked);
-    tree.checkpoint(1);
+    tree.assert_checkpoint(1);
     assert!(tree.rewind());
     assert!(tree.remove_mark(0u64.into()));
 
     // use a maximum number of checkpoints of 1
     let mut tree = new_tree(1);
     assert!(tree.append("e".to_string(), Retention::Marked));
-    assert!(tree.checkpoint(1));
+    tree.assert_checkpoint(1);
     assert!(tree.marked_positions().contains(&0u64.into()));
     assert!(tree.append("f".to_string(), Retention::Ephemeral));
     // simulate a spend of `e` at `f`
     assert!(tree.remove_mark(0u64.into()));
     // even though the mark has been staged for removal, it's not gone yet
     assert!(tree.marked_positions().contains(&0u64.into()));
-    assert!(tree.checkpoint(2));
+    tree.assert_checkpoint(2);
     // the newest checkpoint will have caused the oldest to roll off, and
     // so the forgotten node will be unmarked
     assert!(!tree.marked_positions().contains(&0u64.into()));
@@ -1092,21 +1092,21 @@ pub fn check_rewind_remove_mark<T: Tree<String, usize>, F: Fn(usize) -> T>(new_t
     let samples = vec![
         vec![
             append_str("x", Retention::Marked),
-            Checkpoint(1),
+            Checkpoint(C::from_u64(1)),
             Rewind,
             unmark(0),
         ],
         vec![
             append_str("d", Retention::Marked),
-            Checkpoint(1),
+            Checkpoint(C::from_u64(1)),
             unmark(0),
             Rewind,
             unmark(0),
         ],
         vec![
             append_str("o", Retention::Marked),
-            Checkpoint(1),
-            Checkpoint(2),
+            Checkpoint(C::from_u64(1)),
+            Checkpoint(C::from_u64(2)),
             unmark(0),
             Rewind,
             Rewind,
@@ -1114,7 +1114,7 @@ pub fn check_rewind_remove_mark<T: Tree<String, usize>, F: Fn(usize) -> T>(new_t
         vec![
             append_str("s", Retention::Marked),
             append_str("m", Retention::Ephemeral),
-            Checkpoint(1),
+            Checkpoint(C::from_u64(1)),
             unmark(0),
             Rewind,
             unmark(0),
@@ -1122,7 +1122,7 @@ pub fn check_rewind_remove_mark<T: Tree<String, usize>, F: Fn(usize) -> T>(new_t
         ],
         vec![
             append_str("a", Retention::Marked),
-            Checkpoint(1),
+            Checkpoint(C::from_u64(1)),
             Rewind,
             append_str("a", Retention::Marked),
         ],
@@ -1139,37 +1139,37 @@ pub fn check_rewind_remove_mark<T: Tree<String, usize>, F: Fn(usize) -> T>(new_t
     }
 }
 
-pub fn check_witness_consistency<T: Tree<String, usize>, F: Fn(usize) -> T>(new_tree: F) {
+pub fn check_witness_consistency<C: TestCheckpoint, T: Tree<String, C>, F: Fn(usize) -> T>(new_tree: F) {
     let samples = vec![
         // Reduced examples
         vec![
             append_str("a", Retention::Ephemeral),
             append_str("b", Retention::Marked),
-            Checkpoint(1),
+            Checkpoint(C::from_u64(1)),
             witness(0, 1),
         ],
         vec![
             append_str("c", Retention::Ephemeral),
             append_str("d", Retention::Marked),
-            Checkpoint(1),
+            Checkpoint(C::from_u64(1)),
             witness(1, 1),
         ],
         vec![
             append_str("e", Retention::Marked),
-            Checkpoint(1),
+            Checkpoint(C::from_u64(1)),
             append_str("f", Retention::Ephemeral),
             witness(0, 1),
         ],
         vec![
             append_str("g", Retention::Marked),
-            Checkpoint(1),
+            Checkpoint(C::from_u64(1)),
             unmark(0),
             append_str("h", Retention::Ephemeral),
             witness(0, 0),
         ],
         vec![
             append_str("i", Retention::Marked),
-            Checkpoint(1),
+            Checkpoint(C::from_u64(1)),
             unmark(0),
             append_str("j", Retention::Ephemeral),
             witness(0, 0),
@@ -1177,28 +1177,28 @@ pub fn check_witness_consistency<T: Tree<String, usize>, F: Fn(usize) -> T>(new_
         vec![
             append_str("i", Retention::Marked),
             append_str("j", Retention::Ephemeral),
-            Checkpoint(1),
+            Checkpoint(C::from_u64(1)),
             append_str("k", Retention::Ephemeral),
             witness(0, 1),
         ],
         vec![
             append_str("l", Retention::Marked),
-            Checkpoint(1),
-            Checkpoint(2),
+            Checkpoint(C::from_u64(1)),
+            Checkpoint(C::from_u64(2)),
             append_str("m", Retention::Ephemeral),
-            Checkpoint(3),
+            Checkpoint(C::from_u64(3)),
             witness(0, 2),
         ],
         vec![
-            Checkpoint(1),
+            Checkpoint(C::from_u64(1)),
             append_str("n", Retention::Marked),
             witness(0, 1),
         ],
         vec![
             append_str("a", Retention::Marked),
-            Checkpoint(1),
+            Checkpoint(C::from_u64(1)),
             unmark(0),
-            Checkpoint(2),
+            Checkpoint(C::from_u64(2)),
             append_str("b", Retention::Ephemeral),
             witness(0, 1),
         ],
@@ -1206,22 +1206,22 @@ pub fn check_witness_consistency<T: Tree<String, usize>, F: Fn(usize) -> T>(new_
             append_str("a", Retention::Marked),
             append_str("b", Retention::Ephemeral),
             unmark(0),
-            Checkpoint(1),
+            Checkpoint(C::from_u64(1)),
             witness(0, 0),
         ],
         vec![
             append_str("a", Retention::Marked),
-            Checkpoint(1),
+            Checkpoint(C::from_u64(1)),
             unmark(0),
-            Checkpoint(2),
+            Checkpoint(C::from_u64(2)),
             Rewind,
             append_str("b", Retention::Ephemeral),
             witness(0, 0),
         ],
         vec![
             append_str("a", Retention::Marked),
-            Checkpoint(1),
-            Checkpoint(2),
+            Checkpoint(C::from_u64(1)),
+            Checkpoint(C::from_u64(2)),
             Rewind,
             append_str("a", Retention::Ephemeral),
             unmark(0),
@@ -1232,7 +1232,7 @@ pub fn check_witness_consistency<T: Tree<String, usize>, F: Fn(usize) -> T>(new_
             append_str("o", Retention::Ephemeral),
             append_str("p", Retention::Marked),
             append_str("q", Retention::Ephemeral),
-            Checkpoint(1),
+            Checkpoint(C::from_u64(1)),
             unmark(1),
             witness(1, 1),
         ],
@@ -1240,20 +1240,20 @@ pub fn check_witness_consistency<T: Tree<String, usize>, F: Fn(usize) -> T>(new_
             append_str("r", Retention::Ephemeral),
             append_str("s", Retention::Ephemeral),
             append_str("t", Retention::Marked),
-            Checkpoint(1),
+            Checkpoint(C::from_u64(1)),
             unmark(2),
-            Checkpoint(2),
+            Checkpoint(C::from_u64(2)),
             witness(2, 2),
         ],
         vec![
             append_str("u", Retention::Marked),
             append_str("v", Retention::Ephemeral),
             append_str("w", Retention::Ephemeral),
-            Checkpoint(1),
+            Checkpoint(C::from_u64(1)),
             unmark(0),
             append_str("x", Retention::Ephemeral),
-            Checkpoint(2),
-            Checkpoint(3),
+            Checkpoint(C::from_u64(2)),
+            Checkpoint(C::from_u64(3)),
             witness(0, 3),
         ],
     ];
