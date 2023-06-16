@@ -1,4 +1,47 @@
 //! Common types and utilities used in incremental Merkle tree implementations.
+//!
+//! # Navigating Tree Structure
+//!
+//! Several different abstractions are used for navigating tree structure. Consider this example
+//! binary tree:
+//!
+//! ```text
+//!      a
+//!     / \
+//!    /   \
+//!   /     \
+//!   b      c
+//!  / \    / \
+//! d   e  f   g
+//! ````
+//!
+//! **Location Abstractions:**
+//!
+//! - [Level] represents the height from the leaves. Examples: `e` is level 0, `c` is level 1, `a`
+//!   is level 2.
+//! - `index` is the 0-based distance from the left-most node _on a given [Level]_. Examples: `f`
+//!   has index 2, `c` has index 1, and `a` has index 0.
+//! - [Position] is a type abstraction of the index of a leaf at [Level] 0.
+//! - [Address] locates any node within a tree by representing the [Level] and `index`. Examples:
+//!   the [Address] of `c` is at [Level] 1 and index 1, the [Address] of `f` is at [Level] 0,
+//!   index 2.
+//!
+//! **Relationship Abstractions:**
+//!
+//! A given node has these navigational relationships:
+//!
+//! - `parent` - the node directly above at one higher [Level].
+//! - `child` - the complementary relationship to parent; a parent may have up to two children
+//!    because only binary trees are supported.
+//! - `sibling` - the other node with the same parent.
+//! - `cousin` - a node at the same [Level] excluding the sibling.
+//! - `ommer` - the parent's sibling.
+//! - `root` - the single node with the largest [Level].
+//! - `ancestor` - the parent or an ancestor of the parent; the root is an ancestor of every
+//!   other node.
+//!
+//! Note: we often refer to `ommers` (plural) when describing leaf-to-root paths, so in that
+//! context `ommers` refers to the node's ommer, plus each ancestor's ommer.
 
 use either::Either;
 use std::cmp::Ordering;
