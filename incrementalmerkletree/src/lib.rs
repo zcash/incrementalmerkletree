@@ -94,8 +94,9 @@ impl Iterator for WitnessAddrsIter {
 pub struct Position(u64);
 
 impl Position {
-    /// Return whether the position is odd-valued.
-    pub fn is_odd(&self) -> bool {
+    /// Return whether the position refers to the right-hand child of a subtree with
+    /// its root at level 1.
+    pub fn is_right_child(&self) -> bool {
         self.0 & 0x1 == 1
     }
 
@@ -422,6 +423,11 @@ impl Address {
         } else {
             Ordering::Equal
         }
+    }
+
+    /// Returns whether this address is the right-hand child of its parent
+    pub fn is_left_child(&self) -> bool {
+        self.index & 0x1 == 0
     }
 
     /// Returns whether this address is the right-hand child of its parent

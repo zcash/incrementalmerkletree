@@ -21,5 +21,10 @@ proptest = { version = "1.0.0", optional = true }
 proptest = "1.0.0"
 
 [features]
+# The legacy-api feature guards types and functions that were previously 
+# part of the `zcash_primitives` crate. Those types were removed in the
+# `zcash_primitives` 0.12 release and are now maintained here.
 legacy-api = []
+# The test-depenencies feature guards types and functions that are 
+# useful for testing incremental Merkle trees and Merkle tree frontiers.
 test-dependencies = ["proptest"]

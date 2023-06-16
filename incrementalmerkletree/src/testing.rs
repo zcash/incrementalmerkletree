@@ -1061,7 +1061,9 @@ pub fn check_remove_mark<C: TestCheckpoint, T: Tree<String, C>, F: Fn(usize) -> 
     }
 }
 
-pub fn check_rewind_remove_mark<C: TestCheckpoint, T: Tree<String, C>, F: Fn(usize) -> T>(new_tree: F) {
+pub fn check_rewind_remove_mark<C: TestCheckpoint, T: Tree<String, C>, F: Fn(usize) -> T>(
+    new_tree: F,
+) {
     // rewinding doesn't remove a mark
     let mut tree = new_tree(100);
     tree.append("e".to_string(), Retention::Marked);
@@ -1139,7 +1141,9 @@ pub fn check_rewind_remove_mark<C: TestCheckpoint, T: Tree<String, C>, F: Fn(usi
     }
 }
 
-pub fn check_witness_consistency<C: TestCheckpoint, T: Tree<String, C>, F: Fn(usize) -> T>(new_tree: F) {
+pub fn check_witness_consistency<C: TestCheckpoint, T: Tree<String, C>, F: Fn(usize) -> T>(
+    new_tree: F,
+) {
     let samples = vec![
         // Reduced examples
         vec![

@@ -1,6 +1,6 @@
 use bitflags::bitflags;
 use core::convert::TryFrom;
-use core::fmt::{self, Debug};
+use core::fmt::{self, Debug, Display};
 use core::ops::{Deref, Range};
 use either::Either;
 use std::collections::{BTreeMap, BTreeSet};
@@ -722,11 +722,7 @@ impl fmt::Display for InsertionError {
     }
 }
 
-impl std::error::Error for InsertionError {
-    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
-        None
-    }
-}
+impl std::error::Error for InsertionError {}
 
 /// Errors that may be returned in the process of querying a [`ShardTree`]
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -765,11 +761,7 @@ impl fmt::Display for QueryError {
     }
 }
 
-impl std::error::Error for QueryError {
-    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
-        None
-    }
-}
+impl std::error::Error for QueryError {}
 
 /// Operations on [`LocatedTree`]s that are annotated with Merkle hashes.
 impl<H: Hashable + Clone + PartialEq> LocatedPrunableTree<H> {
@@ -871,7 +863,7 @@ impl<H: Hashable + Clone + PartialEq> LocatedPrunableTree<H> {
                     } else {
                         // we handle the level 0 leaves here by adding the sibling of our desired
                         // leaf to the witness
-                        if position.is_odd() {
+                        if position.is_right_child() {
                             if right.is_marked_leaf() {
                                 left.leaf_value()
                                     .map(|v| vec![v.clone()])
@@ -1345,9 +1337,9 @@ impl<H: Hashable + Clone + PartialEq> LocatedPrunableTree<H> {
                     }),
                 };
 
-                if position.is_odd() {
-                    // At odd positions, we are completing a subtree and so we unite fragments
-                    // up the stack until we get the largest possible subtree
+                if position.is_right_child() {
+                    // At right-hand positions, we are completing a subtree and so we unite
+                    // fragments up the stack until we get the largest possible subtree
                     while let Some((potential_sibling, marked)) = fragments.pop() {
                         if potential_sibling.root_addr.parent() == subtree.root_addr.parent() {
                             subtree = unite(potential_sibling, subtree, prune_below);
@@ -1416,11 +1408,10 @@ impl<H: Hashable + Clone + PartialEq> LocatedPrunableTree<H> {
         }
     }
 
-    // Constructs a pair of trees contains the leaf and ommers of the given frontier.
-    // The first element of the result is a tree with its root at a level less than
-    // or equal to `split_at`; the second element is a tree with its leaves at level
-    // `split_at` that is only returned if the frontier contains sufficient data to
-    // fill the first tree to the `split_at` level.
+    // Constructs a pair of trees that contain the leaf and ommers of the given frontier. The first
+    // element of the result is a tree with its root at a level less than or equal to `split_at`;
+    // the second element is a tree with its leaves at level `split_at` that is only returned if
+    // the frontier contains sufficient data to fill the first tree to the `split_at` level.
     fn from_frontier<C>(
         frontier: NonEmptyFrontier<H>,
         leaf_retention: &Retention<C>,
@@ -1446,7 +1437,7 @@ impl<H: Hashable + Clone + PartialEq> LocatedPrunableTree<H> {
         });
 
         while addr.level() < split_at {
-            if addr.index() & 0x1 == 0 {
+            if addr.is_left_child() {
                 // the current address is a left child, so create a parent with
                 // an empty right-hand tree
                 subtree = Tree::parent(None, subtree, Tree::empty());
@@ -1472,7 +1463,7 @@ impl<H: Hashable + Clone + PartialEq> LocatedPrunableTree<H> {
             let mut supertree = None;
             for left in ommers {
                 // build up the left-biased tree until we get a right-hand node
-                while addr.index() & 0x1 == 0 {
+                while addr.is_left_child() {
                     supertree = supertree.map(|t| Tree::parent(None, t, Tree::empty()));
                     addr = addr.parent();
                 }
@@ -1511,7 +1502,7 @@ impl<H: Hashable + Clone + PartialEq> LocatedPrunableTree<H> {
         let mut addr = leaf_addr;
         let mut subtree = Tree::empty();
         while addr.level() < split_at {
-            if addr.index() & 0x1 == 0 {
+            if addr.is_left_child() {
                 // the current  root is a left child, so take the right sibling from the
                 // filled iterator
                 if let Some(right) = filled.next() {
@@ -1543,7 +1534,7 @@ impl<H: Hashable + Clone + PartialEq> LocatedPrunableTree<H> {
             let mut supertree = None;
             for right in filled {
                 // build up the right-biased tree until we get a left-hand node
-                while addr.index() & 0x1 == 1 {
+                while addr.is_right_child() {
                     supertree = supertree.map(|t| Tree::parent(None, Tree::empty(), t));
                     addr = addr.parent();
                 }
@@ -1818,12 +1809,10 @@ pub trait ShardStore {
     /// provided has level `SHARD_HEIGHT`.
     fn truncate(&mut self, from: Address) -> Result<(), Self::Error>;
 
-    /// A tree that is used to cache the known roots of subtrees in the "cap" of nodes between
-    /// `SHARD_HEIGHT` and `DEPTH` that are otherwise not directly represented in the tree.  
-    ///
-    /// This tree only contains data that is expected to be stable; i.e. any node whose value
-    /// might be altered as a consequence of the discovery of additional information from
-    /// branches of the tree will be `Nil` in this cache.
+    /// A tree that is used to cache the known roots of subtrees in the "cap" - the top part of the
+    /// tree, which contains parent nodes produced by hashing the roots of the individual shards.
+    /// Nodes in the cap have levels in the range `SHARD_HEIGHT..DEPTH`. Note that the cap may be
+    /// sparse, in the same way that individual shards may be sparse.
     fn get_cap(&self) -> Result<PrunableTree<Self::H>, Self::Error>;
 
     /// Persists the provided cap to the data store.
@@ -2176,12 +2165,8 @@ impl<S> From<InsertionError> for ShardTreeError<S> {
 impl<S: fmt::Display> fmt::Display for ShardTreeError<S> {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match &self {
-            ShardTreeError::Query(q) => {
-                write!(f, "{}", q)
-            }
-            ShardTreeError::Insert(i) => {
-                write!(f, "{}", i)
-            }
+            ShardTreeError::Query(q) => Display::fmt(&q, f),
+            ShardTreeError::Insert(i) => Display::fmt(&i, f),
             ShardTreeError::Storage(s) => {
                 write!(
                     f,
@@ -2749,16 +2734,15 @@ impl<
         &mut self,
         checkpoint_id: &C,
     ) -> Result<bool, ShardTreeError<S::Error>> {
-        match self
+        if let Some(c) = self
             .store
             .get_checkpoint(checkpoint_id)
             .map_err(ShardTreeError::Storage)?
         {
-            Some(c) => {
-                self.truncate_removing_checkpoint_internal(checkpoint_id, &c)?;
-                Ok(true)
-            }
-            None => Ok(false),
+            self.truncate_removing_checkpoint_internal(checkpoint_id, &c)?;
+            Ok(true)
+        } else {
+            Ok(false)
         }
     }
 
@@ -3221,6 +3205,11 @@ impl<
         }
     }
 
+    /// Computes the witness for the leaf at the specified position.
+    ///
+    /// This implementation will mutate the tree to cache intermediate root (ommer) values that are
+    /// computed in the process of constructing the witness, so as to avoid the need to recompute
+    /// those values from potentially large numbers of subtree roots in the future.
     pub fn witness_caching(
         &mut self,
         position: Position,
@@ -3499,7 +3488,7 @@ pub mod testing {
         }
 
         fn marked_positions(&self) -> BTreeSet<Position> {
-            match ShardTree::marked_positions(&self) {
+            match ShardTree::marked_positions(self) {
                 Ok(v) => v,
                 Err(err) => panic!("marked positions query failed: {:?}", err),
             }

@@ -84,9 +84,9 @@ impl<H: Hashable + Clone> NonEmptyFrontier<H> {
         let prior_leaf = self.leaf.clone();
         self.position += 1;
         self.leaf = leaf;
-        if self.position.is_odd() {
-            // if the new position is odd, the current leaf will directly become
-            // an ommer at level 0, and there is no other mutation made to the tree.
+        if self.position.is_right_child() {
+            // if the new position is a right-hand leaf, the current leaf will directly become an
+            // ommer at level 0, and there is no other mutation made to the tree.
             self.ommers.insert(0, prior_leaf);
         } else {
             // if the new position is even, then the current leaf will be hashed
@@ -411,7 +411,7 @@ impl<H: Hashable + Clone, const DEPTH: u8> CommitmentTree<H, DEPTH> {
     pub fn from_frontier(frontier: &Frontier<H, DEPTH>) -> Self {
         frontier.value().map_or_else(Self::empty, |f| {
             let mut ommers_iter = f.ommers().iter().cloned();
-            let (left, right) = if f.position().is_odd() {
+            let (left, right) = if f.position().is_right_child() {
                 (
                     ommers_iter
                         .next()
