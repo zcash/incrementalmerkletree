@@ -505,6 +505,8 @@ trait TestTree<H: TestHashable, C: TestCheckpoint> {
     fn assert_root(&self, checkpoint_depth: usize, values: &[u64]);
 
     fn assert_append(&mut self, value: u64, retention: Retention<u64>);
+
+    fn assert_checkpoint(&mut self, value: u64);
 }
 
 impl<H: TestHashable, C: TestCheckpoint, T: Tree<H, C>> TestTree<H, C> for T {
@@ -519,6 +521,14 @@ impl<H: TestHashable, C: TestCheckpoint, T: Tree<H, C>> TestTree<H, C> for T {
         assert!(
             self.append(H::from_u64(value), retention.map(|id| C::from_u64(*id))),
             "append failed for value {}",
+            value
+        );
+    }
+
+    fn assert_checkpoint(&mut self, value: u64) {
+        assert!(
+            self.checkpoint(C::from_u64(value)),
+            "checkpoint failed for value {}",
             value
         );
     }
@@ -589,7 +599,9 @@ pub fn check_append<H: TestHashable, C: TestCheckpoint, T: Tree<H, C>, F: Fn(usi
     }
 }
 
-pub fn check_witnesses<H: TestHashable, C: TestCheckpoint, T: Tree<H, C>, F: Fn(usize) -> T>(new_tree: F) {
+pub fn check_witnesses<H: TestHashable, C: TestCheckpoint, T: Tree<H, C>, F: Fn(usize) -> T>(
+    new_tree: F,
+) {
     use Retention::*;
 
     {
@@ -757,8 +769,8 @@ pub fn check_witnesses<H: TestHashable, C: TestCheckpoint, T: Tree<H, C>, F: Fn(
             6,
             Checkpoint {
                 id: 1,
-                is_marked: true
-            }
+                is_marked: true,
+            },
         );
         tree.assert_append(7, Ephemeral);
         assert!(tree.rewind());
@@ -788,8 +800,8 @@ pub fn check_witnesses<H: TestHashable, C: TestCheckpoint, T: Tree<H, C>, F: Fn(
             Some(vec![
                 H::from_u64(13),
                 H::combine_all(1, &[14, 15]),
-                H::combine_all(2, &[8,9,10,11]),
-                H::combine_all(3, &[0,1,2,3,4,5,6,7]),
+                H::combine_all(2, &[8, 9, 10, 11]),
+                H::combine_all(3, &[0, 1, 2, 3, 4, 5, 6, 7]),
             ])
         );
     }
@@ -809,9 +821,9 @@ pub fn check_witnesses<H: TestHashable, C: TestCheckpoint, T: Tree<H, C>, F: Fn(
                 Position::from(11),
                 vec![
                     H::from_u64(10),
-                    H::combine_all(1, &[8,9]),
-                    H::combine_all(2, &[12,13]),
-                    H::combine_all(3, &[0,1,2,3,4,5,6,7]),
+                    H::combine_all(1, &[8, 9]),
+                    H::combine_all(2, &[12, 13]),
+                    H::combine_all(3, &[0, 1, 2, 3, 4, 5, 6, 7]),
                 ]
             ))
         );
@@ -861,7 +873,7 @@ pub fn check_witnesses<H: TestHashable, C: TestCheckpoint, T: Tree<H, C>, F: Fn(
                 Position::from(3),
                 vec![
                     H::from_u64(2),
-                    H::combine_all(1, &[0,1]),
+                    H::combine_all(1, &[0, 1]),
                     H::combine_all(2, &[]),
                     H::combine_all(3, &[]),
                 ]
@@ -902,8 +914,8 @@ pub fn check_witnesses<H: TestHashable, C: TestCheckpoint, T: Tree<H, C>, F: Fn(
                 Position::from(3),
                 vec![
                     H::from_u64(0),
-                    H::combine_all(1, &[0,0]),
-                    H::combine_all(2, &[0,0,0,0]),
+                    H::combine_all(1, &[0, 0]),
+                    H::combine_all(2, &[0, 0, 0, 0]),
                     H::combine_all(3, &[]),
                 ]
             ))
@@ -965,7 +977,7 @@ pub fn check_witnesses<H: TestHashable, C: TestCheckpoint, T: Tree<H, C>, F: Fn(
                 Position::from(2),
                 vec![
                     H::empty_leaf(),
-                    H::combine_all(1, &[0,0]),
+                    H::combine_all(1, &[0, 0]),
                     H::combine_all(2, &[]),
                     H::combine_all(3, &[]),
                 ]
@@ -974,37 +986,39 @@ pub fn check_witnesses<H: TestHashable, C: TestCheckpoint, T: Tree<H, C>, F: Fn(
     }
 }
 
-pub fn check_checkpoint_rewind<T: Tree<String, usize>, F: Fn(usize) -> T>(new_tree: F) {
+pub fn check_checkpoint_rewind<C: TestCheckpoint, T: Tree<String, C>, F: Fn(usize) -> T>(
+    new_tree: F,
+) {
     let mut t = new_tree(100);
     assert!(!t.rewind());
 
     let mut t = new_tree(100);
-    t.checkpoint(1);
+    t.assert_checkpoint(1);
     assert!(t.rewind());
 
     let mut t = new_tree(100);
     t.append("a".to_string(), Retention::Ephemeral);
-    t.checkpoint(1);
+    t.assert_checkpoint(1);
     t.append("b".to_string(), Retention::Marked);
     assert!(t.rewind());
     assert_eq!(Some(Position::from(0)), t.current_position());
 
     let mut t = new_tree(100);
     t.append("a".to_string(), Retention::Marked);
-    t.checkpoint(1);
+    t.assert_checkpoint(1);
     assert!(t.rewind());
 
     let mut t = new_tree(100);
     t.append("a".to_string(), Retention::Marked);
-    t.checkpoint(1);
+    t.assert_checkpoint(1);
     t.append("a".to_string(), Retention::Ephemeral);
     assert!(t.rewind());
     assert_eq!(Some(Position::from(0)), t.current_position());
 
     let mut t = new_tree(100);
     t.append("a".to_string(), Retention::Ephemeral);
-    t.checkpoint(1);
-    t.checkpoint(2);
+    t.assert_checkpoint(1);
+    t.assert_checkpoint(2);
     assert!(t.rewind());
     t.append("b".to_string(), Retention::Ephemeral);
     assert!(t.rewind());
@@ -1012,14 +1026,14 @@ pub fn check_checkpoint_rewind<T: Tree<String, usize>, F: Fn(usize) -> T>(new_tr
     assert_eq!(t.root(0).unwrap(), "ab______________");
 }
 
-pub fn check_remove_mark<T: Tree<String, usize>, F: Fn(usize) -> T>(new_tree: F) {
+pub fn check_remove_mark<C: TestCheckpoint, T: Tree<String, C>, F: Fn(usize) -> T>(new_tree: F) {
     let samples = vec![
         vec![
             append_str("a", Retention::Ephemeral),
             append_str(
                 "a",
                 Retention::Checkpoint {
-                    id: 1,
+                    id: C::from_u64(1),
                     is_marked: true,
                 },
             ),
@@ -1030,7 +1044,7 @@ pub fn check_remove_mark<T: Tree<String, usize>, F: Fn(usize) -> T>(new_tree: F)
             append_str("a", Retention::Ephemeral),
             append_str("a", Retention::Ephemeral),
             append_str("a", Retention::Marked),
-            Checkpoint(1),
+            Checkpoint(C::from_u64(1)),
             unmark(3),
             witness(3, 0),
         ],
