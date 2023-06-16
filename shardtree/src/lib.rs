@@ -3343,7 +3343,7 @@ fn accumulate_result_with<A, B, C>(
 #[cfg(any(bench, test, feature = "test-dependencies"))]
 pub mod testing {
     use super::*;
-    use incrementalmerkletree::Hashable;
+    use incrementalmerkletree::{testing, Hashable};
     use proptest::bool::weighted;
     use proptest::collection::vec;
     use proptest::prelude::*;
@@ -3461,6 +3461,64 @@ pub mod testing {
         let chars = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ";
         (0usize..chars.len()).prop_map(move |i| chars.get(i..=i).unwrap().to_string())
     }
+
+    impl<
+            H: Hashable + Ord + Clone,
+            C: Clone + Ord + core::fmt::Debug,
+            S: ShardStore<H = H, CheckpointId = C>,
+            const DEPTH: u8,
+            const SHARD_HEIGHT: u8,
+        > testing::Tree<H, C> for ShardTree<S, DEPTH, SHARD_HEIGHT>
+    where
+        S::Error: std::fmt::Debug,
+    {
+        fn depth(&self) -> u8 {
+            DEPTH
+        }
+
+        fn append(&mut self, value: H, retention: Retention<C>) -> bool {
+            ShardTree::append(self, value, retention).is_ok()
+        }
+
+        fn current_position(&self) -> Option<Position> {
+            ShardTree::max_leaf_position(self, 0).ok().flatten()
+        }
+
+        fn get_marked_leaf(&self, position: Position) -> Option<H> {
+            ShardTree::get_marked_leaf(self, position).ok().flatten()
+        }
+
+        fn marked_positions(&self) -> BTreeSet<Position> {
+            ShardTree::marked_positions(self).unwrap_or_else(|_| BTreeSet::new())
+        }
+
+        fn root(&self, checkpoint_depth: usize) -> Option<H> {
+            ShardTree::root_at_checkpoint(self, checkpoint_depth).ok()
+        }
+
+        fn witness(&self, position: Position, checkpoint_depth: usize) -> Option<Vec<H>> {
+            ShardTree::witness(self, position, checkpoint_depth)
+                .ok()
+                .map(|p| p.path_elems().to_vec())
+        }
+
+        fn remove_mark(&mut self, position: Position) -> bool {
+            ShardTree::remove_mark(
+                self,
+                position,
+                self.store.max_checkpoint_id().unwrap().as_ref(),
+            )
+            .unwrap()
+        }
+
+        fn checkpoint(&mut self, checkpoint_id: C) -> bool {
+            ShardTree::checkpoint(self, checkpoint_id).unwrap()
+        }
+
+        fn rewind(&mut self) -> bool {
+            ShardTree::truncate_to_depth(self, 1).unwrap()
+        }
+    }
 }
 
 #[cfg(test)]
@@ -3468,14 +3526,14 @@ mod tests {
     use crate::{
         testing::{arb_char_str, arb_shardtree},
         IncompleteAt, InsertionError, LocatedPrunableTree, LocatedTree, MemoryShardStore, Node,
-        PrunableTree, QueryError, RetentionFlags, ShardStore, ShardTree, ShardTreeError, Tree,
+        PrunableTree, QueryError, RetentionFlags, ShardTree, ShardTreeError, Tree,
     };
 
     use assert_matches::assert_matches;
     use incrementalmerkletree::{
         frontier::NonEmptyFrontier,
         testing::{
-            self, arb_operation, check_append, check_checkpoint_rewind, check_operations,
+            arb_operation, check_append, check_checkpoint_rewind, check_operations,
             check_rewind_remove_mark, check_root_hashes, check_witnesses,
             complete_tree::CompleteTree, CombinedTree, SipHashable,
         },
@@ -3901,64 +3959,6 @@ mod tests {
             tree.store.shards[3].max_position(),
             Some(Position::from(14))
         );
-    }
-
-    impl<
-            H: Hashable + Ord + Clone,
-            C: Clone + Ord + core::fmt::Debug,
-            S: ShardStore<H = H, CheckpointId = C>,
-            const DEPTH: u8,
-            const SHARD_HEIGHT: u8,
-        > testing::Tree<H, C> for ShardTree<S, DEPTH, SHARD_HEIGHT>
-    where
-        S::Error: std::fmt::Debug,
-    {
-        fn depth(&self) -> u8 {
-            DEPTH
-        }
-
-        fn append(&mut self, value: H, retention: Retention<C>) -> bool {
-            ShardTree::append(self, value, retention).is_ok()
-        }
-
-        fn current_position(&self) -> Option<Position> {
-            ShardTree::max_leaf_position(self, 0).ok().flatten()
-        }
-
-        fn get_marked_leaf(&self, position: Position) -> Option<H> {
-            ShardTree::get_marked_leaf(self, position).ok().flatten()
-        }
-
-        fn marked_positions(&self) -> BTreeSet<Position> {
-            ShardTree::marked_positions(self).unwrap_or_else(|_| BTreeSet::new())
-        }
-
-        fn root(&self, checkpoint_depth: usize) -> Option<H> {
-            ShardTree::root_at_checkpoint(self, checkpoint_depth).ok()
-        }
-
-        fn witness(&self, position: Position, checkpoint_depth: usize) -> Option<Vec<H>> {
-            ShardTree::witness(self, position, checkpoint_depth)
-                .ok()
-                .map(|p| p.path_elems().to_vec())
-        }
-
-        fn remove_mark(&mut self, position: Position) -> bool {
-            ShardTree::remove_mark(
-                self,
-                position,
-                self.store.max_checkpoint_id().unwrap().as_ref(),
-            )
-            .unwrap()
-        }
-
-        fn checkpoint(&mut self, checkpoint_id: C) -> bool {
-            ShardTree::checkpoint(self, checkpoint_id).unwrap()
-        }
-
-        fn rewind(&mut self) -> bool {
-            ShardTree::truncate_to_depth(self, 1).unwrap()
-        }
     }
 
     #[test]
