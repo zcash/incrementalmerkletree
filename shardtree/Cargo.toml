@@ -12,6 +12,7 @@ repository = "https://github.com/zcash/incrementalmerkletree"
 categories = ["algorithms", "data-structures"]
 
 [dependencies]
+assert_matches = { version = "1.5", optional = true }
 bitflags = "1.3"
 either = "1.8"
 incrementalmerkletree = { version = "0.4", path = "../incrementalmerkletree" }
@@ -30,7 +31,7 @@ proptest = "1.0.0"
 legacy-api = ["incrementalmerkletree/legacy-api"]
 # The test-depenencies feature can be enabled to expose types and functions
 # that are useful for testing `shardtree` functionality.
-test-dependencies = ["proptest"]
+test-dependencies = ["proptest", "assert_matches"]
 
 [target.'cfg(unix)'.dev-dependencies]
 pprof = { version = "0.9", features = ["criterion", "flamegraph"] } # MSRV 1.56

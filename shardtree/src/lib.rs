@@ -3331,12 +3331,15 @@ fn accumulate_result_with<A, B, C>(
 
 #[cfg(any(bench, test, feature = "test-dependencies"))]
 pub mod testing {
-    use super::*;
-    use incrementalmerkletree::{testing, Hashable};
+    use assert_matches::assert_matches;
     use proptest::bool::weighted;
     use proptest::collection::vec;
     use proptest::prelude::*;
     use proptest::sample::select;
+
+    use incrementalmerkletree::{testing, Hashable};
+
+    use super::*;
 
     pub fn arb_retention_flags() -> impl Strategy<Value = RetentionFlags> + Clone {
         select(vec![
@@ -3533,17 +3536,128 @@ pub mod testing {
             ShardTree::truncate_to_depth(self, 1).unwrap()
         }
     }
+
+    pub fn check_shardtree_insertion<
+        E: Debug,
+        S: ShardStore<H = String, CheckpointId = u32, Error = E>,
+    >(
+        mut tree: ShardTree<S, 4, 3>,
+    ) {
+        assert_matches!(
+            tree.batch_insert(
+                Position::from(1),
+                vec![
+                    ("b".to_string(), Retention::Checkpoint { id: 1, is_marked: false }),
+                    ("c".to_string(), Retention::Ephemeral),
+                    ("d".to_string(), Retention::Marked),
+                ].into_iter()
+            ),
+            Ok(Some((pos, incomplete))) if
+                pos == Position::from(3) &&
+                incomplete == vec![
+                    IncompleteAt {
+                        address: Address::from_parts(Level::from(0), 0),
+                        required_for_witness: true
+                    },
+                    IncompleteAt {
+                        address: Address::from_parts(Level::from(2), 1),
+                        required_for_witness: true
+                    }
+                ]
+        );
+
+        assert_matches!(
+            tree.root_at_checkpoint(1),
+            Err(ShardTreeError::Query(QueryError::TreeIncomplete(v))) if v == vec![Address::from_parts(Level::from(0), 0)]
+        );
+
+        assert_matches!(
+            tree.batch_insert(
+                Position::from(0),
+                vec![
+                    ("a".to_string(), Retention::Ephemeral),
+                ].into_iter()
+            ),
+            Ok(Some((pos, incomplete))) if
+                pos == Position::from(0) &&
+                incomplete == vec![]
+        );
+
+        assert_matches!(
+            tree.root_at_checkpoint(0),
+            Ok(h) if h == *"abcd____________"
+        );
+
+        assert_matches!(
+            tree.root_at_checkpoint(1),
+            Ok(h) if h == *"ab______________"
+        );
+
+        assert_matches!(
+            tree.batch_insert(
+                Position::from(10),
+                vec![
+                    ("k".to_string(), Retention::Ephemeral),
+                    ("l".to_string(), Retention::Checkpoint { id: 2, is_marked: false }),
+                    ("m".to_string(), Retention::Ephemeral),
+                ].into_iter()
+            ),
+            Ok(Some((pos, incomplete))) if
+                pos == Position::from(12) &&
+                incomplete == vec![
+                    IncompleteAt {
+                        address: Address::from_parts(Level::from(0), 13),
+                        required_for_witness: false
+                    },
+                    IncompleteAt {
+                        address: Address::from_parts(Level::from(1), 7),
+                        required_for_witness: false
+                    },
+                    IncompleteAt {
+                        address: Address::from_parts(Level::from(1), 4),
+                        required_for_witness: false
+                    },
+                ]
+        );
+
+        assert_matches!(
+            tree.root_at_checkpoint(0),
+            // The (0, 13) and (1, 7) incomplete subtrees are
+            // not considered incomplete here because they appear
+            // at the tip of the tree.
+            Err(ShardTreeError::Query(QueryError::TreeIncomplete(xs))) if xs == vec![
+                Address::from_parts(Level::from(2), 1),
+                Address::from_parts(Level::from(1), 4),
+            ]
+        );
+
+        assert_matches!(tree.truncate_to_depth(1), Ok(true));
+    }
+
+    pub fn check_shard_sizes<E: Debug, S: ShardStore<H = String, CheckpointId = u32, Error = E>>(
+        mut tree: ShardTree<S, 4, 2>,
+    ) {
+        for c in 'a'..'p' {
+            tree.append(c.to_string(), Retention::Ephemeral).unwrap();
+        }
+
+        assert_eq!(tree.store.get_shard_roots().unwrap().len(), 4);
+        assert_eq!(
+            tree.store
+                .get_shard(Address::from_parts(Level::from(2), 3))
+                .unwrap()
+                .and_then(|t| t.max_position()),
+            Some(Position::from(14))
+        );
+    }
 }
 
 #[cfg(test)]
 mod tests {
-    use crate::{
-        testing::{arb_char_str, arb_shardtree},
-        IncompleteAt, InsertionError, LocatedPrunableTree, LocatedTree, MemoryShardStore, Node,
-        PrunableTree, QueryError, RetentionFlags, ShardTree, ShardTreeError, Tree,
-    };
-
     use assert_matches::assert_matches;
+    use proptest::prelude::*;
+    use std::collections::BTreeSet;
+
     use incrementalmerkletree::{
         frontier::NonEmptyFrontier,
         testing::{
@@ -3554,8 +3668,12 @@ mod tests {
         },
         Address, Hashable, Level, Position, Retention,
     };
-    use proptest::prelude::*;
-    use std::collections::BTreeSet;
+
+    use crate::{
+        testing::{arb_char_str, arb_shardtree, check_shard_sizes, check_shardtree_insertion},
+        InsertionError, LocatedPrunableTree, LocatedTree, MemoryShardStore, Node, PrunableTree,
+        QueryError, RetentionFlags, ShardTree, Tree,
+    };
 
     #[cfg(feature = "legacy-api")]
     use incrementalmerkletree::{frontier::CommitmentTree, witness::IncrementalWitness};
@@ -3867,113 +3985,18 @@ mod tests {
 
     #[test]
     fn shardtree_insertion() {
-        let mut tree: ShardTree<MemoryShardStore<String, usize>, 4, 3> =
+        let tree: ShardTree<MemoryShardStore<String, u32>, 4, 3> =
             ShardTree::new(MemoryShardStore::empty(), 100);
 
-        assert_matches!(
-            tree.batch_insert(
-                Position::from(1),
-                vec![
-                    ("b".to_string(), Retention::Checkpoint { id: 1, is_marked: false }),
-                    ("c".to_string(), Retention::Ephemeral),
-                    ("d".to_string(), Retention::Marked),
-                ].into_iter()
-            ),
-            Ok(Some((pos, incomplete))) if
-                pos == Position::from(3) &&
-                incomplete == vec![
-                    IncompleteAt {
-                        address: Address::from_parts(Level::from(0), 0),
-                        required_for_witness: true
-                    },
-                    IncompleteAt {
-                        address: Address::from_parts(Level::from(2), 1),
-                        required_for_witness: true
-                    }
-                ]
-        );
-
-        assert_matches!(
-            tree.root_at_checkpoint(1),
-            Err(ShardTreeError::Query(QueryError::TreeIncomplete(v))) if v == vec![Address::from_parts(Level::from(0), 0)]
-        );
-
-        assert_matches!(
-            tree.batch_insert(
-                Position::from(0),
-                vec![
-                    ("a".to_string(), Retention::Ephemeral),
-                ].into_iter()
-            ),
-            Ok(Some((pos, incomplete))) if
-                pos == Position::from(0) &&
-                incomplete == vec![]
-        );
-
-        assert_matches!(
-            tree.root_at_checkpoint(0),
-            Ok(h) if h == *"abcd____________"
-        );
-
-        assert_matches!(
-            tree.root_at_checkpoint(1),
-            Ok(h) if h == *"ab______________"
-        );
-
-        assert_matches!(
-            tree.batch_insert(
-                Position::from(10),
-                vec![
-                    ("k".to_string(), Retention::Ephemeral),
-                    ("l".to_string(), Retention::Checkpoint { id: 2, is_marked: false }),
-                    ("m".to_string(), Retention::Ephemeral),
-                ].into_iter()
-            ),
-            Ok(Some((pos, incomplete))) if
-                pos == Position::from(12) &&
-                incomplete == vec![
-                    IncompleteAt {
-                        address: Address::from_parts(Level::from(0), 13),
-                        required_for_witness: false
-                    },
-                    IncompleteAt {
-                        address: Address::from_parts(Level::from(1), 7),
-                        required_for_witness: false
-                    },
-                    IncompleteAt {
-                        address: Address::from_parts(Level::from(1), 4),
-                        required_for_witness: false
-                    },
-                ]
-        );
-
-        assert_matches!(
-            tree.root_at_checkpoint(0),
-            // The (0, 13) and (1, 7) incomplete subtrees are
-            // not considered incomplete here because they appear
-            // at the tip of the tree.
-            Err(ShardTreeError::Query(QueryError::TreeIncomplete(xs))) if xs == vec![
-                Address::from_parts(Level::from(2), 1),
-                Address::from_parts(Level::from(1), 4),
-            ]
-        );
-
-        assert_matches!(tree.truncate_to_depth(1), Ok(true));
+        check_shardtree_insertion(tree)
     }
 
     #[test]
     fn shard_sizes() {
-        let mut tree: ShardTree<MemoryShardStore<String, usize>, 4, 2> =
+        let tree: ShardTree<MemoryShardStore<String, u32>, 4, 2> =
             ShardTree::new(MemoryShardStore::empty(), 100);
-        for c in 'a'..'p' {
-            tree.append(c.to_string(), Retention::Ephemeral).unwrap();
-        }
 
-        assert_eq!(tree.store.shards.len(), 4);
-        assert_eq!(
-            tree.store.shards[3].max_position(),
-            Some(Position::from(14))
-        );
+        check_shard_sizes(tree)
     }
 
     fn new_tree(m: usize) -> ShardTree<MemoryShardStore<String, usize>, 4, 3> {
