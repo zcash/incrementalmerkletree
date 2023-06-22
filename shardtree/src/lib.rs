@@ -2260,47 +2260,54 @@ impl<
 
     /// Inserts a new root into the tree at the given address.
     ///
-    /// This will pad from the left until the tree's subtrees vector contains enough trees to reach
-    /// the specified address, which must be at the [`Self::subtree_level`] level. If a subtree
-    /// already exists at this address, its root will be annotated with the specified hash value.
-    ///
+    /// The level associated with the given address may not exceed `DEPTH`.
     /// This will return an error if the specified hash conflicts with any existing annotation.
-    pub fn put_root(&mut self, addr: Address, value: H) -> Result<(), ShardTreeError<S::Error>> {
-        let updated_subtree = match self
-            .store
-            .get_shard(addr)
-            .map_err(ShardTreeError::Storage)?
-        {
-            Some(s) if !s.root.is_nil() => s.root.node_value().map_or_else(
-                || {
-                    Ok(Some(
-                        s.clone().reannotate_root(Some(Rc::new(value.clone()))),
-                    ))
-                },
-                |v| {
-                    if v == &value {
-                        // the existing root is already correctly annotated, so no need to
-                        // do anything
-                        Ok(None)
-                    } else {
-                        // the provided value conflicts with the existing root value
-                        Err(InsertionError::Conflict(addr))
-                    }
-                },
-            ),
-            _ => {
-                // there is no existing subtree root, so construct a new one.
-                Ok(Some(LocatedTree {
-                    root_addr: addr,
-                    root: Tree(Node::Leaf {
-                        value: (value, RetentionFlags::EPHEMERAL),
-                    }),
-                }))
-            }
-        }?;
+    pub fn insert(&mut self, root_addr: Address, value: H) -> Result<(), ShardTreeError<S::Error>> {
+        if root_addr.level() > Self::root_addr().level() {
+            return Err(ShardTreeError::Insert(InsertionError::NotContained(
+                root_addr,
+            )));
+        }
 
-        if let Some(s) = updated_subtree {
-            self.store.put_shard(s).map_err(ShardTreeError::Storage)?;
+        let to_insert = LocatedTree {
+            root_addr,
+            root: Tree::leaf((value, RetentionFlags::EPHEMERAL)),
+        };
+
+        // The cap will retain nodes at the level of the shard roots or higher.
+        if root_addr.level() >= Self::subtree_level() {
+            let cap = LocatedTree {
+                root: self.store.get_cap().map_err(ShardTreeError::Storage)?,
+                root_addr: Self::root_addr(),
+            };
+
+            cap.insert_subtree(to_insert.clone(), false)
+                .map_err(ShardTreeError::Insert)
+                .and_then(|(updated_cap, _)| {
+                    self.store
+                        .put_cap(updated_cap.root)
+                        .map_err(ShardTreeError::Storage)
+                })?;
+        }
+
+        if let Either::Left(shard_root_addr) = root_addr.context(Self::subtree_level()) {
+            let shard = self
+                .store
+                .get_shard(shard_root_addr)
+                .map_err(ShardTreeError::Storage)?
+                .unwrap_or_else(|| LocatedTree {
+                    root_addr: shard_root_addr,
+                    root: Tree::empty(),
+                });
+
+            let updated_shard = shard
+                .insert_subtree(to_insert, false)
+                .map_err(ShardTreeError::Insert)
+                .map(|(t, _)| t)?;
+
+            self.store
+                .put_shard(updated_shard)
+                .map_err(ShardTreeError::Storage)?;
         }
 
         Ok(())
@@ -3455,7 +3462,7 @@ pub mod testing {
     }
 
     impl<
-            H: Hashable + Ord + Clone,
+            H: Hashable + Ord + Clone + core::fmt::Debug,
             C: Clone + Ord + core::fmt::Debug,
             S: ShardStore<H = H, CheckpointId = C>,
             const DEPTH: u8,
@@ -3650,6 +3657,58 @@ pub mod testing {
             Some(Position::from(14))
         );
     }
+
+    pub fn check_witness_with_pruned_subtrees<
+        E: Debug,
+        S: ShardStore<H = String, CheckpointId = u32, Error = E>,
+    >(
+        mut tree: ShardTree<S, 6, 3>,
+    ) {
+        // introduce some roots
+        let shard_root_level = Level::from(3);
+        for idx in 0u64..4 {
+            let root = if idx == 3 {
+                "abcdefgh".to_string()
+            } else {
+                idx.to_string()
+            };
+            tree.insert(Address::from_parts(shard_root_level, idx), root)
+                .unwrap();
+        }
+
+        // simulate discovery of a note
+        tree.batch_insert(
+            Position::from(24),
+            ('a'..='h').into_iter().map(|c| {
+                (
+                    c.to_string(),
+                    match c {
+                        'c' => Retention::Marked,
+                        'h' => Retention::Checkpoint {
+                            id: 3,
+                            is_marked: false,
+                        },
+                        _ => Retention::Ephemeral,
+                    },
+                )
+            }),
+        )
+        .unwrap();
+
+        // construct a witness for the note
+        let witness = tree.witness(Position::from(26), 0).unwrap();
+        assert_eq!(
+            witness.path_elems(),
+            &[
+                "d",
+                "ab",
+                "efgh",
+                "2",
+                "01",
+                "________________________________"
+            ]
+        );
+    }
 }
 
 #[cfg(test)]
@@ -3670,7 +3729,10 @@ mod tests {
     };
 
     use crate::{
-        testing::{arb_char_str, arb_shardtree, check_shard_sizes, check_shardtree_insertion},
+        testing::{
+            arb_char_str, arb_shardtree, check_shard_sizes, check_shardtree_insertion,
+            check_witness_with_pruned_subtrees,
+        },
         InsertionError, LocatedPrunableTree, LocatedTree, MemoryShardStore, Node, PrunableTree,
         QueryError, RetentionFlags, ShardTree, Tree,
     };
@@ -3997,6 +4059,14 @@ mod tests {
             ShardTree::new(MemoryShardStore::empty(), 100);
 
         check_shard_sizes(tree)
+    }
+
+    #[test]
+    fn witness_with_pruned_subtrees() {
+        let tree: ShardTree<MemoryShardStore<String, u32>, 6, 3> =
+            ShardTree::new(MemoryShardStore::empty(), 100);
+
+        check_witness_with_pruned_subtrees(tree)
     }
 
     fn new_tree(m: usize) -> ShardTree<MemoryShardStore<String, usize>, 4, 3> {
