@@ -475,6 +475,11 @@ impl<A, V> LocatedTree<A, V> {
         &self.root
     }
 
+    /// Consumes this tree and returns its root as an owned value.
+    pub fn take_root(self) -> Tree<A, V> {
+        self.root
+    }
+
     /// Returns a new [`LocatedTree`] with the provided value replacing the annotation of its root
     /// node, if that root node is a `Node::Parent`. Otherwise .
     pub fn reannotate_root(self, value: A) -> Self {
