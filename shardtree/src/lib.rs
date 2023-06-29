@@ -3644,6 +3644,26 @@ pub mod testing {
         );
 
         assert_matches!(tree.truncate_to_depth(1), Ok(true));
+
+        assert_matches!(
+            tree.batch_insert(
+                Position::from(4),
+                ('e'..'k')
+                    .into_iter()
+                    .map(|c| (c.to_string(), Retention::Ephemeral))
+            ),
+            Ok(_)
+        );
+
+        assert_matches!(
+            tree.root_at_checkpoint(0),
+            Ok(h) if h == *"abcdefghijkl____"
+        );
+
+        assert_matches!(
+            tree.root_at_checkpoint(1),
+            Ok(h) if h == *"ab______________"
+        );
     }
 
     pub fn check_shard_sizes<E: Debug, S: ShardStore<H = String, CheckpointId = u32, Error = E>>(
