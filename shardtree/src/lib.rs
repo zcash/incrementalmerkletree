@@ -1599,6 +1599,9 @@ impl<H: Hashable + Clone + PartialEq> LocatedPrunableTree<H> {
 
     /// Insert the nodes belonging to the given incremental witness to this tree, truncating the
     /// witness to the given position.
+    ///
+    /// Returns a copy of this tree updated to include the witness nodes, any partial supertree that is
+    /// produced from nodes "higher" in the witness tree
     #[cfg(feature = "legacy-api")]
     pub fn insert_witness_nodes<C, const DEPTH: u8>(
         &self,
@@ -4255,6 +4258,27 @@ mod tests {
     }
 
     #[test]
+    fn insert_frontier_nodes_sub_shard_height() {
+        let mut frontier = NonEmptyFrontier::new("a".to_string());
+        for c in 'b'..='c' {
+            frontier.append(c.to_string());
+        }
+
+        let root_addr = Address::from_parts(Level::from(3), 0);
+        let tree = LocatedPrunableTree::empty(root_addr);
+        let result = tree.insert_frontier_nodes::<()>(frontier.clone(), &Retention::Ephemeral);
+        assert_matches!(result, Ok((ref _t, None)));
+
+        if let Ok((t, None)) = result {
+            // verify that the leaf at the tip is included
+            assert_eq!(
+                t.root.root_hash(root_addr, Position::from(3)),
+                Ok("abc_____".to_string())
+            );
+        }
+    }
+
+    #[test]
     #[cfg(feature = "legacy-api")]
     fn insert_witness_nodes() {
         let mut base_tree = CommitmentTree::<String, 6>::empty();
@@ -4299,6 +4323,30 @@ mod tests {
                 r.root
                     .root_hash(Address::from_parts(Level::from(3), 3), Position::from(25)),
                 Ok("y_______".to_string())
+            );
+        }
+    }
+
+    #[test]
+    #[cfg(feature = "legacy-api")]
+    fn insert_witness_nodes_sub_shard_height() {
+        let mut base_tree = CommitmentTree::<String, 6>::empty();
+        for c in 'a'..='c' {
+            base_tree.append(c.to_string()).unwrap();
+        }
+        let mut witness = IncrementalWitness::from_tree(base_tree);
+        witness.append("d".to_string()).unwrap();
+
+        let root_addr = Address::from_parts(Level::from(3), 0);
+        let tree = LocatedPrunableTree::empty(root_addr);
+        let result = tree.insert_witness_nodes(witness, 3usize);
+        assert_matches!(result, Ok((ref _t, None, None)));
+
+        if let Ok((t, None, None)) = result {
+            // verify that we can find the "marked" leaf
+            assert_eq!(
+                t.root.root_hash(root_addr, Position::from(3)),
+                Ok("abc_____".to_string())
             );
         }
     }
