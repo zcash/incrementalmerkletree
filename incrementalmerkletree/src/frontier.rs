@@ -203,8 +203,8 @@ impl<H, const DEPTH: u8> Frontier<H, DEPTH> {
 
     /// Constructs a new frontier from its constituent parts.
     ///
-    /// Returns `None` if the new frontier would exceed the maximum allowed depth or if the list of
-    /// ommers provided is not consistent with the position of the leaf.
+    /// Returns an error if the new frontier would exceed the maximum allowed depth or if the list
+    /// of ommers provided is not consistent with the position of the leaf.
     pub fn from_parts(position: Position, leaf: H, ommers: Vec<H>) -> Result<Self, FrontierError> {
         NonEmptyFrontier::from_parts(position, leaf, ommers).and_then(Self::try_from)
     }

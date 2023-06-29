@@ -425,7 +425,7 @@ impl Address {
         }
     }
 
-    /// Returns whether this address is the right-hand child of its parent
+    /// Returns whether this address is the left-hand child of its parent
     pub fn is_left_child(&self) -> bool {
         self.index & 0x1 == 0
     }

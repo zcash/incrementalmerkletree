@@ -102,7 +102,7 @@ impl<H, const DEPTH: u8> IncrementalWitness<H, DEPTH> {
                 }
             })
             .take(self.filled.len())
-            .fold(0u64, |acc, addr| acc + 2u64.pow(addr.level().into()));
+            .fold(0u64, |acc, addr| acc + (1u64 << u8::from(addr.level())));
 
         self.witnessed_position()
             + leaves_to_cursor_start
