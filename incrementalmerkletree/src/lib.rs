@@ -137,8 +137,9 @@ impl Iterator for WitnessAddrsIter {
 pub struct Position(u64);
 
 impl Position {
-    /// Return whether the position is odd-valued.
-    pub fn is_odd(&self) -> bool {
+    /// Return whether the position refers to the right-hand child of a subtree with
+    /// its root at level 1.
+    pub fn is_right_child(&self) -> bool {
         self.0 & 0x1 == 1
     }
 
@@ -236,6 +237,10 @@ impl TryFrom<Position> for usize {
 pub struct Level(u8);
 
 impl Level {
+    pub const fn new(value: u8) -> Self {
+        Self(value)
+    }
+
     // TODO: replace with an instance for `Step<Level>` once `step_trait`
     // is stabilized
     pub fn iter_to(self, other: Level) -> impl Iterator<Item = Self> {
@@ -262,9 +267,21 @@ impl From<Level> for u8 {
     }
 }
 
-// Supporting sub-8-bit platforms isn't on our
+impl From<Level> for u32 {
+    fn from(level: Level) -> u32 {
+        level.0.into()
+    }
+}
+
+impl From<Level> for u64 {
+    fn from(level: Level) -> u64 {
+        level.0.into()
+    }
+}
+
 impl From<Level> for usize {
     fn from(level: Level) -> usize {
+        // Supporting sub-8-bit platforms isn't on our roadmap.
         level.0 as usize
     }
 }
@@ -364,6 +381,27 @@ impl Address {
         self.level > addr.level && { addr.index >> (self.level.0 - addr.level.0) == self.index }
     }
 
+    /// Returns the common ancestor of `self` and `other` having the smallest level value.
+    pub fn common_ancestor(&self, other: &Self) -> Self {
+        if self.level >= other.level {
+            let other_ancestor_idx = other.index >> (self.level.0 - other.level.0);
+            let index_delta = self.index.abs_diff(other_ancestor_idx);
+            let level_delta = (u64::BITS - index_delta.leading_zeros()) as u8;
+            Address {
+                level: self.level + level_delta,
+                index: std::cmp::max(self.index, other_ancestor_idx) >> level_delta,
+            }
+        } else {
+            let self_ancestor_idx = self.index >> (other.level.0 - self.level.0);
+            let index_delta = other.index.abs_diff(self_ancestor_idx);
+            let level_delta = (u64::BITS - index_delta.leading_zeros()) as u8;
+            Address {
+                level: other.level + level_delta,
+                index: std::cmp::max(other.index, self_ancestor_idx) >> level_delta,
+            }
+        }
+    }
+
     /// Returns whether this address is an ancestor of, or is equal to,
     /// the specified address.
     pub fn contains(&self, addr: &Self) -> bool {
@@ -428,6 +466,11 @@ impl Address {
         } else {
             Ordering::Equal
         }
+    }
+
+    /// Returns whether this address is the left-hand child of its parent
+    pub fn is_left_child(&self) -> bool {
+        self.index & 0x1 == 0
     }
 
     /// Returns whether this address is the right-hand child of its parent
@@ -779,5 +822,29 @@ pub(crate) mod tests {
         .unwrap();
 
         assert_eq!(path.root("c".to_string()), "abcdefgh".to_string());
+    }
+
+    #[test]
+    fn addr_common_ancestor() {
+        assert_eq!(
+            Address::from_parts(Level(2), 1).common_ancestor(&Address::from_parts(Level(3), 2)),
+            Address::from_parts(Level(5), 0)
+        );
+        assert_eq!(
+            Address::from_parts(Level(2), 2).common_ancestor(&Address::from_parts(Level(1), 7)),
+            Address::from_parts(Level(3), 1)
+        );
+        assert_eq!(
+            Address::from_parts(Level(2), 2).common_ancestor(&Address::from_parts(Level(2), 2)),
+            Address::from_parts(Level(2), 2)
+        );
+        assert_eq!(
+            Address::from_parts(Level(2), 2).common_ancestor(&Address::from_parts(Level(0), 9)),
+            Address::from_parts(Level(2), 2)
+        );
+        assert_eq!(
+            Address::from_parts(Level(0), 9).common_ancestor(&Address::from_parts(Level(2), 2)),
+            Address::from_parts(Level(2), 2)
+        );
     }
 }

@@ -467,449 +467,558 @@ impl<H: Hashable + Ord + Clone + Debug, C: Clone, I: Tree<H, C>, E: Tree<H, C>> 
 // Shared example tests
 //
 
-pub fn check_root_hashes<T: Tree<String, usize>, F: Fn(usize) -> T>(new_tree: F) {
-    let mut tree = new_tree(100);
-    assert_eq!(tree.root(0).unwrap(), "________________");
+pub trait TestHashable: Hashable + Ord + Clone + Debug {
+    fn from_u64(value: u64) -> Self;
 
-    tree.append("a".to_string(), Retention::Ephemeral);
-    assert_eq!(tree.root(0).unwrap().len(), 16);
-    assert_eq!(tree.root(0).unwrap(), "a_______________");
+    fn combine_all(depth: u8, values: &[u64]) -> Self {
+        let values: Vec<Self> = values.iter().map(|v| Self::from_u64(*v)).collect();
+        complete_tree::root(&values, depth)
+    }
+}
 
-    tree.append("b".to_string(), Retention::Ephemeral);
-    assert_eq!(tree.root(0).unwrap(), "ab______________");
+impl TestHashable for String {
+    fn from_u64(value: u64) -> Self {
+        ('a'..)
+            .nth(
+                value
+                    .try_into()
+                    .expect("we do not use test value indices larger than usize::MAX"),
+            )
+            .expect("we do not choose test value indices larger than the iterable character range")
+            .to_string()
+    }
+}
 
-    tree.append("c".to_string(), Retention::Ephemeral);
-    assert_eq!(tree.root(0).unwrap(), "abc_____________");
+pub trait TestCheckpoint: Ord + Clone + Debug {
+    fn from_u64(value: u64) -> Self;
+}
 
-    let mut t = new_tree(100);
-    t.append(
-        "a".to_string(),
-        Retention::Checkpoint {
-            id: 1,
-            is_marked: true,
-        },
-    );
-    t.append("a".to_string(), Retention::Ephemeral);
-    t.append("a".to_string(), Retention::Ephemeral);
-    t.append("a".to_string(), Retention::Ephemeral);
-    assert_eq!(t.root(0).unwrap(), "aaaa____________");
+impl TestCheckpoint for usize {
+    fn from_u64(value: u64) -> Self {
+        value
+            .try_into()
+            .expect("we do not use test checkpoint identifiers greater than usize::MAX")
+    }
+}
+
+trait TestTree<H: TestHashable, C: TestCheckpoint> {
+    fn assert_root(&self, checkpoint_depth: usize, values: &[u64]);
+
+    fn assert_append(&mut self, value: u64, retention: Retention<u64>);
+
+    fn assert_checkpoint(&mut self, value: u64);
+}
+
+impl<H: TestHashable, C: TestCheckpoint, T: Tree<H, C>> TestTree<H, C> for T {
+    fn assert_root(&self, checkpoint_depth: usize, values: &[u64]) {
+        assert_eq!(
+            self.root(checkpoint_depth).unwrap(),
+            H::combine_all(self.depth(), values)
+        );
+    }
+
+    fn assert_append(&mut self, value: u64, retention: Retention<u64>) {
+        assert!(
+            self.append(H::from_u64(value), retention.map(|id| C::from_u64(*id))),
+            "append failed for value {}",
+            value
+        );
+    }
+
+    fn assert_checkpoint(&mut self, value: u64) {
+        assert!(
+            self.checkpoint(C::from_u64(value)),
+            "checkpoint failed for value {}",
+            value
+        );
+    }
+}
+
+/// This checks basic append and root computation functionality
+pub fn check_root_hashes<H: TestHashable, C: TestCheckpoint, T: Tree<H, C>, F: Fn(usize) -> T>(
+    new_tree: F,
+) {
+    use Retention::*;
+
+    {
+        let mut tree = new_tree(100);
+        tree.assert_root(0, &[]);
+        tree.assert_append(0, Ephemeral);
+        tree.assert_root(0, &[0]);
+        tree.assert_append(1, Ephemeral);
+        tree.assert_root(0, &[0, 1]);
+        tree.assert_append(2, Ephemeral);
+        tree.assert_root(0, &[0, 1, 2]);
+    }
+
+    {
+        let mut t = new_tree(100);
+        t.assert_append(
+            0,
+            Retention::Checkpoint {
+                id: 1,
+                is_marked: true,
+            },
+        );
+        for _ in 0..3 {
+            t.assert_append(0, Ephemeral);
+        }
+        t.assert_root(0, &[0, 0, 0, 0]);
+    }
 }
 
 /// This test expects a depth-4 tree and verifies that the tree reports itself as full after 2^4
 /// appends.
-pub fn check_append<T: Tree<String, usize> + std::fmt::Debug, F: Fn(usize) -> T>(new_tree: F) {
+pub fn check_append<H: TestHashable, C: TestCheckpoint, T: Tree<H, C>, F: Fn(usize) -> T>(
+    new_tree: F,
+) {
     use Retention::*;
 
-    let mut tree = new_tree(100);
-    assert_eq!(tree.depth(), 4);
+    {
+        let mut tree = new_tree(100);
+        assert_eq!(tree.depth(), 4);
 
-    // 16 appends should succeed
-    for i in 0..16 {
-        assert!(tree.append(i.to_string(), Ephemeral));
-        assert_eq!(tree.current_position(), Some(Position::from(i)));
+        // 16 appends should succeed
+        for i in 0..16 {
+            tree.assert_append(i, Ephemeral);
+            assert_eq!(tree.current_position(), Some(Position::from(i)));
+        }
+
+        // 17th append should fail
+        assert!(!tree.append(H::from_u64(16), Ephemeral));
     }
 
-    // 17th append should fail
-    assert!(!tree.append("16".to_string(), Ephemeral));
-
-    // The following checks a condition on state restoration in the case that an append fails.
-    // We want to ensure that a failed append does not cause a loss of information.
-    let ops = (0..17)
-        .map(|i| Append(i.to_string(), Ephemeral))
-        .collect::<Vec<_>>();
-    let tree = new_tree(100);
-    check_operations(tree, &ops).unwrap();
+    {
+        // The following checks a condition on state restoration in the case that an append fails.
+        // We want to ensure that a failed append does not cause a loss of information.
+        let ops = (0..17)
+            .map(|i| Append(H::from_u64(i), Ephemeral))
+            .collect::<Vec<_>>();
+        let tree = new_tree(100);
+        check_operations(tree, &ops).unwrap();
+    }
 }
 
-pub fn check_witnesses<T: Tree<String, usize> + std::fmt::Debug, F: Fn(usize) -> T>(new_tree: F) {
+pub fn check_witnesses<H: TestHashable, C: TestCheckpoint, T: Tree<H, C>, F: Fn(usize) -> T>(
+    new_tree: F,
+) {
     use Retention::*;
 
-    let mut tree = new_tree(100);
-    tree.append("a".to_string(), Marked);
-    assert_eq!(
-        tree.witness(Position::from(0), 0),
-        Some(vec![
-            "_".to_string(),
-            "__".to_string(),
-            "____".to_string(),
-            "________".to_string()
-        ])
-    );
-
-    tree.append("b".to_string(), Ephemeral);
-    assert_eq!(
-        tree.witness(0.into(), 0),
-        Some(vec![
-            "b".to_string(),
-            "__".to_string(),
-            "____".to_string(),
-            "________".to_string()
-        ])
-    );
-
-    tree.append("c".to_string(), Marked);
-    assert_eq!(
-        tree.witness(Position::from(2), 0),
-        Some(vec![
-            "_".to_string(),
-            "ab".to_string(),
-            "____".to_string(),
-            "________".to_string()
-        ])
-    );
-
-    tree.append("d".to_string(), Ephemeral);
-    assert_eq!(
-        tree.witness(Position::from(2), 0),
-        Some(vec![
-            "d".to_string(),
-            "ab".to_string(),
-            "____".to_string(),
-            "________".to_string()
-        ])
-    );
-
-    tree.append("e".to_string(), Ephemeral);
-    assert_eq!(
-        tree.witness(Position::from(2), 0),
-        Some(vec![
-            "d".to_string(),
-            "ab".to_string(),
-            "e___".to_string(),
-            "________".to_string()
-        ])
-    );
-
-    let mut tree = new_tree(100);
-    tree.append("a".to_string(), Marked);
-    for c in 'b'..'g' {
-        tree.append(c.to_string(), Ephemeral);
+    {
+        let mut tree = new_tree(100);
+        tree.assert_append(0, Ephemeral);
+        tree.assert_append(1, Marked);
+        assert_eq!(tree.witness(Position::from(0), 0), None);
     }
-    tree.append("g".to_string(), Marked);
-    tree.append("h".to_string(), Ephemeral);
 
-    assert_eq!(
-        tree.witness(0.into(), 0),
-        Some(vec![
-            "b".to_string(),
-            "cd".to_string(),
-            "efgh".to_string(),
-            "________".to_string()
-        ])
-    );
+    {
+        let mut tree = new_tree(100);
+        tree.assert_append(0, Marked);
+        assert_eq!(
+            tree.witness(Position::from(0), 0),
+            Some(vec![
+                H::empty_root(0.into()),
+                H::empty_root(1.into()),
+                H::empty_root(2.into()),
+                H::empty_root(3.into())
+            ])
+        );
 
-    let mut tree = new_tree(100);
-    tree.append("a".to_string(), Marked);
-    tree.append("b".to_string(), Ephemeral);
-    tree.append("c".to_string(), Ephemeral);
-    tree.append("d".to_string(), Marked);
-    tree.append("e".to_string(), Marked);
-    tree.append("f".to_string(), Marked);
-    tree.append("g".to_string(), Ephemeral);
+        tree.assert_append(1, Ephemeral);
+        assert_eq!(
+            tree.witness(0.into(), 0),
+            Some(vec![
+                H::from_u64(1),
+                H::empty_root(1.into()),
+                H::empty_root(2.into()),
+                H::empty_root(3.into())
+            ])
+        );
 
-    assert_eq!(
-        tree.witness(Position::from(5), 0),
-        Some(vec![
-            "e".to_string(),
-            "g_".to_string(),
-            "abcd".to_string(),
-            "________".to_string()
-        ])
-    );
+        tree.assert_append(2, Marked);
+        assert_eq!(
+            tree.witness(Position::from(2), 0),
+            Some(vec![
+                H::empty_root(0.into()),
+                H::combine_all(1, &[0, 1]),
+                H::empty_root(2.into()),
+                H::empty_root(3.into())
+            ])
+        );
 
-    let mut tree = new_tree(100);
-    for c in 'a'..'k' {
-        assert!(tree.append(c.to_string(), Ephemeral));
+        tree.assert_append(3, Ephemeral);
+        assert_eq!(
+            tree.witness(Position::from(2), 0),
+            Some(vec![
+                H::from_u64(3),
+                H::combine_all(1, &[0, 1]),
+                H::empty_root(2.into()),
+                H::empty_root(3.into())
+            ])
+        );
+
+        tree.assert_append(4, Ephemeral);
+        assert_eq!(
+            tree.witness(Position::from(2), 0),
+            Some(vec![
+                H::from_u64(3),
+                H::combine_all(1, &[0, 1]),
+                H::combine_all(2, &[4]),
+                H::empty_root(3.into())
+            ])
+        );
     }
-    assert!(tree.append('k'.to_string(), Marked));
-    assert!(tree.append('l'.to_string(), Ephemeral));
 
-    assert_eq!(
-        tree.witness(Position::from(10), 0),
-        Some(vec![
-            "l".to_string(),
-            "ij".to_string(),
-            "____".to_string(),
-            "abcdefgh".to_string()
-        ])
-    );
-
-    let mut tree = new_tree(100);
-    assert!(tree.append(
-        'a'.to_string(),
-        Checkpoint {
-            id: 1,
-            is_marked: true
+    {
+        let mut tree = new_tree(100);
+        tree.assert_append(0, Marked);
+        for i in 1..6 {
+            tree.assert_append(i, Ephemeral);
         }
-    ));
-    assert!(tree.rewind());
-    for c in 'b'..'e' {
-        tree.append(c.to_string(), Ephemeral);
-    }
-    tree.append("e".to_string(), Marked);
-    for c in 'f'..'i' {
-        tree.append(c.to_string(), Ephemeral);
-    }
-    assert_eq!(
-        tree.witness(0.into(), 0),
-        Some(vec![
-            "b".to_string(),
-            "cd".to_string(),
-            "efgh".to_string(),
-            "________".to_string()
-        ])
-    );
+        tree.assert_append(6, Marked);
+        tree.assert_append(7, Ephemeral);
 
-    let mut tree = new_tree(100);
-    tree.append('a'.to_string(), Ephemeral);
-    tree.append('b'.to_string(), Ephemeral);
-    tree.append('c'.to_string(), Marked);
-    tree.append('d'.to_string(), Ephemeral);
-    tree.append('e'.to_string(), Ephemeral);
-    tree.append('f'.to_string(), Ephemeral);
-    assert!(tree.append(
-        'g'.to_string(),
-        Checkpoint {
-            id: 1,
-            is_marked: true
+        assert_eq!(
+            tree.witness(0.into(), 0),
+            Some(vec![
+                H::from_u64(1),
+                H::combine_all(1, &[2, 3]),
+                H::combine_all(2, &[4, 5, 6, 7]),
+                H::empty_root(3.into())
+            ])
+        );
+    }
+
+    {
+        let mut tree = new_tree(100);
+        tree.assert_append(0, Marked);
+        tree.assert_append(1, Ephemeral);
+        tree.assert_append(2, Ephemeral);
+        tree.assert_append(3, Marked);
+        tree.assert_append(4, Marked);
+        tree.assert_append(5, Marked);
+        tree.assert_append(6, Ephemeral);
+
+        assert_eq!(
+            tree.witness(Position::from(5), 0),
+            Some(vec![
+                H::from_u64(4),
+                H::combine_all(1, &[6]),
+                H::combine_all(2, &[0, 1, 2, 3]),
+                H::empty_root(3.into())
+            ])
+        );
+    }
+
+    {
+        let mut tree = new_tree(100);
+        for i in 0..10 {
+            tree.assert_append(i, Ephemeral);
         }
-    ));
-    tree.append('h'.to_string(), Ephemeral);
-    assert!(tree.rewind());
-    assert_eq!(
-        tree.witness(Position::from(2), 0),
-        Some(vec![
-            "d".to_string(),
-            "ab".to_string(),
-            "efg_".to_string(),
-            "________".to_string()
-        ])
-    );
+        tree.assert_append(10, Marked);
+        tree.assert_append(11, Ephemeral);
 
-    let mut tree = new_tree(100);
-    tree.append('a'.to_string(), Ephemeral);
-    tree.append('b'.to_string(), Marked);
-    assert_eq!(tree.witness(Position::from(0), 0), None);
-
-    let mut tree = new_tree(100);
-    for c in 'a'..'m' {
-        tree.append(c.to_string(), Ephemeral);
+        assert_eq!(
+            tree.witness(Position::from(10), 0),
+            Some(vec![
+                H::from_u64(11),
+                H::combine_all(1, &[8, 9]),
+                H::empty_root(2.into()),
+                H::combine_all(3, &[0, 1, 2, 3, 4, 5, 6, 7])
+            ])
+        );
     }
-    tree.append('m'.to_string(), Marked);
-    tree.append('n'.to_string(), Marked);
-    tree.append('o'.to_string(), Ephemeral);
-    tree.append('p'.to_string(), Ephemeral);
 
-    assert_eq!(
-        tree.witness(Position::from(12), 0),
-        Some(vec![
-            "n".to_string(),
-            "op".to_string(),
-            "ijkl".to_string(),
-            "abcdefgh".to_string()
-        ])
-    );
-
-    let ops = ('a'..='l')
-        .map(|c| Append(c.to_string(), Marked))
-        .chain(Some(Append('m'.to_string(), Ephemeral)))
-        .chain(Some(Append('n'.to_string(), Ephemeral)))
-        .chain(Some(Witness(11u64.into(), 0)))
-        .collect::<Vec<_>>();
-
-    let mut tree = new_tree(100);
-    assert_eq!(
-        Operation::apply_all(&ops, &mut tree),
-        Some((
-            Position::from(11),
-            vec![
-                "k".to_string(),
-                "ij".to_string(),
-                "mn__".to_string(),
-                "abcdefgh".to_string()
-            ]
-        ))
-    );
-
-    let ops = vec![
-        Append("a".to_string(), Ephemeral),
-        Append("b".to_string(), Ephemeral),
-        Append("c".to_string(), Ephemeral),
-        Append(
-            "d".to_string(),
+    {
+        let mut tree = new_tree(100);
+        tree.assert_append(
+            0,
             Checkpoint {
                 id: 1,
                 is_marked: true,
             },
-        ),
-        Append("e".to_string(), Marked),
-        Operation::Checkpoint(2),
-        Append(
-            "f".to_string(),
-            Checkpoint {
-                id: 3,
-                is_marked: false,
-            },
-        ),
-        Append(
-            "g".to_string(),
-            Checkpoint {
-                id: 4,
-                is_marked: false,
-            },
-        ),
-        Append(
-            "h".to_string(),
-            Checkpoint {
-                id: 5,
-                is_marked: false,
-            },
-        ),
-        Witness(3u64.into(), 5),
-    ];
-    let mut tree = new_tree(100);
-    assert_eq!(
-        Operation::apply_all(&ops, &mut tree),
-        Some((
-            Position::from(3),
-            vec![
-                "c".to_string(),
-                "ab".to_string(),
-                "____".to_string(),
-                "________".to_string()
-            ]
-        ))
-    );
-    let ops = vec![
-        Append("a".to_string(), Ephemeral),
-        Append("a".to_string(), Ephemeral),
-        Append("a".to_string(), Ephemeral),
-        Append(
-            "a".to_string(),
+        );
+        assert!(tree.rewind());
+        for i in 1..4 {
+            tree.assert_append(i, Ephemeral);
+        }
+        tree.assert_append(4, Marked);
+        for i in 5..8 {
+            tree.assert_append(i, Ephemeral);
+        }
+        assert_eq!(
+            tree.witness(0.into(), 0),
+            Some(vec![
+                H::from_u64(1),
+                H::combine_all(1, &[2, 3]),
+                H::combine_all(2, &[4, 5, 6, 7]),
+                H::empty_root(3.into()),
+            ])
+        );
+    }
+
+    {
+        let mut tree = new_tree(100);
+        tree.assert_append(0, Ephemeral);
+        tree.assert_append(1, Ephemeral);
+        tree.assert_append(2, Marked);
+        tree.assert_append(3, Ephemeral);
+        tree.assert_append(4, Ephemeral);
+        tree.assert_append(5, Ephemeral);
+        tree.assert_append(
+            6,
             Checkpoint {
                 id: 1,
                 is_marked: true,
             },
-        ),
-        Append("a".to_string(), Ephemeral),
-        Append("a".to_string(), Ephemeral),
-        Append("a".to_string(), Ephemeral),
-        Append(
-            "a".to_string(),
-            Checkpoint {
-                id: 2,
-                is_marked: false,
-            },
-        ),
-        Append("a".to_string(), Ephemeral),
-        Append("a".to_string(), Ephemeral),
-        Witness(Position(3), 1),
-    ];
-    let mut tree = new_tree(100);
-    assert_eq!(
-        Operation::apply_all(&ops, &mut tree),
-        Some((
-            Position::from(3),
-            vec![
-                "a".to_string(),
-                "aa".to_string(),
-                "aaaa".to_string(),
-                "________".to_string()
-            ]
-        ))
-    );
+        );
+        tree.assert_append(7, Ephemeral);
+        assert!(tree.rewind());
+        assert_eq!(
+            tree.witness(Position::from(2), 0),
+            Some(vec![
+                H::from_u64(3),
+                H::combine_all(1, &[0, 1]),
+                H::combine_all(2, &[4, 5, 6]),
+                H::empty_root(3.into())
+            ])
+        );
+    }
 
-    let ops = vec![
-        Append("a".to_string(), Marked),
-        Append("a".to_string(), Ephemeral),
-        Append("a".to_string(), Ephemeral),
-        Append("a".to_string(), Ephemeral),
-        Append("a".to_string(), Ephemeral),
-        Append("a".to_string(), Ephemeral),
-        Append("a".to_string(), Ephemeral),
-        Operation::Checkpoint(1),
-        Append("a".to_string(), Marked),
-        Operation::Checkpoint(2),
-        Operation::Checkpoint(3),
-        Append(
-            "a".to_string(),
-            Checkpoint {
-                id: 4,
-                is_marked: false,
-            },
-        ),
-        Rewind,
-        Rewind,
-        Witness(Position(7), 2),
-    ];
-    let mut tree = new_tree(100);
-    assert_eq!(Operation::apply_all(&ops, &mut tree), None);
+    {
+        let mut tree = new_tree(100);
+        for i in 0..12 {
+            tree.assert_append(i, Ephemeral);
+        }
+        tree.assert_append(12, Marked);
+        tree.assert_append(13, Marked);
+        tree.assert_append(14, Ephemeral);
+        tree.assert_append(15, Ephemeral);
 
-    let ops = vec![
-        Append("a".to_string(), Marked),
-        Append("a".to_string(), Ephemeral),
-        Append(
-            "a".to_string(),
-            Checkpoint {
-                id: 1,
-                is_marked: true,
-            },
-        ),
-        Append(
-            "a".to_string(),
-            Checkpoint {
-                id: 4,
-                is_marked: false,
-            },
-        ),
-        Witness(Position(2), 2),
-    ];
-    let mut tree = new_tree(100);
-    assert_eq!(
-        Operation::apply_all(&ops, &mut tree),
-        Some((
-            Position::from(2),
-            vec![
-                "_".to_string(),
-                "aa".to_string(),
-                "____".to_string(),
-                "________".to_string()
-            ]
-        ))
-    );
+        assert_eq!(
+            tree.witness(Position::from(12), 0),
+            Some(vec![
+                H::from_u64(13),
+                H::combine_all(1, &[14, 15]),
+                H::combine_all(2, &[8, 9, 10, 11]),
+                H::combine_all(3, &[0, 1, 2, 3, 4, 5, 6, 7]),
+            ])
+        );
+    }
+
+    {
+        let ops = (0..=11)
+            .map(|i| Append(H::from_u64(i), Marked))
+            .chain(Some(Append(H::from_u64(12), Ephemeral)))
+            .chain(Some(Append(H::from_u64(13), Ephemeral)))
+            .chain(Some(Witness(11u64.into(), 0)))
+            .collect::<Vec<_>>();
+
+        let mut tree = new_tree(100);
+        assert_eq!(
+            Operation::apply_all(&ops, &mut tree),
+            Some((
+                Position::from(11),
+                vec![
+                    H::from_u64(10),
+                    H::combine_all(1, &[8, 9]),
+                    H::combine_all(2, &[12, 13]),
+                    H::combine_all(3, &[0, 1, 2, 3, 4, 5, 6, 7]),
+                ]
+            ))
+        );
+    }
+
+    {
+        let ops = vec![
+            Append(H::from_u64(0), Ephemeral),
+            Append(H::from_u64(1), Ephemeral),
+            Append(H::from_u64(2), Ephemeral),
+            Append(
+                H::from_u64(3),
+                Checkpoint {
+                    id: C::from_u64(1),
+                    is_marked: true,
+                },
+            ),
+            Append(H::from_u64(4), Marked),
+            Operation::Checkpoint(C::from_u64(2)),
+            Append(
+                H::from_u64(5),
+                Checkpoint {
+                    id: C::from_u64(3),
+                    is_marked: false,
+                },
+            ),
+            Append(
+                H::from_u64(6),
+                Checkpoint {
+                    id: C::from_u64(4),
+                    is_marked: false,
+                },
+            ),
+            Append(
+                H::from_u64(7),
+                Checkpoint {
+                    id: C::from_u64(5),
+                    is_marked: false,
+                },
+            ),
+            Witness(3u64.into(), 5),
+        ];
+        let mut tree = new_tree(100);
+        assert_eq!(
+            Operation::apply_all(&ops, &mut tree),
+            Some((
+                Position::from(3),
+                vec![
+                    H::from_u64(2),
+                    H::combine_all(1, &[0, 1]),
+                    H::combine_all(2, &[]),
+                    H::combine_all(3, &[]),
+                ]
+            ))
+        );
+    }
+
+    {
+        let ops = vec![
+            Append(H::from_u64(0), Ephemeral),
+            Append(H::from_u64(0), Ephemeral),
+            Append(H::from_u64(0), Ephemeral),
+            Append(
+                H::from_u64(0),
+                Checkpoint {
+                    id: C::from_u64(1),
+                    is_marked: true,
+                },
+            ),
+            Append(H::from_u64(0), Ephemeral),
+            Append(H::from_u64(0), Ephemeral),
+            Append(H::from_u64(0), Ephemeral),
+            Append(
+                H::from_u64(0),
+                Checkpoint {
+                    id: C::from_u64(2),
+                    is_marked: false,
+                },
+            ),
+            Append(H::from_u64(0), Ephemeral),
+            Append(H::from_u64(0), Ephemeral),
+            Witness(Position(3), 1),
+        ];
+        let mut tree = new_tree(100);
+        assert_eq!(
+            Operation::apply_all(&ops, &mut tree),
+            Some((
+                Position::from(3),
+                vec![
+                    H::from_u64(0),
+                    H::combine_all(1, &[0, 0]),
+                    H::combine_all(2, &[0, 0, 0, 0]),
+                    H::combine_all(3, &[]),
+                ]
+            ))
+        );
+    }
+
+    {
+        let ops = vec![
+            Append(H::from_u64(0), Marked),
+            Append(H::from_u64(0), Ephemeral),
+            Append(H::from_u64(0), Ephemeral),
+            Append(H::from_u64(0), Ephemeral),
+            Append(H::from_u64(0), Ephemeral),
+            Append(H::from_u64(0), Ephemeral),
+            Append(H::from_u64(0), Ephemeral),
+            Operation::Checkpoint(C::from_u64(1)),
+            Append(H::from_u64(0), Marked),
+            Operation::Checkpoint(C::from_u64(2)),
+            Operation::Checkpoint(C::from_u64(3)),
+            Append(
+                H::from_u64(0),
+                Checkpoint {
+                    id: C::from_u64(4),
+                    is_marked: false,
+                },
+            ),
+            Rewind,
+            Rewind,
+            Witness(Position(7), 2),
+        ];
+        let mut tree = new_tree(100);
+        assert_eq!(Operation::apply_all(&ops, &mut tree), None);
+    }
+
+    {
+        let ops = vec![
+            Append(H::from_u64(0), Marked),
+            Append(H::from_u64(0), Ephemeral),
+            Append(
+                H::from_u64(0),
+                Checkpoint {
+                    id: C::from_u64(1),
+                    is_marked: true,
+                },
+            ),
+            Append(
+                H::from_u64(0),
+                Checkpoint {
+                    id: C::from_u64(4),
+                    is_marked: false,
+                },
+            ),
+            Witness(Position(2), 2),
+        ];
+        let mut tree = new_tree(100);
+        assert_eq!(
+            Operation::apply_all(&ops, &mut tree),
+            Some((
+                Position::from(2),
+                vec![
+                    H::empty_leaf(),
+                    H::combine_all(1, &[0, 0]),
+                    H::combine_all(2, &[]),
+                    H::combine_all(3, &[]),
+                ]
+            ))
+        );
+    }
 }
 
-pub fn check_checkpoint_rewind<T: Tree<String, usize>, F: Fn(usize) -> T>(new_tree: F) {
+pub fn check_checkpoint_rewind<C: TestCheckpoint, T: Tree<String, C>, F: Fn(usize) -> T>(
+    new_tree: F,
+) {
     let mut t = new_tree(100);
     assert!(!t.rewind());
 
     let mut t = new_tree(100);
-    t.checkpoint(1);
+    t.assert_checkpoint(1);
     assert!(t.rewind());
 
     let mut t = new_tree(100);
     t.append("a".to_string(), Retention::Ephemeral);
-    t.checkpoint(1);
+    t.assert_checkpoint(1);
     t.append("b".to_string(), Retention::Marked);
     assert!(t.rewind());
     assert_eq!(Some(Position::from(0)), t.current_position());
 
     let mut t = new_tree(100);
     t.append("a".to_string(), Retention::Marked);
-    t.checkpoint(1);
+    t.assert_checkpoint(1);
     assert!(t.rewind());
 
     let mut t = new_tree(100);
     t.append("a".to_string(), Retention::Marked);
-    t.checkpoint(1);
+    t.assert_checkpoint(1);
     t.append("a".to_string(), Retention::Ephemeral);
     assert!(t.rewind());
     assert_eq!(Some(Position::from(0)), t.current_position());
 
     let mut t = new_tree(100);
     t.append("a".to_string(), Retention::Ephemeral);
-    t.checkpoint(1);
-    t.checkpoint(2);
+    t.assert_checkpoint(1);
+    t.assert_checkpoint(2);
     assert!(t.rewind());
     t.append("b".to_string(), Retention::Ephemeral);
     assert!(t.rewind());
@@ -917,14 +1026,14 @@ pub fn check_checkpoint_rewind<T: Tree<String, usize>, F: Fn(usize) -> T>(new_tr
     assert_eq!(t.root(0).unwrap(), "ab______________");
 }
 
-pub fn check_remove_mark<T: Tree<String, usize>, F: Fn(usize) -> T>(new_tree: F) {
+pub fn check_remove_mark<C: TestCheckpoint, T: Tree<String, C>, F: Fn(usize) -> T>(new_tree: F) {
     let samples = vec![
         vec![
             append_str("a", Retention::Ephemeral),
             append_str(
                 "a",
                 Retention::Checkpoint {
-                    id: 1,
+                    id: C::from_u64(1),
                     is_marked: true,
                 },
             ),
@@ -935,7 +1044,7 @@ pub fn check_remove_mark<T: Tree<String, usize>, F: Fn(usize) -> T>(new_tree: F)
             append_str("a", Retention::Ephemeral),
             append_str("a", Retention::Ephemeral),
             append_str("a", Retention::Marked),
-            Checkpoint(1),
+            Checkpoint(C::from_u64(1)),
             unmark(3),
             witness(3, 0),
         ],
@@ -952,25 +1061,27 @@ pub fn check_remove_mark<T: Tree<String, usize>, F: Fn(usize) -> T>(new_tree: F)
     }
 }
 
-pub fn check_rewind_remove_mark<T: Tree<String, usize>, F: Fn(usize) -> T>(new_tree: F) {
+pub fn check_rewind_remove_mark<C: TestCheckpoint, T: Tree<String, C>, F: Fn(usize) -> T>(
+    new_tree: F,
+) {
     // rewinding doesn't remove a mark
     let mut tree = new_tree(100);
     tree.append("e".to_string(), Retention::Marked);
-    tree.checkpoint(1);
+    tree.assert_checkpoint(1);
     assert!(tree.rewind());
     assert!(tree.remove_mark(0u64.into()));
 
     // use a maximum number of checkpoints of 1
     let mut tree = new_tree(1);
     assert!(tree.append("e".to_string(), Retention::Marked));
-    assert!(tree.checkpoint(1));
+    tree.assert_checkpoint(1);
     assert!(tree.marked_positions().contains(&0u64.into()));
     assert!(tree.append("f".to_string(), Retention::Ephemeral));
     // simulate a spend of `e` at `f`
     assert!(tree.remove_mark(0u64.into()));
     // even though the mark has been staged for removal, it's not gone yet
     assert!(tree.marked_positions().contains(&0u64.into()));
-    assert!(tree.checkpoint(2));
+    tree.assert_checkpoint(2);
     // the newest checkpoint will have caused the oldest to roll off, and
     // so the forgotten node will be unmarked
     assert!(!tree.marked_positions().contains(&0u64.into()));
@@ -983,21 +1094,21 @@ pub fn check_rewind_remove_mark<T: Tree<String, usize>, F: Fn(usize) -> T>(new_t
     let samples = vec![
         vec![
             append_str("x", Retention::Marked),
-            Checkpoint(1),
+            Checkpoint(C::from_u64(1)),
             Rewind,
             unmark(0),
         ],
         vec![
             append_str("d", Retention::Marked),
-            Checkpoint(1),
+            Checkpoint(C::from_u64(1)),
             unmark(0),
             Rewind,
             unmark(0),
         ],
         vec![
             append_str("o", Retention::Marked),
-            Checkpoint(1),
-            Checkpoint(2),
+            Checkpoint(C::from_u64(1)),
+            Checkpoint(C::from_u64(2)),
             unmark(0),
             Rewind,
             Rewind,
@@ -1005,7 +1116,7 @@ pub fn check_rewind_remove_mark<T: Tree<String, usize>, F: Fn(usize) -> T>(new_t
         vec![
             append_str("s", Retention::Marked),
             append_str("m", Retention::Ephemeral),
-            Checkpoint(1),
+            Checkpoint(C::from_u64(1)),
             unmark(0),
             Rewind,
             unmark(0),
@@ -1013,7 +1124,7 @@ pub fn check_rewind_remove_mark<T: Tree<String, usize>, F: Fn(usize) -> T>(new_t
         ],
         vec![
             append_str("a", Retention::Marked),
-            Checkpoint(1),
+            Checkpoint(C::from_u64(1)),
             Rewind,
             append_str("a", Retention::Marked),
         ],
@@ -1030,37 +1141,39 @@ pub fn check_rewind_remove_mark<T: Tree<String, usize>, F: Fn(usize) -> T>(new_t
     }
 }
 
-pub fn check_witness_consistency<T: Tree<String, usize>, F: Fn(usize) -> T>(new_tree: F) {
+pub fn check_witness_consistency<C: TestCheckpoint, T: Tree<String, C>, F: Fn(usize) -> T>(
+    new_tree: F,
+) {
     let samples = vec![
         // Reduced examples
         vec![
             append_str("a", Retention::Ephemeral),
             append_str("b", Retention::Marked),
-            Checkpoint(1),
+            Checkpoint(C::from_u64(1)),
             witness(0, 1),
         ],
         vec![
             append_str("c", Retention::Ephemeral),
             append_str("d", Retention::Marked),
-            Checkpoint(1),
+            Checkpoint(C::from_u64(1)),
             witness(1, 1),
         ],
         vec![
             append_str("e", Retention::Marked),
-            Checkpoint(1),
+            Checkpoint(C::from_u64(1)),
             append_str("f", Retention::Ephemeral),
             witness(0, 1),
         ],
         vec![
             append_str("g", Retention::Marked),
-            Checkpoint(1),
+            Checkpoint(C::from_u64(1)),
             unmark(0),
             append_str("h", Retention::Ephemeral),
             witness(0, 0),
         ],
         vec![
             append_str("i", Retention::Marked),
-            Checkpoint(1),
+            Checkpoint(C::from_u64(1)),
             unmark(0),
             append_str("j", Retention::Ephemeral),
             witness(0, 0),
@@ -1068,28 +1181,28 @@ pub fn check_witness_consistency<T: Tree<String, usize>, F: Fn(usize) -> T>(new_
         vec![
             append_str("i", Retention::Marked),
             append_str("j", Retention::Ephemeral),
-            Checkpoint(1),
+            Checkpoint(C::from_u64(1)),
             append_str("k", Retention::Ephemeral),
             witness(0, 1),
         ],
         vec![
             append_str("l", Retention::Marked),
-            Checkpoint(1),
-            Checkpoint(2),
+            Checkpoint(C::from_u64(1)),
+            Checkpoint(C::from_u64(2)),
             append_str("m", Retention::Ephemeral),
-            Checkpoint(3),
+            Checkpoint(C::from_u64(3)),
             witness(0, 2),
         ],
         vec![
-            Checkpoint(1),
+            Checkpoint(C::from_u64(1)),
             append_str("n", Retention::Marked),
             witness(0, 1),
         ],
         vec![
             append_str("a", Retention::Marked),
-            Checkpoint(1),
+            Checkpoint(C::from_u64(1)),
             unmark(0),
-            Checkpoint(2),
+            Checkpoint(C::from_u64(2)),
             append_str("b", Retention::Ephemeral),
             witness(0, 1),
         ],
@@ -1097,22 +1210,22 @@ pub fn check_witness_consistency<T: Tree<String, usize>, F: Fn(usize) -> T>(new_
             append_str("a", Retention::Marked),
             append_str("b", Retention::Ephemeral),
             unmark(0),
-            Checkpoint(1),
+            Checkpoint(C::from_u64(1)),
             witness(0, 0),
         ],
         vec![
             append_str("a", Retention::Marked),
-            Checkpoint(1),
+            Checkpoint(C::from_u64(1)),
             unmark(0),
-            Checkpoint(2),
+            Checkpoint(C::from_u64(2)),
             Rewind,
             append_str("b", Retention::Ephemeral),
             witness(0, 0),
         ],
         vec![
             append_str("a", Retention::Marked),
-            Checkpoint(1),
-            Checkpoint(2),
+            Checkpoint(C::from_u64(1)),
+            Checkpoint(C::from_u64(2)),
             Rewind,
             append_str("a", Retention::Ephemeral),
             unmark(0),
@@ -1123,7 +1236,7 @@ pub fn check_witness_consistency<T: Tree<String, usize>, F: Fn(usize) -> T>(new_
             append_str("o", Retention::Ephemeral),
             append_str("p", Retention::Marked),
             append_str("q", Retention::Ephemeral),
-            Checkpoint(1),
+            Checkpoint(C::from_u64(1)),
             unmark(1),
             witness(1, 1),
         ],
@@ -1131,20 +1244,20 @@ pub fn check_witness_consistency<T: Tree<String, usize>, F: Fn(usize) -> T>(new_
             append_str("r", Retention::Ephemeral),
             append_str("s", Retention::Ephemeral),
             append_str("t", Retention::Marked),
-            Checkpoint(1),
+            Checkpoint(C::from_u64(1)),
             unmark(2),
-            Checkpoint(2),
+            Checkpoint(C::from_u64(2)),
             witness(2, 2),
         ],
         vec![
             append_str("u", Retention::Marked),
             append_str("v", Retention::Ephemeral),
             append_str("w", Retention::Ephemeral),
-            Checkpoint(1),
+            Checkpoint(C::from_u64(1)),
             unmark(0),
             append_str("x", Retention::Ephemeral),
-            Checkpoint(2),
-            Checkpoint(3),
+            Checkpoint(C::from_u64(2)),
+            Checkpoint(C::from_u64(3)),
             witness(0, 3),
         ],
     ];

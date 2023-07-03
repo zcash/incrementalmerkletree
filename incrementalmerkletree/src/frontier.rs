@@ -54,6 +54,11 @@ impl<H> NonEmptyFrontier<H> {
         }
     }
 
+    /// Decomposes the frontier into its constituent parts
+    pub fn into_parts(self) -> (Position, H, Vec<H>) {
+        (self.position, self.leaf, self.ommers)
+    }
+
     /// Returns the position of the most recently appended leaf.
     pub fn position(&self) -> Position {
         self.position
@@ -79,9 +84,9 @@ impl<H: Hashable + Clone> NonEmptyFrontier<H> {
         let prior_leaf = self.leaf.clone();
         self.position += 1;
         self.leaf = leaf;
-        if self.position.is_odd() {
-            // if the new position is odd, the current leaf will directly become
-            // an ommer at level 0, and there is no other mutation made to the tree.
+        if self.position.is_right_child() {
+            // if the new position is a right-hand leaf, the current leaf will directly become an
+            // ommer at level 0, and there is no other mutation made to the tree.
             self.ommers.insert(0, prior_leaf);
         } else {
             // if the new position is even, then the current leaf will be hashed
@@ -198,21 +203,23 @@ impl<H, const DEPTH: u8> Frontier<H, DEPTH> {
 
     /// Constructs a new frontier from its constituent parts.
     ///
-    /// Returns `None` if the new frontier would exceed the maximum
-    /// allowed depth or if the list of ommers provided is not consistent
-    /// with the position of the leaf.
+    /// Returns an error if the new frontier would exceed the maximum allowed depth or if the list
+    /// of ommers provided is not consistent with the position of the leaf.
     pub fn from_parts(position: Position, leaf: H, ommers: Vec<H>) -> Result<Self, FrontierError> {
         NonEmptyFrontier::from_parts(position, leaf, ommers).and_then(Self::try_from)
     }
 
-    /// Return the wrapped NonEmptyFrontier reference, or None if
-    /// the frontier is empty.
+    /// Return the wrapped NonEmptyFrontier reference, or None if the frontier is empty.
     pub fn value(&self) -> Option<&NonEmptyFrontier<H>> {
         self.frontier.as_ref()
     }
 
-    /// Returns the amount of memory dynamically allocated for ommer
-    /// values within the frontier.
+    /// Consumes this wrapper and returns the underlying `Option<NonEmptyFrontier>`
+    pub fn take(self) -> Option<NonEmptyFrontier<H>> {
+        self.frontier
+    }
+
+    /// Returns the amount of memory dynamically allocated for ommer values within the frontier.
     pub fn dynamic_memory_usage(&self) -> usize {
         self.frontier.as_ref().map_or(0, |f| {
             size_of::<usize>() + (f.ommers.capacity() + 1) * size_of::<H>()
@@ -334,6 +341,10 @@ impl<H, const DEPTH: u8> CommitmentTree<H, DEPTH> {
         }
     }
 
+    pub fn is_empty(&self) -> bool {
+        self.left.is_none() && self.right.is_none()
+    }
+
     pub fn left(&self) -> &Option<H> {
         &self.left
     }
@@ -344,6 +355,22 @@ impl<H, const DEPTH: u8> CommitmentTree<H, DEPTH> {
 
     pub fn parents(&self) -> &Vec<Option<H>> {
         &self.parents
+    }
+
+    pub fn leaf(&self) -> Option<&H> {
+        self.right.as_ref().or(self.left.as_ref())
+    }
+
+    pub fn ommers_iter(&self) -> Box<dyn Iterator<Item = &'_ H> + '_> {
+        if self.right.is_some() {
+            Box::new(
+                self.left
+                    .iter()
+                    .chain(self.parents.iter().filter_map(|v| v.as_ref())),
+            )
+        } else {
+            Box::new(self.parents.iter().filter_map(|v| v.as_ref()))
+        }
     }
 
     /// Returns the number of leaf nodes in the tree.
@@ -384,7 +411,7 @@ impl<H: Hashable + Clone, const DEPTH: u8> CommitmentTree<H, DEPTH> {
     pub fn from_frontier(frontier: &Frontier<H, DEPTH>) -> Self {
         frontier.value().map_or_else(Self::empty, |f| {
             let mut ommers_iter = f.ommers().iter().cloned();
-            let (left, right) = if f.position().is_odd() {
+            let (left, right) = if f.position().is_right_child() {
                 (
                     ommers_iter
                         .next()
@@ -515,11 +542,12 @@ impl<H: Hashable + Clone, const DEPTH: u8> CommitmentTree<H, DEPTH> {
 #[cfg(feature = "test-dependencies")]
 pub mod testing {
     use core::fmt::Debug;
+    use proptest::collection::vec;
     use proptest::prelude::*;
     use std::collections::hash_map::DefaultHasher;
     use std::hash::Hasher;
 
-    use crate::{Hashable, Level};
+    use crate::{frontier::Frontier, Hashable, Level};
 
     impl<H: Hashable + Clone, const DEPTH: u8> crate::testing::Frontier<H>
         for super::Frontier<H, DEPTH>
@@ -550,14 +578,26 @@ pub mod testing {
         }
     }
 
-    prop_compose! {
-        pub fn arb_test_node()(i in any::<u64>()) -> TestNode {
-            TestNode(i)
-        }
+    pub fn arb_test_node() -> impl Strategy<Value = TestNode> + Clone {
+        any::<u64>().prop_map(TestNode)
+    }
+
+    pub fn arb_frontier<H: Hashable + Clone + Debug, T: Strategy<Value = H>, const DEPTH: u8>(
+        min_size: usize,
+        arb_node: T,
+    ) -> impl Strategy<Value = Frontier<H, DEPTH>> {
+        assert!((1 << DEPTH) >= min_size + 100);
+        vec(arb_node, min_size..(min_size + 100)).prop_map(move |v| {
+            let mut frontier = Frontier::empty();
+            for node in v.into_iter() {
+                frontier.append(node);
+            }
+            frontier
+        })
     }
 
     #[cfg(feature = "legacy-api")]
-    use {crate::frontier::CommitmentTree, proptest::collection::vec};
+    use crate::frontier::CommitmentTree;
 
     #[cfg(feature = "legacy-api")]
     pub fn arb_commitment_tree<
