@@ -303,7 +303,7 @@ impl Sub<u8> for Level {
     }
 }
 
-/// The address of an internal node of the Merkle tree.
+/// The address of a node of the Merkle tree.
 /// When `level == 0`, the index has the same value as the
 /// position.
 #[derive(Copy, Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
