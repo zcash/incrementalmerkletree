@@ -218,8 +218,11 @@ impl<H: Hashable + Clone + PartialEq> PrunableTree<H> {
             match (t0, t1) {
                 (Tree(Node::Nil), other) | (other, Tree(Node::Nil)) => Ok(other),
                 (Tree(Node::Leaf { value: vl }), Tree(Node::Leaf { value: vr })) => {
-                    if vl == vr {
-                        Ok(Tree(Node::Leaf { value: vl }))
+                    if vl.0 == vr.0 {
+                        // Merge the flags together.
+                        Ok(Tree(Node::Leaf {
+                            value: (vl.0, vl.1 | vr.1),
+                        }))
                     } else {
                         Err(addr)
                     }
