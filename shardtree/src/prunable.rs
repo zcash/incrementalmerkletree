@@ -1536,6 +1536,26 @@ mod tests {
     }
 
     #[test]
+    fn merge_checked_flags() {
+        let t0: PrunableTree<String> = leaf(("a".to_string(), RetentionFlags::EPHEMERAL));
+        let t1: PrunableTree<String> = leaf(("a".to_string(), RetentionFlags::MARKED));
+        let t2: PrunableTree<String> = leaf(("a".to_string(), RetentionFlags::CHECKPOINT));
+
+        assert_eq!(
+            t0.merge_checked(Address::from_parts(1.into(), 0), t1.clone()),
+            Ok(t1.clone()),
+        );
+
+        assert_eq!(
+            t1.merge_checked(Address::from_parts(1.into(), 0), t2),
+            Ok(leaf((
+                "a".to_string(),
+                RetentionFlags::MARKED | RetentionFlags::CHECKPOINT,
+            ))),
+        );
+    }
+
+    #[test]
     fn located_insert_subtree() {
         let t: LocatedPrunableTree<String> = LocatedTree {
             root_addr: Address::from_parts(3.into(), 1),
