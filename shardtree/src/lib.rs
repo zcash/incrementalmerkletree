@@ -812,17 +812,26 @@ impl<
         if checkpoint_count > self.max_checkpoints {
             // Batch removals by subtree & create a list of the checkpoint identifiers that
             // will be removed from the checkpoints map.
+            let remove_count = checkpoint_count - self.max_checkpoints;
             let mut checkpoints_to_delete = vec![];
             let mut clear_positions: BTreeMap<Address, BTreeMap<Position, RetentionFlags>> =
                 BTreeMap::new();
             self.store
-                .with_checkpoints(
-                    checkpoint_count - self.max_checkpoints,
-                    |cid, checkpoint| {
-                        checkpoints_to_delete.push(cid.clone());
+                .with_checkpoints(checkpoint_count, |cid, checkpoint| {
+                    // When removing is true, we are iterating through the range of
+                    // checkpoints being removed. When remove is false, we are
+                    // iterating through the range of checkpoints that are being
+                    // retained.
+                    let removing = checkpoints_to_delete.len() < remove_count;
 
-                        let mut clear_at = |pos, flags_to_clear| {
-                            let subtree_addr = Self::subtree_addr(pos);
+                    if removing {
+                        checkpoints_to_delete.push(cid.clone());
+                    }
+
+                    let mut clear_at = |pos, flags_to_clear| {
+                        let subtree_addr = Self::subtree_addr(pos);
+                        if removing {
+                            // Mark flags to be cleared from the given position.
                             clear_positions
                                 .entry(subtree_addr)
                                 .and_modify(|to_clear| {
@@ -832,22 +841,36 @@ impl<
                                         .or_insert(flags_to_clear);
                                 })
                                 .or_insert_with(|| BTreeMap::from([(pos, flags_to_clear)]));
-                        };
-
-                        // clear the checkpoint leaf
-                        if let TreeState::AtPosition(pos) = checkpoint.tree_state {
-                            clear_at(pos, RetentionFlags::CHECKPOINT)
+                        } else {
+                            // Unmark flags that might have been marked for clearing above
+                            // but which we now know we need to preserve.
+                            if let Some(to_clear) = clear_positions.get_mut(&subtree_addr) {
+                                if let Some(flags) = to_clear.get_mut(&pos) {
+                                    *flags &= !flags_to_clear;
+                                }
+                            }
                         }
+                    };
 
-                        // clear the leaves that have been marked for removal
-                        for unmark_pos in checkpoint.marks_removed.iter() {
-                            clear_at(*unmark_pos, RetentionFlags::MARKED)
-                        }
+                    // Clear or preserve the checkpoint leaf.
+                    if let TreeState::AtPosition(pos) = checkpoint.tree_state {
+                        clear_at(pos, RetentionFlags::CHECKPOINT)
+                    }
 
-                        Ok(())
-                    },
-                )
+                    // Clear or preserve the leaves that have been marked for removal.
+                    for unmark_pos in checkpoint.marks_removed.iter() {
+                        clear_at(*unmark_pos, RetentionFlags::MARKED)
+                    }
+
+                    Ok(())
+                })
                 .map_err(ShardTreeError::Storage)?;
+
+            // Remove any nodes that are fully preserved by later checkpoints.
+            clear_positions.retain(|_, to_clear| {
+                to_clear.retain(|_, flags| !flags.is_empty());
+                !to_clear.is_empty()
+            });
 
             trace!(
                 "Removing checkpoints {:?}, pruning subtrees {:?}",
