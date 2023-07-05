@@ -8,7 +8,7 @@ use incrementalmerkletree::{
     frontier::NonEmptyFrontier, Address, Hashable, Level, Position, Retention,
 };
 
-use crate::{accumulate_result_with, LocatedTree, Node, Tree};
+use crate::{LocatedTree, Node, Tree};
 
 #[cfg(feature = "legacy-api")]
 use incrementalmerkletree::witness::IncrementalWitness;
@@ -1393,6 +1393,24 @@ impl<H: Hashable + Clone + PartialEq> LocatedPrunableTree<H> {
             root_addr: self.root_addr,
             root: go(&to_clear, self.root_addr, &self.root),
         }
+    }
+}
+
+// We need an applicative functor for Result for this function so that we can correctly
+// accumulate errors, but we don't have one so we just write a special- cased version here.
+fn accumulate_result_with<A, B, C>(
+    left: Result<A, Vec<Address>>,
+    right: Result<B, Vec<Address>>,
+    combine_success: impl FnOnce(A, B) -> C,
+) -> Result<C, Vec<Address>> {
+    match (left, right) {
+        (Ok(a), Ok(b)) => Ok(combine_success(a, b)),
+        (Err(mut xs), Err(mut ys)) => {
+            xs.append(&mut ys);
+            Err(xs)
+        }
+        (Ok(_), Err(xs)) => Err(xs),
+        (Err(xs), Ok(_)) => Err(xs),
     }
 }
 
