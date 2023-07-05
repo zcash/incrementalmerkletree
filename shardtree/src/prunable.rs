@@ -700,14 +700,7 @@ impl<H: Hashable + Clone + PartialEq> LocatedPrunableTree<H> {
                             // It is safe to replace the existing root unannotated, because we
                             // can always recompute the root from a complete subtree.
                             Ok((subtree.root, vec![]))
-                        } else if subtree
-                            .root
-                            .0
-                            .annotation()
-                            .and_then(|ann| ann.as_ref())
-                            .iter()
-                            .all(|v| v.as_ref() == value)
-                        {
+                        } else if subtree.root.node_value().iter().all(|v| v == &value) {
                             Ok((
                                 // at this point we statically know the root to be a parent
                                 subtree.root.reannotate_root(Some(Rc::new(value.clone()))),
@@ -1589,6 +1582,31 @@ mod tests {
                 },
                 vec![]
             ))
+        );
+    }
+
+    #[test]
+    fn located_insert_subtree_leaf_overwrites() {
+        let t: LocatedPrunableTree<String> = LocatedTree {
+            root_addr: Address::from_parts(2.into(), 1),
+            root: parent(leaf(("a".to_string(), RetentionFlags::MARKED)), nil()),
+        };
+
+        assert_eq!(
+            t.insert_subtree(
+                LocatedTree {
+                    root_addr: Address::from_parts(1.into(), 2),
+                    root: leaf(("b".to_string(), RetentionFlags::EPHEMERAL)),
+                },
+                false,
+            ),
+            Ok((
+                LocatedTree {
+                    root_addr: Address::from_parts(2.into(), 1),
+                    root: parent(leaf(("b".to_string(), RetentionFlags::EPHEMERAL)), nil()),
+                },
+                vec![],
+            )),
         );
     }
 
