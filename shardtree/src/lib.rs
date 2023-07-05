@@ -2,6 +2,7 @@ use core::fmt::{self, Debug, Display};
 use either::Either;
 use std::collections::{BTreeMap, BTreeSet};
 use std::rc::Rc;
+use tracing::trace;
 
 use incrementalmerkletree::{
     frontier::NonEmptyFrontier, Address, Hashable, Level, MerklePath, Position, Retention,
@@ -349,7 +350,7 @@ where
 
 impl<
         H: Hashable + Clone + PartialEq,
-        C: Clone + Ord,
+        C: Clone + Debug + Ord,
         S: ShardStore<H = H, CheckpointId = C>,
         const DEPTH: u8,
         const SHARD_HEIGHT: u8,
@@ -534,6 +535,7 @@ impl<
     ) -> Result<(), ShardTreeError<S::Error>> {
         let leaf_position = frontier.position();
         let subtree_root_addr = Address::above_position(Self::subtree_level(), leaf_position);
+        trace!("Subtree containing nodes: {:?}", subtree_root_addr);
 
         let (updated_subtree, supertree) = self
             .store
@@ -559,6 +561,7 @@ impl<
         }
 
         if let Retention::Checkpoint { id, is_marked: _ } = leaf_retention {
+            trace!("Adding checkpoint {:?} at {:?}", id, leaf_position);
             self.store
                 .add_checkpoint(id, Checkpoint::at_position(leaf_position))
                 .map_err(ShardTreeError::Storage)?;
@@ -801,6 +804,11 @@ impl<
             .store
             .checkpoint_count()
             .map_err(ShardTreeError::Storage)?;
+        trace!(
+            "Tree has {} checkpoints, max is {}",
+            checkpoint_count,
+            self.max_checkpoints,
+        );
         if checkpoint_count > self.max_checkpoints {
             // Batch removals by subtree & create a list of the checkpoint identifiers that
             // will be removed from the checkpoints map.
@@ -840,6 +848,12 @@ impl<
                     },
                 )
                 .map_err(ShardTreeError::Storage)?;
+
+            trace!(
+                "Removing checkpoints {:?}, pruning subtrees {:?}",
+                checkpoints_to_delete,
+                clear_positions,
+            );
 
             // Prune each affected subtree
             for (subtree_addr, positions) in clear_positions.into_iter() {

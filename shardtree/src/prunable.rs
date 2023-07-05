@@ -7,6 +7,7 @@ use bitflags::bitflags;
 use incrementalmerkletree::{
     frontier::NonEmptyFrontier, Address, Hashable, Level, Position, Retention,
 };
+use tracing::trace;
 
 use crate::{LocatedTree, Node, Tree};
 
@@ -1358,6 +1359,12 @@ impl<H: Hashable + Clone + PartialEq> LocatedPrunableTree<H> {
                         let (l_addr, r_addr) = root_addr.children().unwrap();
 
                         let p = to_clear.partition_point(|(p, _)| p < &l_addr.position_range_end());
+                        trace!(
+                            "In {:?}, partitioned: {:?} {:?}",
+                            root_addr,
+                            &to_clear[0..p],
+                            &to_clear[p..],
+                        );
                         Tree::unite(
                             l_addr.level(),
                             ann.clone(),
@@ -1366,6 +1373,7 @@ impl<H: Hashable + Clone + PartialEq> LocatedPrunableTree<H> {
                         )
                     }
                     Tree(Node::Leaf { value: (h, r) }) => {
+                        trace!("In {:?}, clearing {:?}", root_addr, to_clear);
                         // When we reach a leaf, we should be down to just a single position
                         // which should correspond to the last level-0 child of the address's
                         // subtree range; if it's a checkpoint this will always be the case for

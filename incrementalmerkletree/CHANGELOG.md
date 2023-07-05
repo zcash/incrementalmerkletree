@@ -5,6 +5,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to Rust's notion of
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## Unreleased
+### Changed
+- `incrementalmerkletree::Hashable` trait now has a `Debug` bound.
+
 ## [0.4.0] - 2023-06-05
 
 Release 0.4.0 represents a substantial rewrite of the `incrementalmerkletree`

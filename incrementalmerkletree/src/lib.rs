@@ -46,6 +46,7 @@
 use either::Either;
 use std::cmp::Ordering;
 use std::convert::{TryFrom, TryInto};
+use std::fmt;
 use std::num::TryFromIntError;
 use std::ops::{Add, AddAssign, Range, Sub};
 
@@ -602,7 +603,7 @@ impl<H: Hashable, const DEPTH: u8> MerklePath<H, DEPTH> {
 
 /// A trait describing the operations that make a type suitable for use as
 /// a leaf or node value in a merkle tree.
-pub trait Hashable {
+pub trait Hashable: fmt::Debug {
     fn empty_leaf() -> Self;
 
     fn combine(level: Level, a: &Self, b: &Self) -> Self;
