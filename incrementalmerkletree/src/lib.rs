@@ -144,13 +144,13 @@ impl Position {
     }
 
     /// Returns the minimum possible level of the root of a binary tree containing at least
-    /// `self + 1` nodes.
+    /// `self + 1` leaves.
     pub fn root_level(&self) -> Level {
         Level((u64::BITS - self.0.leading_zeros()) as u8)
     }
 
     /// Returns the number of cousins and/or ommers required to construct an authentication
-    /// path to the root of a merkle tree that has `self + 1` nodes.
+    /// path to the root of a merkle tree that has `self + 1` leaves.
     pub fn past_ommer_count(&self) -> u8 {
         (0..self.root_level().0)
             .filter(|i| (self.0 >> i) & 0x1 == 1)
