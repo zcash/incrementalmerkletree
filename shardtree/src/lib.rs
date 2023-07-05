@@ -1583,6 +1583,39 @@ mod tests {
         check_rewind_remove_mark(new_tree);
     }
 
+    #[test]
+    fn checkpoint_pruning_repeated() {
+        // Create a tree with some leaves.
+        let mut tree = new_tree(10);
+        for c in 'a'..='c' {
+            tree.append(c.to_string(), Retention::Ephemeral).unwrap();
+        }
+
+        // Repeatedly checkpoint the tree at the same position until the checkpoint cache
+        // is full (creating a sequence of checkpoints in between which no new leaves were
+        // appended to the tree).
+        for i in 0..10 {
+            assert_eq!(tree.checkpoint(i), Ok(true));
+        }
+
+        // Create one more checkpoint at the same position, causing the oldest in the
+        // cache to be pruned.
+        assert_eq!(tree.checkpoint(10), Ok(true));
+
+        // Append a leaf to the tree and checkpoint it, causing the next oldest in the
+        // cache to be pruned.
+        assert_eq!(
+            tree.append(
+                'd'.to_string(),
+                Retention::Checkpoint {
+                    id: 11,
+                    is_marked: false
+                },
+            ),
+            Ok(()),
+        );
+    }
+
     // Combined tree tests
     #[allow(clippy::type_complexity)]
     fn new_combined_tree<H: Hashable + Ord + Clone + core::fmt::Debug>(
