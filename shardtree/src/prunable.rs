@@ -1669,6 +1669,36 @@ mod tests {
     }
 
     #[test]
+    fn located_from_iter_non_sibling_adjacent() {
+        let res = LocatedPrunableTree::from_iter::<(), _>(
+            Position::from(3)..Position::from(5),
+            Level::new(0),
+            vec![
+                ("d".to_string(), Retention::Ephemeral),
+                ("e".to_string(), Retention::Ephemeral),
+            ]
+            .into_iter(),
+        )
+        .unwrap();
+        assert_eq!(
+            res.subtree,
+            LocatedPrunableTree {
+                root_addr: Address::from_parts(3.into(), 0),
+                root: parent(
+                    parent(
+                        nil(),
+                        parent(nil(), leaf(("d".to_string(), RetentionFlags::EPHEMERAL)))
+                    ),
+                    parent(
+                        parent(leaf(("e".to_string(), RetentionFlags::EPHEMERAL)), nil()),
+                        nil()
+                    )
+                )
+            },
+        );
+    }
+
+    #[test]
     fn located_insert() {
         let tree = LocatedPrunableTree::empty(Address::from_parts(Level::from(2), 0));
         let (base, _, _) = tree
