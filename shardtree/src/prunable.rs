@@ -224,18 +224,17 @@ impl<H: Hashable + Clone + PartialEq> PrunableTree<H> {
                             value: (vl.0, vl.1 | vr.1),
                         }))
                     } else {
+                        trace!(left = ?vl.0, right = ?vr.0, "Merge conflict for leaves");
                         Err(addr)
                     }
                 }
                 (Tree(Node::Leaf { value }), parent @ Tree(Node::Parent { .. }))
                 | (parent @ Tree(Node::Parent { .. }), Tree(Node::Leaf { value })) => {
-                    if parent
-                        .root_hash(addr, no_default_fill)
-                        .iter()
-                        .all(|r| r == &value.0)
-                    {
+                    let parent_hash = parent.root_hash(addr, no_default_fill);
+                    if parent_hash.iter().all(|r| r == &value.0) {
                         Ok(parent.reannotate_root(Some(Rc::new(value.0))))
                     } else {
+                        trace!(leaf = ?value, node = ?parent_hash, "Merge conflict for leaf into node");
                         Err(addr)
                     }
                 }
@@ -244,7 +243,7 @@ impl<H: Hashable + Clone + PartialEq> PrunableTree<H> {
                     let rroot = rparent.root_hash(addr, no_default_fill).ok();
                     // If both parents share the same root hash (or if one of them is absent),
                     // they can be merged
-                    if lroot.zip(rroot).iter().all(|(l, r)| l == r) {
+                    if lroot.iter().zip(&rroot).all(|(l, r)| l == r) {
                         // using `if let` here to bind variables; we need to borrow the trees for
                         // root hash calculation but binding the children of the parent node
                         // interferes with binding a reference to the parent.
@@ -272,12 +271,14 @@ impl<H: Hashable + Clone + PartialEq> PrunableTree<H> {
                             unreachable!()
                         }
                     } else {
+                        trace!(left = ?lroot, right = ?rroot, "Merge conflict for nodes");
                         Err(addr)
                     }
                 }
             }
         }
 
+        trace!(this = ?self, other = ?other, "Merging subtrees");
         go(root_addr, self, other)
     }
 
@@ -692,6 +693,11 @@ impl<H: Hashable + Clone + PartialEq> LocatedPrunableTree<H> {
                 (node.root.reannotate_root(ann), incomplete)
             };
 
+            trace!(
+                "Node at {:?} contains subtree at {:?}",
+                root_addr,
+                subtree.root_addr(),
+            );
             match into {
                 Tree(Node::Nil) => Ok(replacement(None, subtree)),
                 Tree(Node::Leaf { value: (value, _) }) => {
@@ -707,6 +713,11 @@ impl<H: Hashable + Clone + PartialEq> LocatedPrunableTree<H> {
                                 vec![],
                             ))
                         } else {
+                            trace!(
+                                cur_root = ?value,
+                                new_root = ?subtree.root.node_value(),
+                                "Insertion conflict",
+                            );
                             Err(InsertionError::Conflict(root_addr))
                         }
                     } else {
@@ -863,6 +874,12 @@ impl<H: Hashable + Clone + PartialEq> LocatedPrunableTree<H> {
         prune_below: Level,
         mut values: I,
     ) -> Option<BatchInsertionResult<H, C, I>> {
+        trace!(
+            position_range = ?position_range,
+            prune_below = ?prune_below,
+            "Creating minimal tree for insertion"
+        );
+
         // Unite two subtrees by either adding a parent node, or a leaf containing the Merkle root
         // of such a parent if both nodes are ephemeral leaves.
         //
@@ -1031,6 +1048,7 @@ impl<H: Hashable + Clone + PartialEq> LocatedPrunableTree<H> {
                 break;
             }
         }
+        trace!("Initial fragments: {:?}", fragments);
 
         build_minimal_tree(fragments, prune_below).map(
             |(to_insert, contains_marked, incomplete)| BatchInsertionResult {
@@ -1059,6 +1077,7 @@ impl<H: Hashable + Clone + PartialEq> LocatedPrunableTree<H> {
         start: Position,
         values: I,
     ) -> Result<Option<BatchInsertionResult<H, C, I>>, InsertionError> {
+        trace!("Batch inserting into {:?} from {:?}", self.root_addr, start);
         let subtree_range = self.root_addr.position_range();
         let contains_start = subtree_range.contains(&start);
         if contains_start {

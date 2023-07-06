@@ -649,6 +649,7 @@ impl<
         mut start: Position,
         values: I,
     ) -> Result<Option<(Position, Vec<IncompleteAt>)>, ShardTreeError<S::Error>> {
+        trace!("Batch inserting from {:?}", start);
         let mut values = values.peekable();
         let mut subtree_root_addr = Self::subtree_addr(start);
         let mut max_insert_position = None;
