@@ -2,6 +2,7 @@ use core::fmt::{self, Debug, Display};
 use either::Either;
 use std::collections::{BTreeMap, BTreeSet};
 use std::rc::Rc;
+use tracing::trace;
 
 use incrementalmerkletree::{
     frontier::NonEmptyFrontier, Address, Hashable, Level, MerklePath, Position, Retention,
@@ -349,7 +350,7 @@ where
 
 impl<
         H: Hashable + Clone + PartialEq,
-        C: Clone + Ord,
+        C: Clone + Debug + Ord,
         S: ShardStore<H = H, CheckpointId = C>,
         const DEPTH: u8,
         const SHARD_HEIGHT: u8,
@@ -534,6 +535,7 @@ impl<
     ) -> Result<(), ShardTreeError<S::Error>> {
         let leaf_position = frontier.position();
         let subtree_root_addr = Address::above_position(Self::subtree_level(), leaf_position);
+        trace!("Subtree containing nodes: {:?}", subtree_root_addr);
 
         let (updated_subtree, supertree) = self
             .store
@@ -559,6 +561,7 @@ impl<
         }
 
         if let Retention::Checkpoint { id, is_marked: _ } = leaf_retention {
+            trace!("Adding checkpoint {:?} at {:?}", id, leaf_position);
             self.store
                 .add_checkpoint(id, Checkpoint::at_position(leaf_position))
                 .map_err(ShardTreeError::Storage)?;
@@ -646,6 +649,7 @@ impl<
         mut start: Position,
         values: I,
     ) -> Result<Option<(Position, Vec<IncompleteAt>)>, ShardTreeError<S::Error>> {
+        trace!("Batch inserting from {:?}", start);
         let mut values = values.peekable();
         let mut subtree_root_addr = Self::subtree_addr(start);
         let mut max_insert_position = None;
@@ -801,20 +805,34 @@ impl<
             .store
             .checkpoint_count()
             .map_err(ShardTreeError::Storage)?;
+        trace!(
+            "Tree has {} checkpoints, max is {}",
+            checkpoint_count,
+            self.max_checkpoints,
+        );
         if checkpoint_count > self.max_checkpoints {
             // Batch removals by subtree & create a list of the checkpoint identifiers that
             // will be removed from the checkpoints map.
+            let remove_count = checkpoint_count - self.max_checkpoints;
             let mut checkpoints_to_delete = vec![];
             let mut clear_positions: BTreeMap<Address, BTreeMap<Position, RetentionFlags>> =
                 BTreeMap::new();
             self.store
-                .with_checkpoints(
-                    checkpoint_count - self.max_checkpoints,
-                    |cid, checkpoint| {
-                        checkpoints_to_delete.push(cid.clone());
+                .with_checkpoints(checkpoint_count, |cid, checkpoint| {
+                    // When removing is true, we are iterating through the range of
+                    // checkpoints being removed. When remove is false, we are
+                    // iterating through the range of checkpoints that are being
+                    // retained.
+                    let removing = checkpoints_to_delete.len() < remove_count;
 
-                        let mut clear_at = |pos, flags_to_clear| {
-                            let subtree_addr = Self::subtree_addr(pos);
+                    if removing {
+                        checkpoints_to_delete.push(cid.clone());
+                    }
+
+                    let mut clear_at = |pos, flags_to_clear| {
+                        let subtree_addr = Self::subtree_addr(pos);
+                        if removing {
+                            // Mark flags to be cleared from the given position.
                             clear_positions
                                 .entry(subtree_addr)
                                 .and_modify(|to_clear| {
@@ -824,22 +842,42 @@ impl<
                                         .or_insert(flags_to_clear);
                                 })
                                 .or_insert_with(|| BTreeMap::from([(pos, flags_to_clear)]));
-                        };
-
-                        // clear the checkpoint leaf
-                        if let TreeState::AtPosition(pos) = checkpoint.tree_state {
-                            clear_at(pos, RetentionFlags::CHECKPOINT)
+                        } else {
+                            // Unmark flags that might have been marked for clearing above
+                            // but which we now know we need to preserve.
+                            if let Some(to_clear) = clear_positions.get_mut(&subtree_addr) {
+                                if let Some(flags) = to_clear.get_mut(&pos) {
+                                    *flags &= !flags_to_clear;
+                                }
+                            }
                         }
+                    };
 
-                        // clear the leaves that have been marked for removal
-                        for unmark_pos in checkpoint.marks_removed.iter() {
-                            clear_at(*unmark_pos, RetentionFlags::MARKED)
-                        }
+                    // Clear or preserve the checkpoint leaf.
+                    if let TreeState::AtPosition(pos) = checkpoint.tree_state {
+                        clear_at(pos, RetentionFlags::CHECKPOINT)
+                    }
 
-                        Ok(())
-                    },
-                )
+                    // Clear or preserve the leaves that have been marked for removal.
+                    for unmark_pos in checkpoint.marks_removed.iter() {
+                        clear_at(*unmark_pos, RetentionFlags::MARKED)
+                    }
+
+                    Ok(())
+                })
                 .map_err(ShardTreeError::Storage)?;
+
+            // Remove any nodes that are fully preserved by later checkpoints.
+            clear_positions.retain(|_, to_clear| {
+                to_clear.retain(|_, flags| !flags.is_empty());
+                !to_clear.is_empty()
+            });
+
+            trace!(
+                "Removing checkpoints {:?}, pruning subtrees {:?}",
+                checkpoints_to_delete,
+                clear_positions,
+            );
 
             // Prune each affected subtree
             for (subtree_addr, positions) in clear_positions.into_iter() {
@@ -1567,6 +1605,39 @@ mod tests {
     #[test]
     fn rewind_remove_mark() {
         check_rewind_remove_mark(new_tree);
+    }
+
+    #[test]
+    fn checkpoint_pruning_repeated() {
+        // Create a tree with some leaves.
+        let mut tree = new_tree(10);
+        for c in 'a'..='c' {
+            tree.append(c.to_string(), Retention::Ephemeral).unwrap();
+        }
+
+        // Repeatedly checkpoint the tree at the same position until the checkpoint cache
+        // is full (creating a sequence of checkpoints in between which no new leaves were
+        // appended to the tree).
+        for i in 0..10 {
+            assert_eq!(tree.checkpoint(i), Ok(true));
+        }
+
+        // Create one more checkpoint at the same position, causing the oldest in the
+        // cache to be pruned.
+        assert_eq!(tree.checkpoint(10), Ok(true));
+
+        // Append a leaf to the tree and checkpoint it, causing the next oldest in the
+        // cache to be pruned.
+        assert_eq!(
+            tree.append(
+                'd'.to_string(),
+                Retention::Checkpoint {
+                    id: 11,
+                    is_marked: false
+                },
+            ),
+            Ok(()),
+        );
     }
 
     // Combined tree tests

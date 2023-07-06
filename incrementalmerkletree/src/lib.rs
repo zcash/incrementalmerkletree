@@ -46,6 +46,7 @@
 use either::Either;
 use std::cmp::Ordering;
 use std::convert::{TryFrom, TryInto};
+use std::fmt;
 use std::num::TryFromIntError;
 use std::ops::{Add, AddAssign, Range, Sub};
 
@@ -383,22 +384,23 @@ impl Address {
 
     /// Returns the common ancestor of `self` and `other` having the smallest level value.
     pub fn common_ancestor(&self, other: &Self) -> Self {
-        if self.level >= other.level {
-            let other_ancestor_idx = other.index >> (self.level.0 - other.level.0);
-            let index_delta = self.index.abs_diff(other_ancestor_idx);
-            let level_delta = (u64::BITS - index_delta.leading_zeros()) as u8;
-            Address {
-                level: self.level + level_delta,
-                index: std::cmp::max(self.index, other_ancestor_idx) >> level_delta,
-            }
+        // We can leverage the symmetry of a binary tree to share the calculation logic,
+        // by ordering the nodes.
+        let (higher, lower) = if self.level >= other.level {
+            (self, other)
         } else {
-            let self_ancestor_idx = self.index >> (other.level.0 - self.level.0);
-            let index_delta = other.index.abs_diff(self_ancestor_idx);
-            let level_delta = (u64::BITS - index_delta.leading_zeros()) as u8;
-            Address {
-                level: other.level + level_delta,
-                index: std::cmp::max(other.index, self_ancestor_idx) >> level_delta,
-            }
+            (other, self)
+        };
+
+        // We follow the lower node's subtree up to the same level as the higher node, and
+        // then use their XOR distance to determine how many levels of the tree their
+        // Merkle paths differ on.
+        let lower_ancestor_idx = lower.index >> (higher.level.0 - lower.level.0);
+        let index_delta = higher.index ^ lower_ancestor_idx;
+        let level_delta = (u64::BITS - index_delta.leading_zeros()) as u8;
+        Address {
+            level: higher.level + level_delta,
+            index: std::cmp::max(higher.index, lower_ancestor_idx) >> level_delta,
         }
     }
 
@@ -602,7 +604,7 @@ impl<H: Hashable, const DEPTH: u8> MerklePath<H, DEPTH> {
 
 /// A trait describing the operations that make a type suitable for use as
 /// a leaf or node value in a merkle tree.
-pub trait Hashable {
+pub trait Hashable: fmt::Debug {
     fn empty_leaf() -> Self;
 
     fn combine(level: Level, a: &Self, b: &Self) -> Self;
@@ -826,25 +828,115 @@ pub(crate) mod tests {
 
     #[test]
     fn addr_common_ancestor() {
+        //                                       rt
+        //             ---------------                        ----------------
+        //       -------             -------              right              -------
+        //   -----     left      -----     -----     -----     -----     -----     -----
+        //  --   --   --   --   --   --   --   --   --   --   --   --   --   --   --   --
+        // -  - -  - -  - -  - -  - -  - -  - -  - -  - -  - -  - -  - -  - -  - -  - -  -
         assert_eq!(
             Address::from_parts(Level(2), 1).common_ancestor(&Address::from_parts(Level(3), 2)),
             Address::from_parts(Level(5), 0)
         );
+        //                           --------------------------
+        //             ---------------                        ----------------
+        //       -------               rt                -------             -------
+        //   -----     -----     left      -----     -----     -----     -----     -----
+        //  --   --   --   --   --   --   --   rg   --   --   --   --   --   --   --   --
+        // -  - -  - -  - -  - -  - -  - -  - -  - -  - -  - -  - -  - -  - -  - -  - -  -
         assert_eq!(
             Address::from_parts(Level(2), 2).common_ancestor(&Address::from_parts(Level(1), 7)),
             Address::from_parts(Level(3), 1)
         );
+        //                           --------------------------
+        //             ---------------                        ----------------
+        //       -------               rt                -------             -------
+        //   -----     -----     left      -----     -----     -----     -----     -----
+        //  --   --   --   --   --   --   rg   --   --   --   --   --   --   --   --   --
+        // -  - -  - -  - -  - -  - -  - -  - -  - -  - -  - -  - -  - -  - -  - -  - -  -
+        assert_eq!(
+            Address::from_parts(Level(2), 2).common_ancestor(&Address::from_parts(Level(1), 6)),
+            Address::from_parts(Level(3), 1)
+        );
+        //                           --------------------------
+        //             ---------------                        ----------------
+        //       -------             -------             -------             -------
+        //   -----     -----      all      -----     -----     -----     -----     -----
+        //  --   --   --   --   --   --   --   --   --   --   --   --   --   --   --   --
+        // -  - -  - -  - -  - -  - -  - -  - -  - -  - -  - -  - -  - -  - -  - -  - -  -
         assert_eq!(
             Address::from_parts(Level(2), 2).common_ancestor(&Address::from_parts(Level(2), 2)),
             Address::from_parts(Level(2), 2)
         );
+        //                           --------------------------
+        //             ---------------                        ----------------
+        //       -------             -------             -------             -------
+        //   -----     -----     lf,rt     -----     -----     -----     -----     -----
+        //  --   --   --   --   --   --   --   --   --   --   --   --   --   --   --   --
+        // -  - -  - -  - -  - - rg -  - -  - -  - -  - -  - -  - -  - -  - -  - -  - -  -
         assert_eq!(
             Address::from_parts(Level(2), 2).common_ancestor(&Address::from_parts(Level(0), 9)),
             Address::from_parts(Level(2), 2)
         );
+        //                           --------------------------
+        //             ---------------                        ----------------
+        //       -------             -------             -------             -------
+        //   -----     -----     rg,rt     -----     -----     -----     -----     -----
+        //  --   --   --   --   --   --   --   --   --   --   --   --   --   --   --   --
+        // -  - -  - -  - -  - - lf -  - -  - -  - -  - -  - -  - -  - -  - -  - -  - -  -
         assert_eq!(
             Address::from_parts(Level(0), 9).common_ancestor(&Address::from_parts(Level(2), 2)),
             Address::from_parts(Level(2), 2)
+        );
+        //                           --------------------------
+        //             ---------------                        ----------------
+        //       -------             -------             -------             -------
+        //   -----     -----     -----       rt      -----     -----     -----     -----
+        //  --   --   --   --   --   --   --   --   --   --   --   --   --   --   --   --
+        // -  - -  - -  - -  - -  - -  - lf - - rg -  - -  - -  - -  - -  - -  - -  - -  -
+        assert_eq!(
+            Address::from_parts(Level(0), 12).common_ancestor(&Address::from_parts(Level(0), 15)),
+            Address::from_parts(Level(2), 3)
+        );
+        //                           --------------------------
+        //             ---------------                        ----------------
+        //       -------             -------             -------             -------
+        //   -----     -----     -----       rt      -----     -----     -----     -----
+        //  --   --   --   --   --   --   --   --   --   --   --   --   --   --   --   --
+        // -  - -  - -  - -  - -  - -  - - lf - rg -  - -  - -  - -  - -  - -  - -  - -  -
+        assert_eq!(
+            Address::from_parts(Level(0), 13).common_ancestor(&Address::from_parts(Level(0), 15)),
+            Address::from_parts(Level(2), 3)
+        );
+        //                           --------------------------
+        //             ---------------                        ----------------
+        //       -------             -------             -------             -------
+        //   -----     -----     -----       rt      -----     -----     -----     -----
+        //  --   --   --   --   --   --   --   --   --   --   --   --   --   --   --   --
+        // -  - -  - -  - -  - -  - -  - - lf rg - -  - -  - -  - -  - -  - -  - -  - -  -
+        assert_eq!(
+            Address::from_parts(Level(0), 13).common_ancestor(&Address::from_parts(Level(0), 14)),
+            Address::from_parts(Level(2), 3)
+        );
+        //                           --------------------------
+        //             ---------------                        ----------------
+        //       -------             -------             -------             -------
+        //   -----     -----     -----     -----     -----     -----     -----     -----
+        //  --   --   --   --   --   --   --   rt   --   --   --   --   --   --   --   --
+        // -  - -  - -  - -  - -  - -  - - - lf  rg - - -  - -  - -  - -  - -  - -  - -  -
+        assert_eq!(
+            Address::from_parts(Level(0), 14).common_ancestor(&Address::from_parts(Level(0), 15)),
+            Address::from_parts(Level(1), 7)
+        );
+        //                                       rt
+        //             ---------------                        ----------------
+        //       -------             -------             -------             -------
+        //   -----     -----     -----     -----     -----     -----     -----     -----
+        //  --   --   --   --   --   --   --   --   --   --   --   --   --   --   --   --
+        // -  - -  - -  - -  - -  - -  - -  - - lf rg - -  - -  - -  - -  - -  - -  - -  -
+        assert_eq!(
+            Address::from_parts(Level(0), 15).common_ancestor(&Address::from_parts(Level(0), 16)),
+            Address::from_parts(Level(5), 0)
         );
     }
 }
