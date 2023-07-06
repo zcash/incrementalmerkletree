@@ -890,6 +890,7 @@ impl<H: Hashable + Clone + PartialEq> LocatedPrunableTree<H> {
             rroot: LocatedPrunableTree<H>,
             prune_below: Level,
         ) -> LocatedTree<Option<Rc<H>>, (H, RetentionFlags)> {
+            assert_eq!(lroot.root_addr.parent(), rroot.root_addr.parent());
             LocatedTree {
                 root_addr: lroot.root_addr.parent(),
                 root: if lroot.root_addr.level() < prune_below {
@@ -994,7 +995,6 @@ impl<H: Hashable + Clone + PartialEq> LocatedPrunableTree<H> {
                                 );
                             }
 
-                            // at this point, prev_tree.level == next_tree.level
                             Some(unite(prev_tree, next_tree, prune_below))
                         } else {
                             Some(next_tree)
