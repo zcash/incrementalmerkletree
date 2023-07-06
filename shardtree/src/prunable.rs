@@ -905,6 +905,36 @@ impl<H: Hashable + Clone + PartialEq> LocatedPrunableTree<H> {
             }
         }
 
+        /// Combines the given subtree with an empty sibling node to obtain the next level
+        /// subtree.
+        ///
+        /// `expect_left_child` is set to a constant at each callsite, to ensure that this
+        /// function is only called on either the left-most or right-most subtree.
+        fn combine_with_empty<H: Hashable + Clone + PartialEq>(
+            root: LocatedPrunableTree<H>,
+            expect_left_child: bool,
+            incomplete: &mut Vec<IncompleteAt>,
+            contains_marked: bool,
+            prune_below: Level,
+        ) -> LocatedPrunableTree<H> {
+            assert_eq!(expect_left_child, root.root_addr.is_left_child());
+            let sibling_addr = root.root_addr.sibling();
+            incomplete.push(IncompleteAt {
+                address: sibling_addr,
+                required_for_witness: contains_marked,
+            });
+            let sibling = LocatedTree {
+                root_addr: sibling_addr,
+                root: Tree(Node::Nil),
+            };
+            let (lroot, rroot) = if root.root_addr.is_left_child() {
+                (root, sibling)
+            } else {
+                (sibling, root)
+            };
+            unite(lroot, rroot, prune_below)
+        }
+
         // Builds a single tree from the provided stack of subtrees, which must be non-overlapping
         // and in position order. Returns the resulting tree, a flag indicating whether the
         // resulting tree contains a `MARKED` node, and the vector of [`IncompleteAt`] values for
@@ -920,19 +950,8 @@ impl<H: Hashable + Clone + PartialEq> LocatedPrunableTree<H> {
                 let mut incomplete = vec![];
                 while let Some((top, top_marked)) = xs.pop() {
                     while cur.root_addr.level() < top.root_addr.level() {
-                        let sibling_addr = cur.root_addr.sibling();
-                        incomplete.push(IncompleteAt {
-                            address: sibling_addr,
-                            required_for_witness: top_marked,
-                        });
-                        cur = unite(
-                            cur,
-                            LocatedTree {
-                                root_addr: sibling_addr,
-                                root: Tree(Node::Nil),
-                            },
-                            prune_below,
-                        );
+                        cur =
+                            combine_with_empty(cur, true, &mut incomplete, top_marked, prune_below);
                     }
 
                     if cur.root_addr.level() == top.root_addr.level() {
@@ -945,17 +964,11 @@ impl<H: Hashable + Clone + PartialEq> LocatedPrunableTree<H> {
                             // we've merged as much as we can from the right and need to work from
                             // the left
                             xs.push((top, top_marked));
-                            let sibling_addr = cur.root_addr.sibling();
-                            incomplete.push(IncompleteAt {
-                                address: sibling_addr,
-                                required_for_witness: top_marked,
-                            });
-                            cur = unite(
+                            cur = combine_with_empty(
                                 cur,
-                                LocatedTree {
-                                    root_addr: sibling_addr,
-                                    root: Tree(Node::Nil),
-                                },
+                                true,
+                                &mut incomplete,
+                                top_marked,
                                 prune_below,
                             );
                             break;
@@ -968,18 +981,13 @@ impl<H: Hashable + Clone + PartialEq> LocatedPrunableTree<H> {
                     }
                 }
 
+                // Ensure we can work from the left in a single pass by making this right-most subtree
                 while cur.root_addr.level() + 1 < root_addr.level() {
-                    let sibling_addr = cur.root_addr.sibling();
-                    incomplete.push(IncompleteAt {
-                        address: sibling_addr,
-                        required_for_witness: contains_marked,
-                    });
-                    cur = unite(
+                    cur = combine_with_empty(
                         cur,
-                        LocatedTree {
-                            root_addr: sibling_addr,
-                            root: Tree(Node::Nil),
-                        },
+                        true,
+                        &mut incomplete,
+                        contains_marked,
                         prune_below,
                     );
                 }
@@ -996,18 +1004,12 @@ impl<H: Hashable + Clone + PartialEq> LocatedPrunableTree<H> {
                             // add nil branches to build up the left tree until we can merge it
                             // with the right
                             while prev_tree.root_addr.level() < next_tree.root_addr.level() {
-                                let sibling_addr = prev_tree.root_addr.sibling();
                                 contains_marked = contains_marked || next_marked;
-                                incomplete.push(IncompleteAt {
-                                    address: sibling_addr,
-                                    required_for_witness: next_marked,
-                                });
-                                prev_tree = unite(
-                                    LocatedTree {
-                                        root_addr: sibling_addr,
-                                        root: Tree(Node::Nil),
-                                    },
+                                prev_tree = combine_with_empty(
                                     prev_tree,
+                                    false,
+                                    &mut incomplete,
+                                    next_marked,
                                     prune_below,
                                 );
                             }
