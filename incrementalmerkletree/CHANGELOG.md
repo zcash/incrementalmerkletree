@@ -6,6 +6,11 @@ and this project adheres to Rust's notion of
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## Unreleased
+### Fixed
+- `incrementalmerkletree::Address::common_ancestor` no longer produces incorrect
+  results for some pairs of addresses. It was previously using an arithmetic
+  distance between indices within a level, instead of a bitwise distance.
+
 ### Changed
 - `incrementalmerkletree::Hashable` trait now has a `Debug` bound.
 

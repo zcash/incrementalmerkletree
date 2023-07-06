@@ -386,7 +386,7 @@ impl Address {
     pub fn common_ancestor(&self, other: &Self) -> Self {
         if self.level >= other.level {
             let other_ancestor_idx = other.index >> (self.level.0 - other.level.0);
-            let index_delta = self.index.abs_diff(other_ancestor_idx);
+            let index_delta = self.index ^ other_ancestor_idx;
             let level_delta = (u64::BITS - index_delta.leading_zeros()) as u8;
             Address {
                 level: self.level + level_delta,
@@ -394,7 +394,7 @@ impl Address {
             }
         } else {
             let self_ancestor_idx = self.index >> (other.level.0 - self.level.0);
-            let index_delta = other.index.abs_diff(self_ancestor_idx);
+            let index_delta = other.index ^ self_ancestor_idx;
             let level_delta = (u64::BITS - index_delta.leading_zeros()) as u8;
             Address {
                 level: other.level + level_delta,
