@@ -384,22 +384,23 @@ impl Address {
 
     /// Returns the common ancestor of `self` and `other` having the smallest level value.
     pub fn common_ancestor(&self, other: &Self) -> Self {
-        if self.level >= other.level {
-            let other_ancestor_idx = other.index >> (self.level.0 - other.level.0);
-            let index_delta = self.index ^ other_ancestor_idx;
-            let level_delta = (u64::BITS - index_delta.leading_zeros()) as u8;
-            Address {
-                level: self.level + level_delta,
-                index: std::cmp::max(self.index, other_ancestor_idx) >> level_delta,
-            }
+        // We can leverage the symmetry of a binary tree to share the calculation logic,
+        // by ordering the nodes.
+        let (higher, lower) = if self.level >= other.level {
+            (self, other)
         } else {
-            let self_ancestor_idx = self.index >> (other.level.0 - self.level.0);
-            let index_delta = other.index ^ self_ancestor_idx;
-            let level_delta = (u64::BITS - index_delta.leading_zeros()) as u8;
-            Address {
-                level: other.level + level_delta,
-                index: std::cmp::max(other.index, self_ancestor_idx) >> level_delta,
-            }
+            (other, self)
+        };
+
+        // We follow the lower node's subtree up to the same level as the higher node, and
+        // then use their XOR distance to determine how many levels of the tree their
+        // Merkle paths differ on.
+        let lower_ancestor_idx = lower.index >> (higher.level.0 - lower.level.0);
+        let index_delta = higher.index ^ lower_ancestor_idx;
+        let level_delta = (u64::BITS - index_delta.leading_zeros()) as u8;
+        Address {
+            level: higher.level + level_delta,
+            index: std::cmp::max(higher.index, lower_ancestor_idx) >> level_delta,
         }
     }
 
