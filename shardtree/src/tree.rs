@@ -1,7 +1,7 @@
 use std::ops::Deref;
 use std::rc::Rc;
 
-use incrementalmerkletree::{Address, Level, Position};
+use incrementalmerkletree::{Address, LeafPosition, Level};
 
 /// A "pattern functor" for a single layer of a binary tree.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -193,8 +193,8 @@ impl<A, V> LocatedTree<A, V> {
     ///
     /// Note that no actual leaf value may exist at this position, as it may have previously been
     /// pruned.
-    pub fn max_position(&self) -> Option<Position> {
-        fn go<A, V>(addr: Address, root: &Tree<A, V>) -> Option<Position> {
+    pub fn max_position(&self) -> Option<LeafPosition> {
+        fn go<A, V>(addr: Address, root: &Tree<A, V>) -> Option<LeafPosition> {
             match &root.0 {
                 Node::Nil => None,
                 Node::Leaf { .. } => Some(addr.position_range_end() - 1),
@@ -209,8 +209,8 @@ impl<A, V> LocatedTree<A, V> {
     }
 
     /// Returns the value at the specified position, if any.
-    pub fn value_at_position(&self, position: Position) -> Option<&V> {
-        fn go<A, V>(pos: Position, addr: Address, root: &Tree<A, V>) -> Option<&V> {
+    pub fn value_at_position(&self, position: LeafPosition) -> Option<&V> {
+        fn go<A, V>(pos: LeafPosition, addr: Address, root: &Tree<A, V>) -> Option<&V> {
             match &root.0 {
                 Node::Parent { left, right, .. } => {
                     let (l_addr, r_addr) = addr.children().unwrap();

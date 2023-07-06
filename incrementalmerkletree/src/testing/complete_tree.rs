@@ -2,7 +2,7 @@
 use std::cmp::min;
 use std::collections::{BTreeMap, BTreeSet};
 
-use crate::{testing::Tree, Hashable, Level, Position, Retention};
+use crate::{testing::Tree, Hashable, LeafPosition, Level, Retention};
 
 const MAX_COMPLETE_SIZE_ERROR: &str = "Positions of a `CompleteTree` must fit into the platform word size, because larger complete trees are not representable.";
 
@@ -44,11 +44,11 @@ pub struct Checkpoint {
     leaves_len: usize,
     /// A set of the positions that have been marked during the period that this
     /// checkpoint is the current checkpoint.
-    marked: BTreeSet<Position>,
+    marked: BTreeSet<LeafPosition>,
     /// When a mark is forgotten, we add it to the checkpoint's forgotten set but
     /// don't immediately remove it from the `marked` set; that removal occurs when
     /// the checkpoint is eventually dropped.
-    forgotten: BTreeSet<Position>,
+    forgotten: BTreeSet<LeafPosition>,
 }
 
 impl Checkpoint {
@@ -64,7 +64,7 @@ impl Checkpoint {
 #[derive(Clone, Debug)]
 pub struct CompleteTree<H, C: Ord, const DEPTH: u8> {
     leaves: Vec<Option<H>>,
-    marks: BTreeSet<Position>,
+    marks: BTreeSet<LeafPosition>,
     checkpoints: BTreeMap<C, Checkpoint>,
     max_checkpoints: usize,
 }
@@ -127,7 +127,7 @@ impl<H: Hashable, C: Clone + Ord + core::fmt::Debug, const DEPTH: u8> CompleteTr
         Ok(())
     }
 
-    fn current_position(&self) -> Option<Position> {
+    fn current_position(&self) -> Option<LeafPosition> {
         if self.leaves.is_empty() {
             None
         } else {
@@ -139,7 +139,7 @@ impl<H: Hashable, C: Clone + Ord + core::fmt::Debug, const DEPTH: u8> CompleteTr
 
     /// Marks the current tree state leaf as a value that we're interested in
     /// marking. Returns the current position if the tree is non-empty.
-    fn mark(&mut self) -> Option<Position> {
+    fn mark(&mut self) -> Option<LeafPosition> {
         if let Some(pos) = self.current_position() {
             if !self.marks.contains(&pos) {
                 self.marks.insert(pos);
@@ -155,7 +155,7 @@ impl<H: Hashable, C: Clone + Ord + core::fmt::Debug, const DEPTH: u8> CompleteTr
         }
     }
 
-    fn checkpoint(&mut self, id: C, pos: Option<Position>) {
+    fn checkpoint(&mut self, id: C, pos: Option<LeafPosition>) {
         self.checkpoints.insert(
             id,
             Checkpoint::at_length(pos.map_or_else(
@@ -218,15 +218,15 @@ impl<H: Hashable + PartialEq + Clone, C: Ord + Clone + core::fmt::Debug, const D
         Self::append(self, value, retention).is_ok()
     }
 
-    fn current_position(&self) -> Option<Position> {
+    fn current_position(&self) -> Option<LeafPosition> {
         Self::current_position(self)
     }
 
-    fn marked_positions(&self) -> BTreeSet<Position> {
+    fn marked_positions(&self) -> BTreeSet<LeafPosition> {
         self.marks.clone()
     }
 
-    fn get_marked_leaf(&self, position: Position) -> Option<H> {
+    fn get_marked_leaf(&self, position: LeafPosition) -> Option<H> {
         if self.marks.contains(&position) {
             self.leaves
                 .get(usize::try_from(position).expect(MAX_COMPLETE_SIZE_ERROR))
@@ -241,7 +241,7 @@ impl<H: Hashable + PartialEq + Clone, C: Ord + Clone + core::fmt::Debug, const D
             .and_then(|len| root(&self.leaves[0..len], DEPTH))
     }
 
-    fn witness(&self, position: Position, checkpoint_depth: usize) -> Option<Vec<H>> {
+    fn witness(&self, position: LeafPosition, checkpoint_depth: usize) -> Option<Vec<H>> {
         if self.marks.contains(&position) && checkpoint_depth <= self.checkpoints.len() {
             let leaves_len = self.leaves_at_checkpoint_depth(checkpoint_depth)?;
             let c_idx = self.checkpoints.len() - checkpoint_depth;
@@ -276,7 +276,7 @@ impl<H: Hashable + PartialEq + Clone, C: Ord + Clone + core::fmt::Debug, const D
         }
     }
 
-    fn remove_mark(&mut self, position: Position) -> bool {
+    fn remove_mark(&mut self, position: LeafPosition) -> bool {
         if self.marks.contains(&position) {
             if let Some(c) = self.checkpoints.values_mut().rev().next() {
                 c.forgotten.insert(position);
@@ -323,7 +323,7 @@ mod tests {
             check_append, check_checkpoint_rewind, check_rewind_remove_mark, check_root_hashes,
             check_witnesses, compute_root_from_witness, SipHashable, Tree,
         },
-        Hashable, Level, Position, Retention,
+        Hashable, LeafPosition, Level, Retention,
     };
 
     #[test]
@@ -411,7 +411,7 @@ mod tests {
         assert_eq!(tree.root(0).unwrap(), expected);
 
         for i in 0u64..(1 << DEPTH) {
-            let position = Position::try_from(i).unwrap();
+            let position = LeafPosition::try_from(i).unwrap();
             let path = tree.witness(position, 0).unwrap();
             assert_eq!(
                 compute_root_from_witness(SipHashable(i), position, &path),

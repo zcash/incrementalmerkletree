@@ -5,7 +5,7 @@ use core::marker::PhantomData;
 use proptest::prelude::*;
 use std::collections::BTreeSet;
 
-use crate::{Hashable, Level, Position, Retention};
+use crate::{Hashable, LeafPosition, Level, Retention};
 
 pub mod complete_tree;
 
@@ -38,14 +38,14 @@ pub trait Tree<H, C> {
     fn append(&mut self, value: H, retention: Retention<C>) -> bool;
 
     /// Returns the most recently appended leaf value.
-    fn current_position(&self) -> Option<Position>;
+    fn current_position(&self) -> Option<LeafPosition>;
 
     /// Returns the leaf at the specified position if the tree can produce
     /// a witness for it.
-    fn get_marked_leaf(&self, position: Position) -> Option<H>;
+    fn get_marked_leaf(&self, position: LeafPosition) -> Option<H>;
 
     /// Return a set of all the positions for which we have marked.
-    fn marked_positions(&self) -> BTreeSet<Position>;
+    fn marked_positions(&self) -> BTreeSet<LeafPosition>;
 
     /// Obtains the root of the Merkle tree at the specified checkpoint depth
     /// by hashing against empty nodes up to the maximum height of the tree.
@@ -56,12 +56,12 @@ pub trait Tree<H, C> {
     /// Obtains a witness for the value at the specified leaf position, as of the tree state at the
     /// given checkpoint depth. Returns `None` if there is no witness information for the requested
     /// position or if no checkpoint is available at the specified depth.
-    fn witness(&self, position: Position, checkpoint_depth: usize) -> Option<Vec<H>>;
+    fn witness(&self, position: LeafPosition, checkpoint_depth: usize) -> Option<Vec<H>>;
 
     /// Marks the value at the specified position as a value we're no longer
     /// interested in maintaining a mark for. Returns true if successful and
     /// false if we were already not maintaining a mark at this position.
-    fn remove_mark(&mut self, position: Position) -> bool;
+    fn remove_mark(&mut self, position: LeafPosition) -> bool;
 
     /// Creates a new checkpoint for the current tree state.
     ///
@@ -132,12 +132,12 @@ impl<H: Hashable> Hashable for Option<H> {
 pub enum Operation<A, C> {
     Append(A, Retention<C>),
     CurrentPosition,
-    MarkedLeaf(Position),
+    MarkedLeaf(LeafPosition),
     MarkedPositions,
-    Unmark(Position),
+    Unmark(LeafPosition),
     Checkpoint(C),
     Rewind,
-    Witness(Position, usize),
+    Witness(LeafPosition, usize),
     GarbageCollect,
 }
 
@@ -148,15 +148,15 @@ pub fn append_str<C>(x: &str, retention: Retention<C>) -> Operation<String, C> {
 }
 
 pub fn unmark<H, C>(pos: u64) -> Operation<H, C> {
-    Operation::Unmark(Position::from(pos))
+    Operation::Unmark(LeafPosition::from(pos))
 }
 
 pub fn witness<H, C>(pos: u64, depth: usize) -> Operation<H, C> {
-    Operation::Witness(Position::from(pos), depth)
+    Operation::Witness(LeafPosition::from(pos), depth)
 }
 
 impl<H: Hashable + Clone, C: Clone> Operation<H, C> {
-    pub fn apply<T: Tree<H, C>>(&self, tree: &mut T) -> Option<(Position, Vec<H>)> {
+    pub fn apply<T: Tree<H, C>>(&self, tree: &mut T) -> Option<(LeafPosition, Vec<H>)> {
         match self {
             Append(a, r) => {
                 assert!(tree.append(a.clone(), r.clone()), "append failed");
@@ -185,7 +185,7 @@ impl<H: Hashable + Clone, C: Clone> Operation<H, C> {
     pub fn apply_all<T: Tree<H, C>>(
         ops: &[Operation<H, C>],
         tree: &mut T,
-    ) -> Option<(Position, Vec<H>)> {
+    ) -> Option<(LeafPosition, Vec<H>)> {
         let mut result = None;
         for op in ops {
             result = op.apply(tree);
@@ -218,7 +218,7 @@ pub fn arb_retention() -> impl Strategy<Value = Retention<()>> {
 
 pub fn arb_operation<G: Strategy + Clone>(
     item_gen: G,
-    pos_gen: impl Strategy<Value = Position> + Clone,
+    pos_gen: impl Strategy<Value = LeafPosition> + Clone,
 ) -> impl Strategy<Value = Operation<G::Value, ()>>
 where
     G::Value: Clone + 'static,
@@ -350,7 +350,7 @@ pub fn check_operations<H: Hashable + Ord + Clone + Debug, C: Clone, T: Tree<H, 
     Ok(())
 }
 
-pub fn compute_root_from_witness<H: Hashable>(value: H, position: Position, path: &[H]) -> H {
+pub fn compute_root_from_witness<H: Hashable>(value: H, position: LeafPosition, path: &[H]) -> H {
     let mut cur = value;
     let mut lvl = 0.into();
     for (i, v) in path
@@ -413,35 +413,35 @@ impl<H: Hashable + Ord + Clone + Debug, C: Clone, I: Tree<H, C>, E: Tree<H, C>> 
         a
     }
 
-    fn current_position(&self) -> Option<Position> {
+    fn current_position(&self) -> Option<LeafPosition> {
         let a = self.inefficient.current_position();
         let b = self.efficient.current_position();
         assert_eq!(a, b);
         a
     }
 
-    fn get_marked_leaf(&self, position: Position) -> Option<H> {
+    fn get_marked_leaf(&self, position: LeafPosition) -> Option<H> {
         let a = self.inefficient.get_marked_leaf(position);
         let b = self.efficient.get_marked_leaf(position);
         assert_eq!(a, b);
         a
     }
 
-    fn marked_positions(&self) -> BTreeSet<Position> {
+    fn marked_positions(&self) -> BTreeSet<LeafPosition> {
         let a = self.inefficient.marked_positions();
         let b = self.efficient.marked_positions();
         assert_eq!(a, b);
         a
     }
 
-    fn witness(&self, position: Position, checkpoint_depth: usize) -> Option<Vec<H>> {
+    fn witness(&self, position: LeafPosition, checkpoint_depth: usize) -> Option<Vec<H>> {
         let a = self.inefficient.witness(position, checkpoint_depth);
         let b = self.efficient.witness(position, checkpoint_depth);
         assert_eq!(a, b);
         a
     }
 
-    fn remove_mark(&mut self, position: Position) -> bool {
+    fn remove_mark(&mut self, position: LeafPosition) -> bool {
         let a = self.inefficient.remove_mark(position);
         let b = self.efficient.remove_mark(position);
         assert_eq!(a, b);
@@ -581,7 +581,7 @@ pub fn check_append<H: TestHashable, C: TestCheckpoint, T: Tree<H, C>, F: Fn(usi
         // 16 appends should succeed
         for i in 0..16 {
             tree.assert_append(i, Ephemeral);
-            assert_eq!(tree.current_position(), Some(Position::from(i)));
+            assert_eq!(tree.current_position(), Some(LeafPosition::from(i)));
         }
 
         // 17th append should fail
@@ -608,14 +608,14 @@ pub fn check_witnesses<H: TestHashable, C: TestCheckpoint, T: Tree<H, C>, F: Fn(
         let mut tree = new_tree(100);
         tree.assert_append(0, Ephemeral);
         tree.assert_append(1, Marked);
-        assert_eq!(tree.witness(Position::from(0), 0), None);
+        assert_eq!(tree.witness(LeafPosition::from(0), 0), None);
     }
 
     {
         let mut tree = new_tree(100);
         tree.assert_append(0, Marked);
         assert_eq!(
-            tree.witness(Position::from(0), 0),
+            tree.witness(LeafPosition::from(0), 0),
             Some(vec![
                 H::empty_root(0.into()),
                 H::empty_root(1.into()),
@@ -637,7 +637,7 @@ pub fn check_witnesses<H: TestHashable, C: TestCheckpoint, T: Tree<H, C>, F: Fn(
 
         tree.assert_append(2, Marked);
         assert_eq!(
-            tree.witness(Position::from(2), 0),
+            tree.witness(LeafPosition::from(2), 0),
             Some(vec![
                 H::empty_root(0.into()),
                 H::combine_all(1, &[0, 1]),
@@ -648,7 +648,7 @@ pub fn check_witnesses<H: TestHashable, C: TestCheckpoint, T: Tree<H, C>, F: Fn(
 
         tree.assert_append(3, Ephemeral);
         assert_eq!(
-            tree.witness(Position::from(2), 0),
+            tree.witness(LeafPosition::from(2), 0),
             Some(vec![
                 H::from_u64(3),
                 H::combine_all(1, &[0, 1]),
@@ -659,7 +659,7 @@ pub fn check_witnesses<H: TestHashable, C: TestCheckpoint, T: Tree<H, C>, F: Fn(
 
         tree.assert_append(4, Ephemeral);
         assert_eq!(
-            tree.witness(Position::from(2), 0),
+            tree.witness(LeafPosition::from(2), 0),
             Some(vec![
                 H::from_u64(3),
                 H::combine_all(1, &[0, 1]),
@@ -700,7 +700,7 @@ pub fn check_witnesses<H: TestHashable, C: TestCheckpoint, T: Tree<H, C>, F: Fn(
         tree.assert_append(6, Ephemeral);
 
         assert_eq!(
-            tree.witness(Position::from(5), 0),
+            tree.witness(LeafPosition::from(5), 0),
             Some(vec![
                 H::from_u64(4),
                 H::combine_all(1, &[6]),
@@ -719,7 +719,7 @@ pub fn check_witnesses<H: TestHashable, C: TestCheckpoint, T: Tree<H, C>, F: Fn(
         tree.assert_append(11, Ephemeral);
 
         assert_eq!(
-            tree.witness(Position::from(10), 0),
+            tree.witness(LeafPosition::from(10), 0),
             Some(vec![
                 H::from_u64(11),
                 H::combine_all(1, &[8, 9]),
@@ -775,7 +775,7 @@ pub fn check_witnesses<H: TestHashable, C: TestCheckpoint, T: Tree<H, C>, F: Fn(
         tree.assert_append(7, Ephemeral);
         assert!(tree.rewind());
         assert_eq!(
-            tree.witness(Position::from(2), 0),
+            tree.witness(LeafPosition::from(2), 0),
             Some(vec![
                 H::from_u64(3),
                 H::combine_all(1, &[0, 1]),
@@ -796,7 +796,7 @@ pub fn check_witnesses<H: TestHashable, C: TestCheckpoint, T: Tree<H, C>, F: Fn(
         tree.assert_append(15, Ephemeral);
 
         assert_eq!(
-            tree.witness(Position::from(12), 0),
+            tree.witness(LeafPosition::from(12), 0),
             Some(vec![
                 H::from_u64(13),
                 H::combine_all(1, &[14, 15]),
@@ -818,7 +818,7 @@ pub fn check_witnesses<H: TestHashable, C: TestCheckpoint, T: Tree<H, C>, F: Fn(
         assert_eq!(
             Operation::apply_all(&ops, &mut tree),
             Some((
-                Position::from(11),
+                LeafPosition::from(11),
                 vec![
                     H::from_u64(10),
                     H::combine_all(1, &[8, 9]),
@@ -870,7 +870,7 @@ pub fn check_witnesses<H: TestHashable, C: TestCheckpoint, T: Tree<H, C>, F: Fn(
         assert_eq!(
             Operation::apply_all(&ops, &mut tree),
             Some((
-                Position::from(3),
+                LeafPosition::from(3),
                 vec![
                     H::from_u64(2),
                     H::combine_all(1, &[0, 1]),
@@ -905,13 +905,13 @@ pub fn check_witnesses<H: TestHashable, C: TestCheckpoint, T: Tree<H, C>, F: Fn(
             ),
             Append(H::from_u64(0), Ephemeral),
             Append(H::from_u64(0), Ephemeral),
-            Witness(Position(3), 1),
+            Witness(LeafPosition(3), 1),
         ];
         let mut tree = new_tree(100);
         assert_eq!(
             Operation::apply_all(&ops, &mut tree),
             Some((
-                Position::from(3),
+                LeafPosition::from(3),
                 vec![
                     H::from_u64(0),
                     H::combine_all(1, &[0, 0]),
@@ -944,7 +944,7 @@ pub fn check_witnesses<H: TestHashable, C: TestCheckpoint, T: Tree<H, C>, F: Fn(
             ),
             Rewind,
             Rewind,
-            Witness(Position(7), 2),
+            Witness(LeafPosition(7), 2),
         ];
         let mut tree = new_tree(100);
         assert_eq!(Operation::apply_all(&ops, &mut tree), None);
@@ -968,13 +968,13 @@ pub fn check_witnesses<H: TestHashable, C: TestCheckpoint, T: Tree<H, C>, F: Fn(
                     is_marked: false,
                 },
             ),
-            Witness(Position(2), 2),
+            Witness(LeafPosition(2), 2),
         ];
         let mut tree = new_tree(100);
         assert_eq!(
             Operation::apply_all(&ops, &mut tree),
             Some((
-                Position::from(2),
+                LeafPosition::from(2),
                 vec![
                     H::empty_leaf(),
                     H::combine_all(1, &[0, 0]),
@@ -1001,7 +1001,7 @@ pub fn check_checkpoint_rewind<C: TestCheckpoint, T: Tree<String, C>, F: Fn(usiz
     t.assert_checkpoint(1);
     t.append("b".to_string(), Retention::Marked);
     assert!(t.rewind());
-    assert_eq!(Some(Position::from(0)), t.current_position());
+    assert_eq!(Some(LeafPosition::from(0)), t.current_position());
 
     let mut t = new_tree(100);
     t.append("a".to_string(), Retention::Marked);
@@ -1013,7 +1013,7 @@ pub fn check_checkpoint_rewind<C: TestCheckpoint, T: Tree<String, C>, F: Fn(usiz
     t.assert_checkpoint(1);
     t.append("a".to_string(), Retention::Ephemeral);
     assert!(t.rewind());
-    assert_eq!(Some(Position::from(0)), t.current_position());
+    assert_eq!(Some(LeafPosition::from(0)), t.current_position());
 
     let mut t = new_tree(100);
     t.append("a".to_string(), Retention::Ephemeral);
@@ -1277,7 +1277,7 @@ pub fn check_witness_consistency<C: TestCheckpoint, T: Tree<String, C>, F: Fn(us
 pub(crate) mod tests {
     use crate::{
         testing::{compute_root_from_witness, SipHashable},
-        Hashable, Level, Position,
+        Hashable, LeafPosition, Level,
     };
 
     #[test]
@@ -1316,7 +1316,7 @@ pub(crate) mod tests {
         assert_eq!(
             compute_root_from_witness(
                 SipHashable(4),
-                Position::from(4),
+                LeafPosition::from(4),
                 &[
                     SipHashable(5),
                     SipHashable::combine(0.into(), &SipHashable(6), &SipHashable(7)),

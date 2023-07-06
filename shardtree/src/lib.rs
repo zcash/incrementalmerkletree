@@ -5,7 +5,7 @@ use std::rc::Rc;
 use tracing::trace;
 
 use incrementalmerkletree::{
-    frontier::NonEmptyFrontier, Address, Hashable, Level, MerklePath, Position, Retention,
+    frontier::NonEmptyFrontier, Address, Hashable, LeafPosition, Level, MerklePath, Retention,
 };
 
 #[cfg(feature = "legacy-api")]
@@ -34,13 +34,13 @@ pub enum TreeState {
     Empty,
     /// Checkpoint at a (possibly pruned) leaf state corresponding to the
     /// wrapped leaf position.
-    AtPosition(Position),
+    AtPosition(LeafPosition),
 }
 
 #[derive(Clone, Debug)]
 pub struct Checkpoint {
     tree_state: TreeState,
-    marks_removed: BTreeSet<Position>,
+    marks_removed: BTreeSet<LeafPosition>,
 }
 
 impl Checkpoint {
@@ -51,14 +51,14 @@ impl Checkpoint {
         }
     }
 
-    pub fn at_position(position: Position) -> Self {
+    pub fn at_position(position: LeafPosition) -> Self {
         Checkpoint {
             tree_state: TreeState::AtPosition(position),
             marks_removed: BTreeSet::new(),
         }
     }
 
-    pub fn from_parts(tree_state: TreeState, marks_removed: BTreeSet<Position>) -> Self {
+    pub fn from_parts(tree_state: TreeState, marks_removed: BTreeSet<LeafPosition>) -> Self {
         Checkpoint {
             tree_state,
             marks_removed,
@@ -69,7 +69,7 @@ impl Checkpoint {
         self.tree_state
     }
 
-    pub fn marks_removed(&self) -> &BTreeSet<Position> {
+    pub fn marks_removed(&self) -> &BTreeSet<LeafPosition> {
         &self.marks_removed
     }
 
@@ -77,7 +77,7 @@ impl Checkpoint {
         matches!(self.tree_state, TreeState::Empty)
     }
 
-    pub fn position(&self) -> Option<Position> {
+    pub fn position(&self) -> Option<LeafPosition> {
         match self.tree_state {
             TreeState::Empty => None,
             TreeState::AtPosition(pos) => Some(pos),
@@ -376,7 +376,7 @@ impl<
     }
 
     /// Returns the root address of the subtree that contains the specified position.
-    pub fn subtree_addr(pos: Position) -> Address {
+    pub fn subtree_addr(pos: LeafPosition) -> Address {
         Address::above_position(Self::subtree_level(), pos)
     }
 
@@ -387,7 +387,7 @@ impl<
     /// Returns the leaf value at the specified position, if it is a marked leaf.
     pub fn get_marked_leaf(
         &self,
-        position: Position,
+        position: LeafPosition,
     ) -> Result<Option<H>, ShardTreeError<S::Error>> {
         Ok(self
             .store
@@ -398,7 +398,7 @@ impl<
     }
 
     /// Returns the positions of marked leaves in the tree.
-    pub fn marked_positions(&self) -> Result<BTreeSet<Position>, ShardTreeError<S::Error>> {
+    pub fn marked_positions(&self) -> Result<BTreeSet<LeafPosition>, ShardTreeError<S::Error>> {
         let mut result = BTreeSet::new();
         for subtree_addr in &self
             .store
@@ -646,9 +646,9 @@ impl<
     #[allow(clippy::type_complexity)]
     pub fn batch_insert<I: Iterator<Item = (H, Retention<C>)>>(
         &mut self,
-        mut start: Position,
+        mut start: LeafPosition,
         values: I,
-    ) -> Result<Option<(Position, Vec<IncompleteAt>)>, ShardTreeError<S::Error>> {
+    ) -> Result<Option<(LeafPosition, Vec<IncompleteAt>)>, ShardTreeError<S::Error>> {
         trace!("Batch inserting from {:?}", start);
         let mut values = values.peekable();
         let mut subtree_root_addr = Self::subtree_addr(start);
@@ -717,7 +717,7 @@ impl<
         fn go<H: Hashable + Clone + PartialEq>(
             root_addr: Address,
             root: &PrunableTree<H>,
-        ) -> Option<(PrunableTree<H>, Position)> {
+        ) -> Option<(PrunableTree<H>, LeafPosition)> {
             match root {
                 Tree(Node::Parent { ann, left, right }) => {
                     let (l_addr, r_addr) = root_addr.children().unwrap();
@@ -815,7 +815,7 @@ impl<
             // will be removed from the checkpoints map.
             let remove_count = checkpoint_count - self.max_checkpoints;
             let mut checkpoints_to_delete = vec![];
-            let mut clear_positions: BTreeMap<Address, BTreeMap<Position, RetentionFlags>> =
+            let mut clear_positions: BTreeMap<Address, BTreeMap<LeafPosition, RetentionFlags>> =
                 BTreeMap::new();
             self.store
                 .with_checkpoints(checkpoint_count, |cid, checkpoint| {
@@ -1013,7 +1013,7 @@ impl<
     pub fn root(
         &self,
         address: Address,
-        truncate_at: Position,
+        truncate_at: LeafPosition,
     ) -> Result<H, ShardTreeError<S::Error>> {
         assert!(Self::root_addr().contains(&address));
 
@@ -1033,7 +1033,7 @@ impl<
     pub fn root_caching(
         &mut self,
         address: Address,
-        truncate_at: Position,
+        truncate_at: LeafPosition,
     ) -> Result<H, ShardTreeError<S::Error>> {
         let (root, updated_cap) = self.root_internal(
             &LocatedPrunableTree {
@@ -1060,7 +1060,7 @@ impl<
         target_addr: Address,
         // An inclusive lower bound for positions whose leaf values will be replaced by empty
         // roots.
-        truncate_at: Position,
+        truncate_at: LeafPosition,
     ) -> Result<(H, Option<PrunableTree<H>>), ShardTreeError<S::Error>> {
         match &cap.root {
             Tree(Node::Parent { ann, left, right }) => {
@@ -1199,7 +1199,7 @@ impl<
     fn root_from_shards(
         &self,
         address: Address,
-        truncate_at: Position,
+        truncate_at: LeafPosition,
     ) -> Result<H, ShardTreeError<S::Error>> {
         match address.context(Self::subtree_level()) {
             Either::Left(subtree_addr) => {
@@ -1312,7 +1312,7 @@ impl<
     pub fn max_leaf_position(
         &self,
         checkpoint_depth: usize,
-    ) -> Result<Option<Position>, ShardTreeError<S::Error>> {
+    ) -> Result<Option<LeafPosition>, ShardTreeError<S::Error>> {
         Ok(if checkpoint_depth == 0 {
             // TODO: This relies on the invariant that the last shard in the subtrees vector is
             // never created without a leaf then being added to it. However, this may be a
@@ -1370,7 +1370,7 @@ impl<
     /// result as `checkpoint_depth == 1`.
     pub fn witness(
         &self,
-        position: Position,
+        position: LeafPosition,
         checkpoint_depth: usize,
     ) -> Result<MerklePath<H, DEPTH>, ShardTreeError<S::Error>> {
         let max_leaf_position = self.max_leaf_position(checkpoint_depth).and_then(|v| {
@@ -1414,7 +1414,7 @@ impl<
     /// those values from potentially large numbers of subtree roots in the future.
     pub fn witness_caching(
         &mut self,
-        position: Position,
+        position: LeafPosition,
         checkpoint_depth: usize,
     ) -> Result<MerklePath<H, DEPTH>, ShardTreeError<S::Error>> {
         let max_leaf_position = self.max_leaf_position(checkpoint_depth).and_then(|v| {
@@ -1463,7 +1463,7 @@ impl<
     /// not marked, or an error if one is produced by the underlying data store.
     pub fn remove_mark(
         &mut self,
-        position: Position,
+        position: LeafPosition,
         as_of_checkpoint: Option<&C>,
     ) -> Result<bool, ShardTreeError<S::Error>> {
         match self
@@ -1526,7 +1526,7 @@ mod tests {
             check_witness_consistency, check_witnesses, complete_tree::CompleteTree, CombinedTree,
             SipHashable,
         },
-        Address, Hashable, Level, Position, Retention,
+        Address, Hashable, LeafPosition, Level, Retention,
     };
 
     use crate::{
@@ -1674,7 +1674,7 @@ mod tests {
             ops in proptest::collection::vec(
                 arb_operation(
                     (0..32u64).prop_map(SipHashable),
-                    (0u64..100).prop_map(Position::from)
+                    (0u64..100).prop_map(LeafPosition::from)
                 ),
                 1..100
             )
@@ -1689,7 +1689,7 @@ mod tests {
             ops in proptest::collection::vec(
                 arb_operation(
                     (97u8..123).prop_map(|c| char::from(c).to_string()),
-                    (0u64..100).prop_map(Position::from)
+                    (0u64..100).prop_map(LeafPosition::from)
                 ),
                 1..100
             )
@@ -1776,7 +1776,7 @@ mod tests {
         if let Ok((t, None)) = result {
             // verify that the leaf at the tip is included
             assert_eq!(
-                t.root.root_hash(root_addr, Position::from(3)),
+                t.root.root_hash(root_addr, LeafPosition::from(3)),
                 Ok("abc_____".to_string())
             );
         }
@@ -1802,7 +1802,7 @@ mod tests {
         if let Ok((t, Some(c), Some(r))) = result {
             // verify that we can find the "marked" leaf
             assert_eq!(
-                t.root.root_hash(root_addr, Position::from(7)),
+                t.root.root_hash(root_addr, LeafPosition::from(7)),
                 Ok("abcdefg_".to_string())
             );
 
@@ -1824,8 +1824,10 @@ mod tests {
             );
 
             assert_eq!(
-                r.root
-                    .root_hash(Address::from_parts(Level::from(3), 3), Position::from(25)),
+                r.root.root_hash(
+                    Address::from_parts(Level::from(3), 3),
+                    LeafPosition::from(25)
+                ),
                 Ok("y_______".to_string())
             );
         }
@@ -1849,7 +1851,7 @@ mod tests {
         if let Ok((t, None, None)) = result {
             // verify that we can find the "marked" leaf
             assert_eq!(
-                t.root.root_hash(root_addr, Position::from(3)),
+                t.root.root_hash(root_addr, LeafPosition::from(3)),
                 Ok("abc_____".to_string())
             );
         }

@@ -1,7 +1,7 @@
 use std::convert::TryFrom;
 use std::mem::size_of;
 
-use crate::{Address, Hashable, Level, MerklePath, Position, Source};
+use crate::{Address, Hashable, LeafPosition, Level, MerklePath, Source};
 
 #[cfg(feature = "legacy-api")]
 use {std::collections::VecDeque, std::iter::repeat};
@@ -25,7 +25,7 @@ pub enum FrontierError {
 /// values that will be required when producing a witness for the current leaf.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct NonEmptyFrontier<H> {
-    position: Position,
+    position: LeafPosition,
     leaf: H,
     ommers: Vec<H>,
 }
@@ -41,7 +41,11 @@ impl<H> NonEmptyFrontier<H> {
     }
 
     /// Constructs a new frontier from its constituent parts.
-    pub fn from_parts(position: Position, leaf: H, ommers: Vec<H>) -> Result<Self, FrontierError> {
+    pub fn from_parts(
+        position: LeafPosition,
+        leaf: H,
+        ommers: Vec<H>,
+    ) -> Result<Self, FrontierError> {
         let expected_ommers = position.past_ommer_count();
         if ommers.len() == expected_ommers.into() {
             Ok(Self {
@@ -55,12 +59,12 @@ impl<H> NonEmptyFrontier<H> {
     }
 
     /// Decomposes the frontier into its constituent parts
-    pub fn into_parts(self) -> (Position, H, Vec<H>) {
+    pub fn into_parts(self) -> (LeafPosition, H, Vec<H>) {
         (self.position, self.leaf, self.ommers)
     }
 
     /// Returns the position of the most recently appended leaf.
-    pub fn position(&self) -> Position {
+    pub fn position(&self) -> LeafPosition {
         self.position
     }
 
@@ -205,7 +209,11 @@ impl<H, const DEPTH: u8> Frontier<H, DEPTH> {
     ///
     /// Returns an error if the new frontier would exceed the maximum allowed depth or if the list
     /// of ommers provided is not consistent with the position of the leaf.
-    pub fn from_parts(position: Position, leaf: H, ommers: Vec<H>) -> Result<Self, FrontierError> {
+    pub fn from_parts(
+        position: LeafPosition,
+        leaf: H,
+        ommers: Vec<H>,
+    ) -> Result<Self, FrontierError> {
         NonEmptyFrontier::from_parts(position, leaf, ommers).and_then(Self::try_from)
     }
 

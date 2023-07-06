@@ -5,7 +5,7 @@ use std::rc::Rc;
 
 use bitflags::bitflags;
 use incrementalmerkletree::{
-    frontier::NonEmptyFrontier, Address, Hashable, Level, Position, Retention,
+    frontier::NonEmptyFrontier, Address, Hashable, LeafPosition, Level, Retention,
 };
 use tracing::trace;
 
@@ -105,7 +105,11 @@ impl<H: Hashable + Clone + PartialEq> PrunableTree<H> {
     /// ### Parameters:
     /// * `truncate_at` An inclusive lower bound on positions in the tree beyond which all leaf
     ///    values will be treated as `Nil`.
-    pub fn root_hash(&self, root_addr: Address, truncate_at: Position) -> Result<H, Vec<Address>> {
+    pub fn root_hash(
+        &self,
+        root_addr: Address,
+        truncate_at: LeafPosition,
+    ) -> Result<H, Vec<Address>> {
         if truncate_at <= root_addr.position_range_start() {
             // we are in the part of the tree where we're generating empty roots,
             // so no need to inspect the tree
@@ -156,7 +160,7 @@ impl<H: Hashable + Clone + PartialEq> PrunableTree<H> {
     ///
     /// Computing the set of marked positions requires a full traversal of the tree, and so should
     /// be considered to be a somewhat expensive operation.
-    pub fn marked_positions(&self, root_addr: Address) -> BTreeSet<Position> {
+    pub fn marked_positions(&self, root_addr: Address) -> BTreeSet<LeafPosition> {
         match &self.0 {
             Node::Parent { left, right, .. } => {
                 // We should never construct parent nodes where both children are Nil.
@@ -177,7 +181,7 @@ impl<H: Hashable + Clone + PartialEq> PrunableTree<H> {
             } => {
                 let mut result = BTreeSet::new();
                 if root_addr.level() == 0.into() && retention.is_marked() {
-                    result.insert(Position::from(root_addr.index()));
+                    result.insert(LeafPosition::from(root_addr.index()));
                 }
                 result
             }
@@ -344,9 +348,9 @@ pub struct BatchInsertionResult<H, C: Ord, I: Iterator<Item = (H, Retention<C>)>
     /// each inserted leaf with [`Retention::Marked`] retention.
     pub incomplete: Vec<IncompleteAt>,
     /// The maximum position at which a leaf was inserted.
-    pub max_insert_position: Option<Position>,
+    pub max_insert_position: Option<LeafPosition>,
     /// The positions of all leaves with [`Retention::Checkpoint`] retention that were inserted.
-    pub checkpoints: BTreeMap<C, Position>,
+    pub checkpoints: BTreeMap<C, LeafPosition>,
     /// The unconsumed remainder of the iterator from which leaves were inserted, if the tree
     /// was completely filled before the iterator was fully consumed.
     pub remainder: I,
@@ -360,7 +364,7 @@ pub enum InsertionError {
     NotContained(Address),
     /// The start of the range of positions provided for insertion is not included
     /// in the range of positions within this subtree.
-    OutOfRange(Position, Range<Position>),
+    OutOfRange(LeafPosition, Range<LeafPosition>),
     /// An existing root hash conflicts with the root hash of a node being inserted.
     Conflict(Address),
     /// An out-of-order checkpoint was detected
@@ -451,7 +455,7 @@ impl<H: Hashable + Clone + PartialEq> LocatedPrunableTree<H> {
     /// If the tree contains any [`Node::Nil`] nodes corresponding to positions less than
     /// `truncate_at`, this will return an error containing the addresses of those nodes within the
     /// tree.
-    pub fn root_hash(&self, truncate_at: Position) -> Result<H, Vec<Address>> {
+    pub fn root_hash(&self, truncate_at: LeafPosition) -> Result<H, Vec<Address>> {
         self.root.root_hash(self.root_addr, truncate_at)
     }
 
@@ -471,11 +475,11 @@ impl<H: Hashable + Clone + PartialEq> LocatedPrunableTree<H> {
     }
 
     /// Returns the positions of marked leaves in the tree.
-    pub fn marked_positions(&self) -> BTreeSet<Position> {
+    pub fn marked_positions(&self) -> BTreeSet<LeafPosition> {
         fn go<H: Hashable + Clone + PartialEq>(
             root_addr: Address,
             root: &PrunableTree<H>,
-            acc: &mut BTreeSet<Position>,
+            acc: &mut BTreeSet<LeafPosition>,
         ) {
             match &root.0 {
                 Node::Parent { left, right, .. } => {
@@ -485,7 +489,7 @@ impl<H: Hashable + Clone + PartialEq> LocatedPrunableTree<H> {
                 }
                 Node::Leaf { value } => {
                     if value.1.is_marked() && root_addr.level() == 0.into() {
-                        acc.insert(Position::from(root_addr.index()));
+                        acc.insert(LeafPosition::from(root_addr.index()));
                     }
                 }
                 _ => {}
@@ -505,14 +509,18 @@ impl<H: Hashable + Clone + PartialEq> LocatedPrunableTree<H> {
     ///
     /// Returns either the witness for the leaf at the specified position, or an error that
     /// describes the causes of failure.
-    pub fn witness(&self, position: Position, truncate_at: Position) -> Result<Vec<H>, QueryError> {
+    pub fn witness(
+        &self,
+        position: LeafPosition,
+        truncate_at: LeafPosition,
+    ) -> Result<Vec<H>, QueryError> {
         // traverse down to the desired leaf position, and then construct
         // the authentication path on the way back up.
         fn go<H: Hashable + Clone + PartialEq>(
             root: &PrunableTree<H>,
             root_addr: Address,
-            position: Position,
-            truncate_at: Position,
+            position: LeafPosition,
+            truncate_at: LeafPosition,
         ) -> Result<Vec<H>, Vec<Address>> {
             match &root.0 {
                 Node::Parent { left, right, .. } => {
@@ -590,9 +598,9 @@ impl<H: Hashable + Clone + PartialEq> LocatedPrunableTree<H> {
     /// The leaf at the specified position is retained. Returns the truncated tree if a leaf or
     /// subtree root with the specified position as its maximum position exists, or `None`
     /// otherwise.
-    pub fn truncate_to_position(&self, position: Position) -> Option<Self> {
+    pub fn truncate_to_position(&self, position: LeafPosition) -> Option<Self> {
         fn go<H: Hashable + Clone + PartialEq>(
-            position: Position,
+            position: LeafPosition,
             root_addr: Address,
             root: &PrunableTree<H>,
         ) -> Option<PrunableTree<H>> {
@@ -818,7 +826,7 @@ impl<H: Hashable + Clone + PartialEq> LocatedPrunableTree<H> {
         &self,
         value: H,
         retention: Retention<C>,
-    ) -> Result<(Self, Position, Option<C>), InsertionError> {
+    ) -> Result<(Self, LeafPosition, Option<C>), InsertionError> {
         let checkpoint_id = if let Retention::Checkpoint { id, .. } = &retention {
             Some(id.clone())
         } else {
@@ -870,7 +878,7 @@ impl<H: Hashable + Clone + PartialEq> LocatedPrunableTree<H> {
     ///   level.
     /// * `values` The iterator of `(H, [`Retention`])` pairs from which to construct the tree.
     pub fn from_iter<C: Clone + Ord, I: Iterator<Item = (H, Retention<C>)>>(
-        position_range: Range<Position>,
+        position_range: Range<LeafPosition>,
         prune_below: Level,
         mut values: I,
     ) -> Option<BatchInsertionResult<H, C, I>> {
@@ -1031,7 +1039,7 @@ impl<H: Hashable + Clone + PartialEq> LocatedPrunableTree<H> {
         // with the addresses at which they will be inserted, along with their root hashes.
         let mut fragments: Vec<(Self, bool)> = vec![];
         let mut position = position_range.start;
-        let mut checkpoints: BTreeMap<C, Position> = BTreeMap::new();
+        let mut checkpoints: BTreeMap<C, LeafPosition> = BTreeMap::new();
         while position < position_range.end {
             if let Some((value, retention)) = values.next() {
                 if let Retention::Checkpoint { id, .. } = &retention {
@@ -1101,7 +1109,7 @@ impl<H: Hashable + Clone + PartialEq> LocatedPrunableTree<H> {
     /// of this tree's position range or if a conflict with an existing subtree root is detected.
     pub fn batch_insert<C: Clone + Ord, I: Iterator<Item = (H, Retention<C>)>>(
         &self,
-        start: Position,
+        start: LeafPosition,
         values: I,
     ) -> Result<Option<BatchInsertionResult<H, C, I>>, InsertionError> {
         trace!("Batch inserting into {:?} from {:?}", self.root_addr, start);
@@ -1144,7 +1152,7 @@ impl<H: Hashable + Clone + PartialEq> LocatedPrunableTree<H> {
     // have inaccurate position information (e.g. in the case that the tree is the
     // cursor for an `IncrementalWitness`).
     fn from_frontier_parts<C>(
-        position: Position,
+        position: LeafPosition,
         leaf: H,
         mut ommers: impl Iterator<Item = H>,
         leaf_retention: &Retention<C>,
@@ -1386,9 +1394,9 @@ impl<H: Hashable + Clone + PartialEq> LocatedPrunableTree<H> {
 
     /// Clears the specified retention flags at all positions specified, pruning any branches
     /// that no longer need to be retained.
-    pub fn clear_flags(&self, to_clear: BTreeMap<Position, RetentionFlags>) -> Self {
+    pub fn clear_flags(&self, to_clear: BTreeMap<LeafPosition, RetentionFlags>) -> Self {
         fn go<H: Hashable + Clone + PartialEq>(
-            to_clear: &[(Position, RetentionFlags)],
+            to_clear: &[(LeafPosition, RetentionFlags)],
             root_addr: Address,
             root: &PrunableTree<H>,
         ) -> PrunableTree<H> {
@@ -1468,7 +1476,7 @@ fn accumulate_result_with<A, B, C>(
 mod tests {
     use std::collections::BTreeSet;
 
-    use incrementalmerkletree::{Address, Level, Position, Retention};
+    use incrementalmerkletree::{Address, LeafPosition, Level, Retention};
 
     use super::{LocatedPrunableTree, PrunableTree, QueryError, RetentionFlags};
     use crate::tree::{
@@ -1484,24 +1492,36 @@ mod tests {
         );
 
         assert_eq!(
-            t.root_hash(Address::from_parts(Level::from(1), 0), Position::from(2)),
+            t.root_hash(
+                Address::from_parts(Level::from(1), 0),
+                LeafPosition::from(2)
+            ),
             Ok("ab".to_string())
         );
 
         let t0 = parent(nil(), t.clone());
         assert_eq!(
-            t0.root_hash(Address::from_parts(Level::from(2), 0), Position::from(4)),
+            t0.root_hash(
+                Address::from_parts(Level::from(2), 0),
+                LeafPosition::from(4)
+            ),
             Err(vec![Address::from_parts(Level::from(1), 0)])
         );
 
         // Check root computation with truncation
         let t1 = parent(t, nil());
         assert_eq!(
-            t1.root_hash(Address::from_parts(Level::from(2), 0), Position::from(2)),
+            t1.root_hash(
+                Address::from_parts(Level::from(2), 0),
+                LeafPosition::from(2)
+            ),
             Ok("ab__".to_string())
         );
         assert_eq!(
-            t1.root_hash(Address::from_parts(Level::from(2), 0), Position::from(3)),
+            t1.root_hash(
+                Address::from_parts(Level::from(2), 0),
+                LeafPosition::from(3)
+            ),
             Err(vec![Address::from_parts(Level::from(1), 1)])
         );
     }
@@ -1514,13 +1534,13 @@ mod tests {
         );
         assert_eq!(
             t.marked_positions(Address::from_parts(Level::from(1), 0)),
-            BTreeSet::from([Position::from(1)])
+            BTreeSet::from([LeafPosition::from(1)])
         );
 
         let t0 = parent(t.clone(), t);
         assert_eq!(
             t0.marked_positions(Address::from_parts(Level::from(2), 1)),
-            BTreeSet::from([Position::from(5), Position::from(7)])
+            BTreeSet::from([LeafPosition::from(5), LeafPosition::from(7)])
         );
     }
 
@@ -1698,7 +1718,7 @@ mod tests {
     #[test]
     fn located_from_iter_non_sibling_adjacent() {
         let res = LocatedPrunableTree::from_iter::<(), _>(
-            Position::from(3)..Position::from(5),
+            LeafPosition::from(3)..LeafPosition::from(5),
             Level::new(0),
             vec![
                 ("d".to_string(), Retention::Ephemeral),
@@ -1743,7 +1763,7 @@ mod tests {
         // On the same tree, perform an out-of-order insertion.
         let out_of_order = base
             .batch_insert::<(), _>(
-                Position::from(3),
+                LeafPosition::from(3),
                 vec![("d".to_string(), Retention::Ephemeral)].into_iter(),
             )
             .unwrap()
@@ -1762,7 +1782,7 @@ mod tests {
         let complete = out_of_order
             .subtree
             .batch_insert::<(), _>(
-                Position::from(1),
+                LeafPosition::from(1),
                 vec![
                     ("b".to_string(), Retention::Ephemeral),
                     ("c".to_string(), Retention::Ephemeral),

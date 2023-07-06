@@ -71,8 +71,8 @@ pub fn arb_shardtree<H: Strategy + Clone>(
 ) -> impl Strategy<
     Value = (
         ShardTree<MemoryShardStore<H::Value, usize>, 6, 3>,
-        Vec<Position>,
-        Vec<Position>,
+        Vec<LeafPosition>,
+        Vec<LeafPosition>,
     ),
 >
 where
@@ -87,7 +87,7 @@ where
         let mut checkpoint_positions = vec![];
         let mut marked_positions = vec![];
         tree.batch_insert(
-            Position::from(0),
+            LeafPosition::from(0),
             leaves
                 .into_iter()
                 .enumerate()
@@ -97,7 +97,7 @@ where
                         match (is_checkpoint, is_marked) {
                             (false, false) => Retention::Ephemeral,
                             (true, is_marked) => {
-                                let pos = Position::try_from(id).unwrap();
+                                let pos = LeafPosition::try_from(id).unwrap();
                                 checkpoint_positions.push(pos);
                                 if is_marked {
                                     marked_positions.push(pos);
@@ -105,7 +105,7 @@ where
                                 Retention::Checkpoint { id, is_marked }
                             }
                             (false, true) => {
-                                marked_positions.push(Position::try_from(id).unwrap());
+                                marked_positions.push(LeafPosition::try_from(id).unwrap());
                                 Retention::Marked
                             }
                         },
@@ -144,21 +144,21 @@ where
         }
     }
 
-    fn current_position(&self) -> Option<Position> {
+    fn current_position(&self) -> Option<LeafPosition> {
         match ShardTree::max_leaf_position(self, 0) {
             Ok(v) => v,
             Err(err) => panic!("current position query failed: {:?}", err),
         }
     }
 
-    fn get_marked_leaf(&self, position: Position) -> Option<H> {
+    fn get_marked_leaf(&self, position: LeafPosition) -> Option<H> {
         match ShardTree::get_marked_leaf(self, position) {
             Ok(v) => v,
             Err(err) => panic!("marked leaf query failed: {:?}", err),
         }
     }
 
-    fn marked_positions(&self) -> BTreeSet<Position> {
+    fn marked_positions(&self) -> BTreeSet<LeafPosition> {
         match ShardTree::marked_positions(self) {
             Ok(v) => v,
             Err(err) => panic!("marked positions query failed: {:?}", err),
@@ -172,7 +172,7 @@ where
         }
     }
 
-    fn witness(&self, position: Position, checkpoint_depth: usize) -> Option<Vec<H>> {
+    fn witness(&self, position: LeafPosition, checkpoint_depth: usize) -> Option<Vec<H>> {
         match ShardTree::witness(self, position, checkpoint_depth) {
             Ok(p) => Some(p.path_elems().to_vec()),
             Err(ShardTreeError::Query(
@@ -184,7 +184,7 @@ where
         }
     }
 
-    fn remove_mark(&mut self, position: Position) -> bool {
+    fn remove_mark(&mut self, position: LeafPosition) -> bool {
         let max_checkpoint = self
             .store
             .max_checkpoint_id()
@@ -213,7 +213,7 @@ pub fn check_shardtree_insertion<
 ) {
     assert_matches!(
         tree.batch_insert(
-            Position::from(1),
+            LeafPosition::from(1),
             vec![
                 ("b".to_string(), Retention::Checkpoint { id: 1, is_marked: false }),
                 ("c".to_string(), Retention::Ephemeral),
@@ -221,7 +221,7 @@ pub fn check_shardtree_insertion<
             ].into_iter()
         ),
         Ok(Some((pos, incomplete))) if
-            pos == Position::from(3) &&
+            pos == LeafPosition::from(3) &&
             incomplete == vec![
                 IncompleteAt {
                     address: Address::from_parts(Level::from(0), 0),
@@ -241,13 +241,13 @@ pub fn check_shardtree_insertion<
 
     assert_matches!(
         tree.batch_insert(
-            Position::from(0),
+            LeafPosition::from(0),
             vec![
                 ("a".to_string(), Retention::Ephemeral),
             ].into_iter()
         ),
         Ok(Some((pos, incomplete))) if
-            pos == Position::from(0) &&
+            pos == LeafPosition::from(0) &&
             incomplete == vec![]
     );
 
@@ -263,7 +263,7 @@ pub fn check_shardtree_insertion<
 
     assert_matches!(
         tree.batch_insert(
-            Position::from(10),
+            LeafPosition::from(10),
             vec![
                 ("k".to_string(), Retention::Ephemeral),
                 ("l".to_string(), Retention::Checkpoint { id: 2, is_marked: false }),
@@ -271,7 +271,7 @@ pub fn check_shardtree_insertion<
             ].into_iter()
         ),
         Ok(Some((pos, incomplete))) if
-            pos == Position::from(12) &&
+            pos == LeafPosition::from(12) &&
             incomplete == vec![
                 IncompleteAt {
                     address: Address::from_parts(Level::from(0), 13),
@@ -303,7 +303,7 @@ pub fn check_shardtree_insertion<
 
     assert_matches!(
         tree.batch_insert(
-            Position::from(4),
+            LeafPosition::from(4),
             ('e'..'k')
                 .into_iter()
                 .map(|c| (c.to_string(), Retention::Ephemeral))
@@ -335,7 +335,7 @@ pub fn check_shard_sizes<E: Debug, S: ShardStore<H = String, CheckpointId = u32,
             .get_shard(Address::from_parts(Level::from(2), 3))
             .unwrap()
             .and_then(|t| t.max_position()),
-        Some(Position::from(14))
+        Some(LeafPosition::from(14))
     );
 }
 
@@ -359,7 +359,7 @@ pub fn check_witness_with_pruned_subtrees<
 
     // simulate discovery of a note
     tree.batch_insert(
-        Position::from(24),
+        LeafPosition::from(24),
         ('a'..='h').into_iter().map(|c| {
             (
                 c.to_string(),
@@ -377,7 +377,7 @@ pub fn check_witness_with_pruned_subtrees<
     .unwrap();
 
     // construct a witness for the note
-    let witness = tree.witness(Position::from(26), 0).unwrap();
+    let witness = tree.witness(LeafPosition::from(26), 0).unwrap();
     assert_eq!(
         witness.path_elems(),
         &[

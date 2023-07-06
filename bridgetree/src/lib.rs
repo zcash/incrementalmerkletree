@@ -32,7 +32,7 @@
 //! In this module, the term "ommer" is used as for the sibling of a parent node in a binary tree.
 pub use incrementalmerkletree::{
     frontier::{Frontier, NonEmptyFrontier},
-    Address, Hashable, Level, Position, Retention, Source,
+    Address, Hashable, LeafPosition, Level, Retention, Source,
 };
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::fmt::Debug;
@@ -45,7 +45,7 @@ pub enum ContinuityError {
     PriorPositionNotFound,
     /// Returned when the subsequent bridge's prior position does not match the position of the
     /// prior bridge's frontier.
-    PositionMismatch(Position, Position),
+    PositionMismatch(LeafPosition, LeafPosition),
 }
 
 /// Errors that can be discovered during the process of attempting to create
@@ -55,7 +55,7 @@ pub enum WitnessingError {
     AuthBaseNotFound,
     CheckpointInvalid,
     CheckpointTooDeep(usize),
-    PositionNotMarked(Position),
+    PositionNotMarked(LeafPosition),
     BridgeFusionError(ContinuityError),
     BridgeAddressInvalid(Address),
 }
@@ -78,7 +78,7 @@ pub enum WitnessingError {
 pub struct MerkleBridge<H> {
     /// The position of the final leaf in the frontier of the bridge that this bridge is the
     /// successor of, or None if this is the first bridge in a tree.
-    prior_position: Option<Position>,
+    prior_position: Option<LeafPosition>,
     /// The set of addresses for which we are waiting to discover the ommers.  The values of this
     /// set and the keys of the `need` map should always be disjoint. Also, this set should
     /// never contain an address for which the sibling value has been discovered; at that point,
@@ -112,7 +112,7 @@ impl<H> MerkleBridge<H> {
 
     /// Construct a new Merkle bridge from its constituent parts.
     pub fn from_parts(
-        prior_position: Option<Position>,
+        prior_position: Option<LeafPosition>,
         tracking: BTreeSet<Address>,
         ommers: BTreeMap<Address, H>,
         frontier: NonEmptyFrontier<H>,
@@ -128,12 +128,12 @@ impl<H> MerkleBridge<H> {
     /// Returns the position of the final leaf in the frontier of the
     /// bridge that this bridge is the successor of, or None
     /// if this is the first bridge in a tree.
-    pub fn prior_position(&self) -> Option<Position> {
+    pub fn prior_position(&self) -> Option<LeafPosition> {
         self.prior_position
     }
 
     /// Returns the position of the most recently appended leaf.
-    pub fn position(&self) -> Position {
+    pub fn position(&self) -> LeafPosition {
         self.frontier.position()
     }
 
@@ -177,9 +177,9 @@ impl<H> MerkleBridge<H> {
     }
 
     /// Returns the range of positions observed by this bridge.
-    pub fn position_range(&self) -> Range<Position> {
+    pub fn position_range(&self) -> Range<LeafPosition> {
         Range {
-            start: self.prior_position.unwrap_or_else(|| Position::from(0)),
+            start: self.prior_position.unwrap_or_else(|| LeafPosition::from(0)),
             end: self.position() + 1,
         }
     }
@@ -330,11 +330,11 @@ pub struct Checkpoint<C> {
     bridges_len: usize,
     /// A set of the positions that have been marked during the period that this
     /// checkpoint is the current checkpoint.
-    marked: BTreeSet<Position>,
+    marked: BTreeSet<LeafPosition>,
     /// When a mark is forgotten, we add it to the checkpoint's forgotten set but
     /// don't immediately remove it from the `saved` map; that removal occurs when
     /// the checkpoint is eventually dropped.
-    forgotten: BTreeSet<Position>,
+    forgotten: BTreeSet<LeafPosition>,
 }
 
 impl<C> Checkpoint<C> {
@@ -342,8 +342,8 @@ impl<C> Checkpoint<C> {
     pub fn from_parts(
         id: C,
         bridges_len: usize,
-        marked: BTreeSet<Position>,
-        forgotten: BTreeSet<Position>,
+        marked: BTreeSet<LeafPosition>,
+        forgotten: BTreeSet<LeafPosition>,
     ) -> Self {
         Self {
             id,
@@ -379,13 +379,13 @@ impl<C> Checkpoint<C> {
 
     /// Returns a set of the positions that have been marked during the period that this
     /// checkpoint is the current checkpoint.
-    pub fn marked(&self) -> &BTreeSet<Position> {
+    pub fn marked(&self) -> &BTreeSet<LeafPosition> {
         &self.marked
     }
 
     /// Returns the set of previously-marked positions that have had their marks removed
     /// during the period that this checkpoint is the current checkpoint.
-    pub fn forgotten(&self) -> &BTreeSet<Position> {
+    pub fn forgotten(&self) -> &BTreeSet<LeafPosition> {
         &self.forgotten
     }
 
@@ -405,7 +405,7 @@ impl<C> Checkpoint<C> {
 
     // A private convenience method that returns the position of the bridge corresponding
     // to this checkpoint, if the checkpoint is not for the empty bridge.
-    fn position<H: Ord>(&self, bridges: &[MerkleBridge<H>]) -> Option<Position> {
+    fn position<H: Ord>(&self, bridges: &[MerkleBridge<H>]) -> Option<LeafPosition> {
         if self.bridges_len == 0 {
             None
         } else {
@@ -431,7 +431,7 @@ pub struct BridgeTree<H, C, const DEPTH: u8> {
     current_bridge: Option<MerkleBridge<H>>,
     /// A map from positions for which we wish to be able to compute a
     /// witness to index in the bridges vector.
-    saved: BTreeMap<Position, usize>,
+    saved: BTreeMap<LeafPosition, usize>,
     /// A deque of bridge indices to which it's possible to rewind directly.
     /// This deque must be maintained to have a minimum size of 1 and a maximum
     /// size of `max_checkpoints` in order to correctly maintain mark & rewind
@@ -459,7 +459,10 @@ impl<H: Debug, C: Debug, const DEPTH: u8> Debug for BridgeTree<H, C, DEPTH> {
 pub enum BridgeTreeError {
     IncorrectIncompleteIndex,
     InvalidMarkIndex(usize),
-    PositionMismatch { expected: Position, found: Position },
+    PositionMismatch {
+        expected: LeafPosition,
+        found: LeafPosition,
+    },
     InvalidSavePoints,
     Discontinuity(ContinuityError),
     CheckpointMismatch,
@@ -510,7 +513,7 @@ impl<H, C, const DEPTH: u8> BridgeTree<H, C, DEPTH> {
 
     /// Returns the map from leaf positions that have been marked to the index of
     /// the bridge whose tip is at that position in this tree's list of bridges.
-    pub fn marked_indices(&self) -> &BTreeMap<Position, usize> {
+    pub fn marked_indices(&self) -> &BTreeMap<LeafPosition, usize> {
         &self.saved
     }
 
@@ -555,7 +558,7 @@ impl<H: Hashable + Clone + Ord, C: Clone + Ord, const DEPTH: u8> BridgeTree<H, C
     pub fn from_parts(
         prior_bridges: Vec<MerkleBridge<H>>,
         current_bridge: Option<MerkleBridge<H>>,
-        saved: BTreeMap<Position, usize>,
+        saved: BTreeMap<LeafPosition, usize>,
         checkpoints: VecDeque<Checkpoint<C>>,
         max_checkpoints: usize,
     ) -> Result<Self, BridgeTreeError> {
@@ -588,7 +591,7 @@ impl<H: Hashable + Clone + Ord, C: Clone + Ord, const DEPTH: u8> BridgeTree<H, C
     fn check_consistency_internal(
         prior_bridges: &[MerkleBridge<H>],
         current_bridge: &Option<MerkleBridge<H>>,
-        saved: &BTreeMap<Position, usize>,
+        saved: &BTreeMap<LeafPosition, usize>,
         checkpoints: &VecDeque<Checkpoint<C>>,
         max_checkpoints: usize,
     ) -> Result<(), BridgeTreeError> {
@@ -673,7 +676,7 @@ impl<H: Hashable + Clone + Ord, C: Clone + Ord, const DEPTH: u8> BridgeTree<H, C
     }
 
     /// Returns the most recently appended leaf value.
-    pub fn current_position(&self) -> Option<Position> {
+    pub fn current_position(&self) -> Option<LeafPosition> {
         self.current_bridge.as_ref().map(|b| b.position())
     }
 
@@ -686,7 +689,7 @@ impl<H: Hashable + Clone + Ord, C: Clone + Ord, const DEPTH: u8> BridgeTree<H, C
     ///
     /// Returns an optional value containing the current position if successful or if the current
     /// value was already marked, or None if the tree is empty.
-    pub fn mark(&mut self) -> Option<Position> {
+    pub fn mark(&mut self) -> Option<LeafPosition> {
         match self.current_bridge.take() {
             Some(mut cur_b) => {
                 let pos = cur_b.position();
@@ -724,13 +727,13 @@ impl<H: Hashable + Clone + Ord, C: Clone + Ord, const DEPTH: u8> BridgeTree<H, C
     }
 
     /// Return a set of all the positions for which we have marked.
-    pub fn marked_positions(&self) -> BTreeSet<Position> {
+    pub fn marked_positions(&self) -> BTreeSet<LeafPosition> {
         self.saved.keys().cloned().collect()
     }
 
     /// Returns the leaf at the specified position if the tree can produce
     /// a witness for it.
-    pub fn get_marked_leaf(&self, position: Position) -> Option<&H> {
+    pub fn get_marked_leaf(&self, position: LeafPosition) -> Option<&H> {
         self.saved
             .get(&position)
             .and_then(|idx| self.prior_bridges.get(*idx).map(|b| b.current_leaf()))
@@ -739,7 +742,7 @@ impl<H: Hashable + Clone + Ord, C: Clone + Ord, const DEPTH: u8> BridgeTree<H, C
     /// Marks the value at the specified position as a value we're no longer
     /// interested in maintaining a mark for. Returns true if successful and
     /// false if we were already not maintaining a mark at this position.
-    pub fn remove_mark(&mut self, position: Position) -> bool {
+    pub fn remove_mark(&mut self, position: LeafPosition) -> bool {
         if self.saved.contains_key(&position) {
             if let Some(c) = self.checkpoints.back_mut() {
                 c.forgotten.insert(position);
@@ -819,7 +822,7 @@ impl<H: Hashable + Clone + Ord, C: Clone + Ord, const DEPTH: u8> BridgeTree<H, C
     /// position or if no checkpoint is available at the specified depth.
     pub fn witness(
         &self,
-        position: Position,
+        position: LeafPosition,
         checkpoint_depth: usize,
     ) -> Result<Vec<H>, WitnessingError> {
         #[derive(Debug)]
@@ -1015,15 +1018,15 @@ mod tests {
             DEPTH
         }
 
-        fn current_position(&self) -> Option<Position> {
+        fn current_position(&self) -> Option<LeafPosition> {
             BridgeTree::current_position(self)
         }
 
-        fn get_marked_leaf(&self, position: Position) -> Option<H> {
+        fn get_marked_leaf(&self, position: LeafPosition) -> Option<H> {
             BridgeTree::get_marked_leaf(self, position).cloned()
         }
 
-        fn marked_positions(&self) -> BTreeSet<Position> {
+        fn marked_positions(&self) -> BTreeSet<LeafPosition> {
             BridgeTree::marked_positions(self)
         }
 
@@ -1031,11 +1034,11 @@ mod tests {
             BridgeTree::root(self, checkpoint_depth)
         }
 
-        fn witness(&self, position: Position, checkpoint_depth: usize) -> Option<Vec<H>> {
+        fn witness(&self, position: LeafPosition, checkpoint_depth: usize) -> Option<Vec<H>> {
             BridgeTree::witness(self, position, checkpoint_depth).ok()
         }
 
-        fn remove_mark(&mut self, position: Position) -> bool {
+        fn remove_mark(&mut self, position: LeafPosition) -> bool {
             BridgeTree::remove_mark(self, position)
         }
 
@@ -1080,7 +1083,7 @@ mod tests {
     where
         G::Value: Hashable + Clone + Ord + Debug + 'static,
     {
-        let pos_gen = (0..max_count).prop_map(|p| Position::try_from(p).unwrap());
+        let pos_gen = (0..max_count).prop_map(|p| LeafPosition::try_from(p).unwrap());
         proptest::collection::vec(arb_operation(item_gen, pos_gen), 0..max_count).prop_map(|ops| {
             let mut tree: BridgeTree<G::Value, usize, 8> = BridgeTree::new(10);
             for (i, op) in ops.into_iter().enumerate() {
@@ -1164,9 +1167,9 @@ mod tests {
             if i % 7 == 0 {
                 t.mark();
                 if i > 0 && i % 2 == 0 {
-                    to_unmark.push(Position::from(i));
+                    to_unmark.push(LeafPosition::from(i));
                 } else {
-                    has_witness.push(Position::from(i));
+                    has_witness.push(LeafPosition::from(i));
                 }
             }
             if i % 11 == 0 && !to_unmark.is_empty() {
@@ -1221,7 +1224,7 @@ mod tests {
             ops in proptest::collection::vec(
                 arb_operation(
                     (0..32u64).prop_map(SipHashable),
-                    (0u64..100).prop_map(Position::from)
+                    (0u64..100).prop_map(LeafPosition::from)
                 ),
                 1..100
             )
@@ -1236,7 +1239,7 @@ mod tests {
             ops in proptest::collection::vec(
                 arb_operation(
                     (97u8..123).prop_map(|c| char::from(c).to_string()),
-                    (0u64..100).prop_map(Position::from)
+                    (0u64..100).prop_map(LeafPosition::from)
                 ),
                 1..100
             )

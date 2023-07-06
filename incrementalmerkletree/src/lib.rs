@@ -135,9 +135,9 @@ impl Iterator for WitnessAddrsIter {
 /// A type representing the position of a leaf in a Merkle tree.
 #[derive(Copy, Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 #[repr(transparent)]
-pub struct Position(u64);
+pub struct LeafPosition(u64);
 
-impl Position {
+impl LeafPosition {
     /// Return whether the position refers to the right-hand child of a subtree with
     /// its root at level 1.
     pub fn is_right_child(&self) -> bool {
@@ -180,51 +180,51 @@ impl Position {
     }
 }
 
-impl From<Position> for u64 {
-    fn from(p: Position) -> Self {
+impl From<LeafPosition> for u64 {
+    fn from(p: LeafPosition) -> Self {
         p.0
     }
 }
 
-impl From<u64> for Position {
+impl From<u64> for LeafPosition {
     fn from(sz: u64) -> Self {
         Self(sz)
     }
 }
 
-impl Add<u64> for Position {
-    type Output = Position;
+impl Add<u64> for LeafPosition {
+    type Output = LeafPosition;
     fn add(self, other: u64) -> Self {
-        Position(self.0 + other)
+        LeafPosition(self.0 + other)
     }
 }
 
-impl AddAssign<u64> for Position {
+impl AddAssign<u64> for LeafPosition {
     fn add_assign(&mut self, other: u64) {
         self.0 += other
     }
 }
 
-impl Sub<u64> for Position {
-    type Output = Position;
+impl Sub<u64> for LeafPosition {
+    type Output = LeafPosition;
     fn sub(self, other: u64) -> Self {
         if self.0 < other {
             panic!("position underflow");
         }
-        Position(self.0 - other)
+        LeafPosition(self.0 - other)
     }
 }
 
-impl TryFrom<usize> for Position {
+impl TryFrom<usize> for LeafPosition {
     type Error = TryFromIntError;
     fn try_from(sz: usize) -> Result<Self, Self::Error> {
         <u64>::try_from(sz).map(Self)
     }
 }
 
-impl TryFrom<Position> for usize {
+impl TryFrom<LeafPosition> for usize {
     type Error = TryFromIntError;
-    fn try_from(p: Position) -> Result<Self, Self::Error> {
+    fn try_from(p: LeafPosition) -> Result<Self, Self::Error> {
         <usize>::try_from(p.0)
     }
 }
@@ -320,7 +320,7 @@ impl Address {
     }
 
     /// Returns the address at the given level that contains the specified leaf position.
-    pub fn above_position(level: Level, position: Position) -> Self {
+    pub fn above_position(level: Level, position: LeafPosition) -> Self {
         Address {
             level,
             index: position.0 >> level.0,
@@ -412,25 +412,25 @@ impl Address {
 
     /// Returns the minimum value among the range of leaf positions that are contained within the
     /// tree with its root at this address.
-    pub fn position_range_start(&self) -> Position {
+    pub fn position_range_start(&self) -> LeafPosition {
         (self.index << self.level.0).try_into().unwrap()
     }
 
     /// Returns the (exclusive) end of the range of leaf positions that are contained within the
     /// tree with its root at this address.
-    pub fn position_range_end(&self) -> Position {
+    pub fn position_range_end(&self) -> LeafPosition {
         ((self.index + 1) << self.level.0).try_into().unwrap()
     }
 
     /// Returns the maximum value among the range of leaf positions that are contained within the
     /// tree with its root at this address.
-    pub fn max_position(&self) -> Position {
+    pub fn max_position(&self) -> LeafPosition {
         self.position_range_end() - 1
     }
 
     /// Returns the end-exclusive range of leaf positions that are contained within the tree with
     /// its root at this address.
-    pub fn position_range(&self) -> Range<Position> {
+    pub fn position_range(&self) -> Range<LeafPosition> {
         Range {
             start: self.position_range_start(),
             end: self.position_range_end(),
@@ -459,7 +459,7 @@ impl Address {
     /// Returns whether the tree with this root address contains the given leaf position, or if not
     /// whether an address at the same level with a greater or lesser index will contain the
     /// specified leaf position.
-    pub fn position_cmp(&self, pos: Position) -> Ordering {
+    pub fn position_cmp(&self, pos: LeafPosition) -> Ordering {
         let range = self.position_range();
         if range.start > pos {
             Ordering::Greater
@@ -518,8 +518,8 @@ impl Address {
     }
 }
 
-impl From<Position> for Address {
-    fn from(p: Position) -> Self {
+impl From<LeafPosition> for Address {
+    fn from(p: LeafPosition) -> Self {
         Address {
             level: 0.into(),
             index: p.into(),
@@ -527,8 +527,8 @@ impl From<Position> for Address {
     }
 }
 
-impl<'a> From<&'a Position> for Address {
-    fn from(p: &'a Position) -> Self {
+impl<'a> From<&'a LeafPosition> for Address {
+    fn from(p: &'a LeafPosition) -> Self {
         Address {
             level: 0.into(),
             index: (*p).into(),
@@ -536,7 +536,7 @@ impl<'a> From<&'a Position> for Address {
     }
 }
 
-impl From<Address> for Option<Position> {
+impl From<Address> for Option<LeafPosition> {
     fn from(addr: Address) -> Self {
         if addr.level == 0.into() {
             Some(addr.index.into())
@@ -546,7 +546,7 @@ impl From<Address> for Option<Position> {
     }
 }
 
-impl<'a> From<&'a Address> for Option<Position> {
+impl<'a> From<&'a Address> for Option<LeafPosition> {
     fn from(addr: &'a Address) -> Self {
         if addr.level == 0.into() {
             Some(addr.index.into())
@@ -560,13 +560,13 @@ impl<'a> From<&'a Address> for Option<Position> {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct MerklePath<H, const DEPTH: u8> {
     path_elems: Vec<H>,
-    position: Position,
+    position: LeafPosition,
 }
 
 impl<H, const DEPTH: u8> MerklePath<H, DEPTH> {
     /// Constructs a Merkle path directly from a path and position.
     #[allow(clippy::result_unit_err)]
-    pub fn from_parts(path_elems: Vec<H>, position: Position) -> Result<Self, ()> {
+    pub fn from_parts(path_elems: Vec<H>, position: LeafPosition) -> Result<Self, ()> {
         if path_elems.len() == usize::from(DEPTH) {
             Ok(MerklePath {
                 path_elems,
@@ -581,7 +581,7 @@ impl<H, const DEPTH: u8> MerklePath<H, DEPTH> {
         &self.path_elems
     }
 
-    pub fn position(&self) -> Position {
+    pub fn position(&self) -> LeafPosition {
         self.position
     }
 }
@@ -623,42 +623,42 @@ pub trait Hashable: fmt::Debug {
 pub(crate) mod tests {
     use crate::MerklePath;
 
-    use super::{Address, Level, Position, Source};
+    use super::{Address, LeafPosition, Level, Source};
     use core::ops::Range;
     use either::Either;
 
     #[test]
     fn position_is_complete_subtree() {
-        assert!(Position(0).is_complete_subtree(Level(0)));
-        assert!(Position(1).is_complete_subtree(Level(1)));
-        assert!(!Position(2).is_complete_subtree(Level(1)));
-        assert!(!Position(2).is_complete_subtree(Level(2)));
-        assert!(Position(3).is_complete_subtree(Level(2)));
-        assert!(!Position(4).is_complete_subtree(Level(2)));
-        assert!(Position(7).is_complete_subtree(Level(3)));
-        assert!(Position(u32::MAX as u64).is_complete_subtree(Level(32)));
+        assert!(LeafPosition(0).is_complete_subtree(Level(0)));
+        assert!(LeafPosition(1).is_complete_subtree(Level(1)));
+        assert!(!LeafPosition(2).is_complete_subtree(Level(1)));
+        assert!(!LeafPosition(2).is_complete_subtree(Level(2)));
+        assert!(LeafPosition(3).is_complete_subtree(Level(2)));
+        assert!(!LeafPosition(4).is_complete_subtree(Level(2)));
+        assert!(LeafPosition(7).is_complete_subtree(Level(3)));
+        assert!(LeafPosition(u32::MAX as u64).is_complete_subtree(Level(32)));
     }
 
     #[test]
     fn position_past_ommer_count() {
-        assert_eq!(0, Position(0).past_ommer_count());
-        assert_eq!(1, Position(1).past_ommer_count());
-        assert_eq!(1, Position(2).past_ommer_count());
-        assert_eq!(2, Position(3).past_ommer_count());
-        assert_eq!(1, Position(4).past_ommer_count());
-        assert_eq!(3, Position(7).past_ommer_count());
-        assert_eq!(1, Position(8).past_ommer_count());
+        assert_eq!(0, LeafPosition(0).past_ommer_count());
+        assert_eq!(1, LeafPosition(1).past_ommer_count());
+        assert_eq!(1, LeafPosition(2).past_ommer_count());
+        assert_eq!(2, LeafPosition(3).past_ommer_count());
+        assert_eq!(1, LeafPosition(4).past_ommer_count());
+        assert_eq!(3, LeafPosition(7).past_ommer_count());
+        assert_eq!(1, LeafPosition(8).past_ommer_count());
     }
 
     #[test]
     fn position_root_level() {
-        assert_eq!(Level(0), Position(0).root_level());
-        assert_eq!(Level(1), Position(1).root_level());
-        assert_eq!(Level(2), Position(2).root_level());
-        assert_eq!(Level(2), Position(3).root_level());
-        assert_eq!(Level(3), Position(4).root_level());
-        assert_eq!(Level(3), Position(7).root_level());
-        assert_eq!(Level(4), Position(8).root_level());
+        assert_eq!(Level(0), LeafPosition(0).root_level());
+        assert_eq!(Level(1), LeafPosition(1).root_level());
+        assert_eq!(Level(2), LeafPosition(2).root_level());
+        assert_eq!(Level(2), LeafPosition(3).root_level());
+        assert_eq!(Level(3), LeafPosition(4).root_level());
+        assert_eq!(Level(3), LeafPosition(7).root_level());
+        assert_eq!(Level(4), LeafPosition(8).root_level());
     }
 
     #[test]
@@ -667,13 +667,13 @@ pub(crate) mod tests {
         let path_elem = |l, i, s| (Address::from_parts(Level::from(l), i), s);
         assert_eq!(
             vec![path_elem(0, 1, Future), path_elem(1, 1, Future)],
-            Position::from(0)
+            LeafPosition::from(0)
                 .witness_addrs(Level::from(2))
                 .collect::<Vec<_>>()
         );
         assert_eq!(
             vec![path_elem(0, 3, Future), path_elem(1, 0, Past(0))],
-            Position::from(2)
+            LeafPosition::from(2)
                 .witness_addrs(Level::from(2))
                 .collect::<Vec<_>>()
         );
@@ -683,7 +683,7 @@ pub(crate) mod tests {
                 path_elem(1, 0, Past(1)),
                 path_elem(2, 1, Future)
             ],
-            Position::from(3)
+            LeafPosition::from(3)
                 .witness_addrs(Level::from(3))
                 .collect::<Vec<_>>()
         );
@@ -694,7 +694,7 @@ pub(crate) mod tests {
                 path_elem(2, 0, Past(0)),
                 path_elem(3, 1, Future)
             ],
-            Position::from(4)
+            LeafPosition::from(4)
                 .witness_addrs(Level::from(4))
                 .collect::<Vec<_>>()
         );
@@ -705,7 +705,7 @@ pub(crate) mod tests {
                 path_elem(2, 0, Past(1)),
                 path_elem(3, 1, Future)
             ],
-            Position::from(6)
+            LeafPosition::from(6)
                 .witness_addrs(Level::from(4))
                 .collect::<Vec<_>>()
         );
@@ -746,22 +746,22 @@ pub(crate) mod tests {
         assert_eq!(
             Address::from_parts(Level(0), 0).position_range(),
             Range {
-                start: Position(0),
-                end: Position(1)
+                start: LeafPosition(0),
+                end: LeafPosition(1)
             }
         );
         assert_eq!(
             Address::from_parts(Level(1), 0).position_range(),
             Range {
-                start: Position(0),
-                end: Position(2)
+                start: LeafPosition(0),
+                end: LeafPosition(2)
             }
         );
         assert_eq!(
             Address::from_parts(Level(2), 1).position_range(),
             Range {
-                start: Position(4),
-                end: Position(8)
+                start: LeafPosition(4),
+                end: LeafPosition(8)
             }
         );
     }
@@ -769,7 +769,7 @@ pub(crate) mod tests {
     #[test]
     fn addr_above_position() {
         assert_eq!(
-            Address::above_position(Level(3), Position(9)),
+            Address::above_position(Level(3), LeafPosition(9)),
             Address::from_parts(Level(3), 1)
         );
     }
@@ -811,7 +811,7 @@ pub(crate) mod tests {
     fn merkle_path_root() {
         let path: MerklePath<String, 3> = MerklePath::from_parts(
             vec!["a".to_string(), "cd".to_string(), "efgh".to_string()],
-            Position(1),
+            LeafPosition(1),
         )
         .unwrap();
 
@@ -819,7 +819,7 @@ pub(crate) mod tests {
 
         let path: MerklePath<String, 3> = MerklePath::from_parts(
             vec!["d".to_string(), "ab".to_string(), "efgh".to_string()],
-            Position(2),
+            LeafPosition(2),
         )
         .unwrap();
 
