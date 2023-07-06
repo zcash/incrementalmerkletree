@@ -911,6 +911,7 @@ impl<H: Hashable + Clone + PartialEq> LocatedPrunableTree<H> {
         // [`Node::Nil`] nodes that were introduced in the process of constructing the tree.
         fn build_minimal_tree<H: Hashable + Clone + PartialEq>(
             mut xs: Vec<(LocatedPrunableTree<H>, bool)>,
+            root_addr: Address,
             prune_below: Level,
         ) -> Option<(LocatedPrunableTree<H>, bool, Vec<IncompleteAt>)> {
             // First, consume the stack from the right, building up a single tree
@@ -965,6 +966,22 @@ impl<H: Hashable + Clone + PartialEq> LocatedPrunableTree<H> {
                         xs.push((top, top_marked));
                         break;
                     }
+                }
+
+                while cur.root_addr.level() + 1 < root_addr.level() {
+                    let sibling_addr = cur.root_addr.sibling();
+                    incomplete.push(IncompleteAt {
+                        address: sibling_addr,
+                        required_for_witness: contains_marked,
+                    });
+                    cur = unite(
+                        cur,
+                        LocatedTree {
+                            root_addr: sibling_addr,
+                            root: Tree(Node::Nil),
+                        },
+                        prune_below,
+                    );
                 }
 
                 // push our accumulated max-height right hand node back on to the stack.
@@ -1050,16 +1067,24 @@ impl<H: Hashable + Clone + PartialEq> LocatedPrunableTree<H> {
         }
         trace!("Initial fragments: {:?}", fragments);
 
-        build_minimal_tree(fragments, prune_below).map(
-            |(to_insert, contains_marked, incomplete)| BatchInsertionResult {
-                subtree: to_insert,
-                contains_marked,
-                incomplete,
-                max_insert_position: Some(position - 1),
-                checkpoints,
-                remainder: values,
-            },
-        )
+        if position > position_range.start {
+            let last_position = position - 1;
+            let minimal_tree_addr =
+                Address::from(position_range.start).common_ancestor(&last_position.into());
+            trace!("Building minimal tree at {:?}", minimal_tree_addr);
+            build_minimal_tree(fragments, minimal_tree_addr, prune_below).map(
+                |(to_insert, contains_marked, incomplete)| BatchInsertionResult {
+                    subtree: to_insert,
+                    contains_marked,
+                    incomplete,
+                    max_insert_position: Some(last_position),
+                    checkpoints,
+                    remainder: values,
+                },
+            )
+        } else {
+            None
+        }
     }
 
     /// Put a range of values into the subtree by consuming the given iterator, starting at the
