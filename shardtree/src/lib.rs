@@ -8,6 +8,9 @@ use incrementalmerkletree::{
     frontier::NonEmptyFrontier, Address, Hashable, Level, MerklePath, Position, Retention,
 };
 
+mod batch;
+pub use self::batch::BatchInsertionResult;
+
 mod tree;
 pub use self::tree::{LocatedTree, Node, Tree};
 
@@ -566,65 +569,6 @@ impl<
 
         self.prune_excess_checkpoints()?;
         Ok(())
-    }
-
-    /// Put a range of values into the subtree to fill leaves starting from the given position.
-    ///
-    /// This operation will pad the tree until it contains enough subtrees to reach the starting
-    /// position. It will fully consume the provided iterator, constructing successive subtrees
-    /// until no more values are available. It aggressively prunes the tree as it goes, retaining
-    /// only nodes that either have [`Retention::Marked`] retention, are required to construct a
-    /// witness for such marked nodes, or that must be retained in order to make it possible to
-    /// truncate the tree to any position with [`Retention::Checkpoint`] retention.
-    ///
-    /// This operation returns the final position at which a leaf was inserted, and the vector of
-    /// [`IncompleteAt`] values that identify addresses at which [`Node::Nil`] nodes were
-    /// introduced to the tree, as well as whether or not those newly introduced nodes will need to
-    /// be filled with values in order to produce witnesses for inserted leaves with
-    /// [`Retention::Marked`] retention.
-    #[allow(clippy::type_complexity)]
-    pub fn batch_insert<I: Iterator<Item = (H, Retention<C>)>>(
-        &mut self,
-        mut start: Position,
-        values: I,
-    ) -> Result<Option<(Position, Vec<IncompleteAt>)>, ShardTreeError<S::Error>> {
-        trace!("Batch inserting from {:?}", start);
-        let mut values = values.peekable();
-        let mut subtree_root_addr = Self::subtree_addr(start);
-        let mut max_insert_position = None;
-        let mut all_incomplete = vec![];
-        loop {
-            if values.peek().is_some() {
-                let mut res = self
-                    .store
-                    .get_shard(subtree_root_addr)
-                    .map_err(ShardTreeError::Storage)?
-                    .unwrap_or_else(|| LocatedTree::empty(subtree_root_addr))
-                    .batch_insert(start, values)?
-                    .expect(
-                        "Iterator containing leaf values to insert was verified to be nonempty.",
-                    );
-                self.store
-                    .put_shard(res.subtree)
-                    .map_err(ShardTreeError::Storage)?;
-                for (id, position) in res.checkpoints.into_iter() {
-                    self.store
-                        .add_checkpoint(id, Checkpoint::at_position(position))
-                        .map_err(ShardTreeError::Storage)?;
-                }
-
-                values = res.remainder;
-                subtree_root_addr = subtree_root_addr.next_at_level();
-                max_insert_position = res.max_insert_position;
-                start = max_insert_position.unwrap() + 1;
-                all_incomplete.append(&mut res.incomplete);
-            } else {
-                break;
-            }
-        }
-
-        self.prune_excess_checkpoints()?;
-        Ok(max_insert_position.map(|p| (p, all_incomplete)))
     }
 
     /// Insert a tree by decomposing it into its `SHARD_HEIGHT` or smaller parts (if necessary)
