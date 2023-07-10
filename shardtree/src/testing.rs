@@ -1,3 +1,5 @@
+use std::convert::TryFrom;
+
 use assert_matches::assert_matches;
 use proptest::bool::weighted;
 use proptest::collection::vec;
