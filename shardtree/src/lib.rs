@@ -8,11 +8,8 @@ use incrementalmerkletree::{
     frontier::NonEmptyFrontier, Address, Hashable, Level, MerklePath, Position, Retention,
 };
 
-#[cfg(feature = "legacy-api")]
-use core::convert::TryFrom;
-
-#[cfg(feature = "legacy-api")]
-use incrementalmerkletree::witness::IncrementalWitness;
+mod batch;
+pub use self::batch::BatchInsertionResult;
 
 mod tree;
 pub use self::tree::{LocatedTree, Node, Tree};
@@ -26,6 +23,9 @@ pub mod memory;
 
 #[cfg(any(bench, test, feature = "test-dependencies"))]
 pub mod testing;
+
+#[cfg(feature = "legacy-api")]
+mod legacy;
 
 /// An enumeration of possible checkpoint locations.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
@@ -569,123 +569,6 @@ impl<
 
         self.prune_excess_checkpoints()?;
         Ok(())
-    }
-
-    /// Add the leaf and ommers of the provided witness as nodes within the subtree corresponding
-    /// to the frontier's position, and update the cap to include the nodes of the witness at
-    /// levels greater than or equal to the shard height. Also, if the witness spans multiple
-    /// subtrees, update the subtree corresponding to the current witness "tip" accordingly.
-    #[cfg(feature = "legacy-api")]
-    pub fn insert_witness_nodes(
-        &mut self,
-        witness: IncrementalWitness<H, DEPTH>,
-        checkpoint_id: S::CheckpointId,
-    ) -> Result<(), ShardTreeError<S::Error>> {
-        let leaf_position = witness.witnessed_position();
-        let subtree_root_addr = Address::above_position(Self::subtree_level(), leaf_position);
-
-        let shard = self
-            .store
-            .get_shard(subtree_root_addr)
-            .map_err(ShardTreeError::Storage)?
-            .unwrap_or_else(|| LocatedTree::empty(subtree_root_addr));
-
-        let (updated_subtree, supertree, tip_subtree) =
-            shard.insert_witness_nodes(witness, checkpoint_id)?;
-
-        self.store
-            .put_shard(updated_subtree)
-            .map_err(ShardTreeError::Storage)?;
-
-        if let Some(supertree) = supertree {
-            let new_cap = LocatedTree {
-                root_addr: Self::root_addr(),
-                root: self.store.get_cap().map_err(ShardTreeError::Storage)?,
-            }
-            .insert_subtree(supertree, true)?;
-
-            self.store
-                .put_cap(new_cap.0.root)
-                .map_err(ShardTreeError::Storage)?;
-        }
-
-        if let Some(tip_subtree) = tip_subtree {
-            let tip_subtree_addr = Address::above_position(
-                Self::subtree_level(),
-                tip_subtree.root_addr().position_range_start(),
-            );
-
-            let tip_shard = self
-                .store
-                .get_shard(tip_subtree_addr)
-                .map_err(ShardTreeError::Storage)?
-                .unwrap_or_else(|| LocatedTree::empty(tip_subtree_addr));
-
-            self.store
-                .put_shard(tip_shard.insert_subtree(tip_subtree, false)?.0)
-                .map_err(ShardTreeError::Storage)?;
-        }
-
-        Ok(())
-    }
-
-    /// Put a range of values into the subtree to fill leaves starting from the given position.
-    ///
-    /// This operation will pad the tree until it contains enough subtrees to reach the starting
-    /// position. It will fully consume the provided iterator, constructing successive subtrees
-    /// until no more values are available. It aggressively prunes the tree as it goes, retaining
-    /// only nodes that either have [`Retention::Marked`] retention, are required to construct a
-    /// witness for such marked nodes, or that must be retained in order to make it possible to
-    /// truncate the tree to any position with [`Retention::Checkpoint`] retention.
-    ///
-    /// This operation returns the final position at which a leaf was inserted, and the vector of
-    /// [`IncompleteAt`] values that identify addresses at which [`Node::Nil`] nodes were
-    /// introduced to the tree, as well as whether or not those newly introduced nodes will need to
-    /// be filled with values in order to produce witnesses for inserted leaves with
-    /// [`Retention::Marked`] retention.
-    #[allow(clippy::type_complexity)]
-    pub fn batch_insert<I: Iterator<Item = (H, Retention<C>)>>(
-        &mut self,
-        mut start: Position,
-        values: I,
-    ) -> Result<Option<(Position, Vec<IncompleteAt>)>, ShardTreeError<S::Error>> {
-        trace!("Batch inserting from {:?}", start);
-        let mut values = values.peekable();
-        let mut subtree_root_addr = Self::subtree_addr(start);
-        let mut max_insert_position = None;
-        let mut all_incomplete = vec![];
-        loop {
-            if values.peek().is_some() {
-                let mut res = self
-                    .store
-                    .get_shard(subtree_root_addr)
-                    .map_err(ShardTreeError::Storage)?
-                    .unwrap_or_else(|| LocatedTree::empty(subtree_root_addr))
-                    .batch_insert(start, values)?
-                    .expect(
-                        "Iterator containing leaf values to insert was verified to be nonempty.",
-                    );
-                self.store
-                    .put_shard(res.subtree)
-                    .map_err(ShardTreeError::Storage)?;
-                for (id, position) in res.checkpoints.into_iter() {
-                    self.store
-                        .add_checkpoint(id, Checkpoint::at_position(position))
-                        .map_err(ShardTreeError::Storage)?;
-                }
-
-                values = res.remainder;
-                subtree_root_addr = subtree_root_addr.next_at_level();
-                max_insert_position = res.max_insert_position;
-                start = max_insert_position.unwrap() + 1;
-                all_incomplete.append(&mut res.incomplete);
-            } else {
-                break;
-            }
-        }
-
-        self.prune_excess_checkpoints()?;
-        Ok(max_insert_position.map(|p| (p, all_incomplete)))
     }
 
     /// Insert a tree by decomposing it into its `SHARD_HEIGHT` or smaller parts (if necessary)
@@ -1535,14 +1418,8 @@ mod tests {
             arb_char_str, arb_shardtree, check_shard_sizes, check_shardtree_insertion,
             check_witness_with_pruned_subtrees,
         },
-        InsertionError, LocatedPrunableTree, RetentionFlags, ShardTree,
+        InsertionError, LocatedPrunableTree, ShardTree,
     };
-
-    #[cfg(feature = "legacy-api")]
-    use incrementalmerkletree::{frontier::CommitmentTree, witness::IncrementalWitness};
-
-    #[cfg(feature = "legacy-api")]
-    use crate::Tree;
 
     #[test]
     fn shardtree_insertion() {
@@ -1775,79 +1652,6 @@ mod tests {
 
         if let Ok((t, None)) = result {
             // verify that the leaf at the tip is included
-            assert_eq!(
-                t.root.root_hash(root_addr, Position::from(3)),
-                Ok("abc_____".to_string())
-            );
-        }
-    }
-
-    #[test]
-    #[cfg(feature = "legacy-api")]
-    fn insert_witness_nodes() {
-        let mut base_tree = CommitmentTree::<String, 6>::empty();
-        for c in 'a'..'h' {
-            base_tree.append(c.to_string()).unwrap();
-        }
-        let mut witness = IncrementalWitness::from_tree(base_tree);
-        for c in 'h'..'z' {
-            witness.append(c.to_string()).unwrap();
-        }
-
-        let root_addr = Address::from_parts(Level::from(3), 0);
-        let tree = LocatedPrunableTree::empty(root_addr);
-        let result = tree.insert_witness_nodes(witness, 3usize);
-        assert_matches!(result, Ok((ref _t, Some(ref _c), Some(ref _r))));
-
-        if let Ok((t, Some(c), Some(r))) = result {
-            // verify that we can find the "marked" leaf
-            assert_eq!(
-                t.root.root_hash(root_addr, Position::from(7)),
-                Ok("abcdefg_".to_string())
-            );
-
-            assert_eq!(
-                c.root,
-                Tree::parent(
-                    None,
-                    Tree::parent(
-                        None,
-                        Tree::empty(),
-                        Tree::leaf(("ijklmnop".to_string(), RetentionFlags::EPHEMERAL)),
-                    ),
-                    Tree::parent(
-                        None,
-                        Tree::leaf(("qrstuvwx".to_string(), RetentionFlags::EPHEMERAL)),
-                        Tree::empty()
-                    )
-                )
-            );
-
-            assert_eq!(
-                r.root
-                    .root_hash(Address::from_parts(Level::from(3), 3), Position::from(25)),
-                Ok("y_______".to_string())
-            );
-        }
-    }
-
-    #[test]
-    #[cfg(feature = "legacy-api")]
-    fn insert_witness_nodes_sub_shard_height() {
-        let mut base_tree = CommitmentTree::<String, 6>::empty();
-        for c in 'a'..='c' {
-            base_tree.append(c.to_string()).unwrap();
-        }
-        let mut witness = IncrementalWitness::from_tree(base_tree);
-        witness.append("d".to_string()).unwrap();
-
-        let root_addr = Address::from_parts(Level::from(3), 0);
-        let tree = LocatedPrunableTree::empty(root_addr);
-        let result = tree.insert_witness_nodes(witness, 3usize);
-        assert_matches!(result, Ok((ref _t, None, None)));
-
-        if let Ok((t, None, None)) = result {
-            // verify that we can find the "marked" leaf
             assert_eq!(
                 t.root.root_hash(root_addr, Position::from(3)),
                 Ok("abc_____".to_string())
