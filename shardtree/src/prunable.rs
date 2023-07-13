@@ -1,7 +1,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 use std::ops::Range;
-use std::rc::Rc;
+use std::sync::Arc;
 
 use bitflags::bitflags;
 use incrementalmerkletree::{
@@ -62,7 +62,7 @@ impl<C> From<Retention<C>> for RetentionFlags {
     }
 }
 
-pub type PrunableTree<H> = Tree<Option<Rc<H>>, (H, RetentionFlags)>;
+pub type PrunableTree<H> = Tree<Option<Arc<H>>, (H, RetentionFlags)>;
 
 impl<H: Hashable + Clone + PartialEq> PrunableTree<H> {
     /// Returns the the value if this is a leaf.
@@ -229,7 +229,7 @@ impl<H: Hashable + Clone + PartialEq> PrunableTree<H> {
                 | (parent @ Tree(Node::Parent { .. }), Tree(Node::Leaf { value })) => {
                     let parent_hash = parent.root_hash(addr, no_default_fill);
                     if parent_hash.iter().all(|r| r == &value.0) {
-                        Ok(parent.reannotate_root(Some(Rc::new(value.0))))
+                        Ok(parent.reannotate_root(Some(Arc::new(value.0))))
                     } else {
                         trace!(leaf = ?value, node = ?parent_hash, "Merge conflict for leaf into node");
                         Err(addr)
@@ -284,7 +284,7 @@ impl<H: Hashable + Clone + PartialEq> PrunableTree<H> {
     /// replacement `Nil` value).
     ///
     /// `level` must be the level of the two nodes that are being joined.
-    pub(crate) fn unite(level: Level, ann: Option<Rc<H>>, left: Self, right: Self) -> Self {
+    pub(crate) fn unite(level: Level, ann: Option<Arc<H>>, left: Self, right: Self) -> Self {
         match (left, right) {
             (Tree(Node::Nil), Tree(Node::Nil)) => Tree(Node::Nil),
             (Tree(Node::Leaf { value: lv }), Tree(Node::Leaf { value: rv }))
@@ -302,15 +302,15 @@ impl<H: Hashable + Clone + PartialEq> PrunableTree<H> {
             (left, right) => Tree(
                 Node::Parent {
                     ann,
-                    left: Rc::new(left),
-                    right: Rc::new(right),
+                    left: Arc::new(left),
+                    right: Arc::new(right),
                 },
             ),
         }
     }
 }
 
-pub type LocatedPrunableTree<H> = LocatedTree<Option<Rc<H>>, (H, RetentionFlags)>;
+pub type LocatedPrunableTree<H> = LocatedTree<Option<Arc<H>>, (H, RetentionFlags)>;
 
 /// A data structure describing the nature of a [`Node::Nil`] node in the tree that was introduced
 /// as the consequence of an insertion.
@@ -638,7 +638,7 @@ impl<H: Hashable + Clone + PartialEq> LocatedPrunableTree<H> {
             // In the case that we are replacing a node entirely, we need to extend the
             // subtree up to the level of the node being replaced, adding Nil siblings
             // and recording the presence of those incomplete nodes when necessary
-            let replacement = |ann: Option<Rc<H>>, mut node: LocatedPrunableTree<H>| {
+            let replacement = |ann: Option<Arc<H>>, mut node: LocatedPrunableTree<H>| {
                 // construct the replacement node bottom-up
                 let mut incomplete = vec![];
                 while node.root_addr.level() < root_addr.level() {
@@ -651,14 +651,14 @@ impl<H: Hashable + Clone + PartialEq> LocatedPrunableTree<H> {
                         root: if node.root_addr.is_right_child() {
                             Tree(Node::Parent {
                                 ann: None,
-                                left: Rc::new(Tree(Node::Nil)),
-                                right: Rc::new(node.root),
+                                left: Arc::new(Tree(Node::Nil)),
+                                right: Arc::new(node.root),
                             })
                         } else {
                             Tree(Node::Parent {
                                 ann: None,
-                                left: Rc::new(node.root),
-                                right: Rc::new(Tree(Node::Nil)),
+                                left: Arc::new(node.root),
+                                right: Arc::new(Tree(Node::Nil)),
                             })
                         },
                     };
@@ -682,7 +682,7 @@ impl<H: Hashable + Clone + PartialEq> LocatedPrunableTree<H> {
                         } else if subtree.root.node_value().iter().all(|v| v == &value) {
                             Ok((
                                 // at this point we statically know the root to be a parent
-                                subtree.root.reannotate_root(Some(Rc::new(value.clone()))),
+                                subtree.root.reannotate_root(Some(Arc::new(value.clone()))),
                                 vec![],
                             ))
                         } else {
@@ -694,7 +694,7 @@ impl<H: Hashable + Clone + PartialEq> LocatedPrunableTree<H> {
                             Err(InsertionError::Conflict(root_addr))
                         }
                     } else {
-                        Ok(replacement(Some(Rc::new(value.clone())), subtree))
+                        Ok(replacement(Some(Arc::new(value.clone())), subtree))
                     }
                 }
                 parent if root_addr == subtree.root_addr => {

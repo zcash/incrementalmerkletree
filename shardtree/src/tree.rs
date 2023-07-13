@@ -1,5 +1,5 @@
 use std::ops::Deref;
-use std::rc::Rc;
+use std::sync::Arc;
 
 use incrementalmerkletree::{Address, Level, Position};
 
@@ -73,10 +73,10 @@ impl<'a, C: Clone, A: Clone, V: Clone> Node<C, &'a A, &'a V> {
 
 /// An immutable binary tree with each of its nodes tagged with an annotation value.
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub struct Tree<A, V>(pub(crate) Node<Rc<Tree<A, V>>, A, V>);
+pub struct Tree<A, V>(pub(crate) Node<Arc<Tree<A, V>>, A, V>);
 
 impl<A, V> Deref for Tree<A, V> {
-    type Target = Node<Rc<Tree<A, V>>, A, V>;
+    type Target = Node<Arc<Tree<A, V>>, A, V>;
     fn deref(&self) -> &Self::Target {
         &self.0
     }
@@ -94,8 +94,8 @@ impl<A, V> Tree<A, V> {
     pub fn parent(ann: A, left: Self, right: Self) -> Self {
         Tree(Node::Parent {
             ann,
-            left: Rc::new(left),
-            right: Rc::new(right),
+            left: Arc::new(left),
+            right: Arc::new(right),
         })
     }
 
@@ -308,12 +308,12 @@ impl<A: Default + Clone, V: Clone> LocatedTree<A, V> {
                         let mut l_decomposed = go(
                             level,
                             l_addr,
-                            Rc::try_unwrap(left).unwrap_or_else(|rc| (*rc).clone()),
+                            Arc::try_unwrap(left).unwrap_or_else(|rc| (*rc).clone()),
                         );
                         let mut r_decomposed = go(
                             level,
                             r_addr,
-                            Rc::try_unwrap(right).unwrap_or_else(|rc| (*rc).clone()),
+                            Arc::try_unwrap(right).unwrap_or_else(|rc| (*rc).clone()),
                         );
                         l_decomposed.append(&mut r_decomposed);
                         l_decomposed
