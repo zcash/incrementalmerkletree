@@ -36,4 +36,5 @@ test-dependencies = ["proptest", "assert_matches"]
 
 [target.'cfg(unix)'.dev-dependencies]
 pprof = { version = "0.9", features = ["criterion", "flamegraph"] } # MSRV 1.56
+dashmap = ">=5, <5.5.0"
 inferno = ">=0.11, <0.11.5" # MSRV 1.59
