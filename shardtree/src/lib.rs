@@ -19,6 +19,7 @@ pub use self::prunable::{
     IncompleteAt, InsertionError, LocatedPrunableTree, PrunableTree, QueryError, RetentionFlags,
 };
 
+pub mod caching;
 pub mod memory;
 
 #[cfg(any(bench, test, feature = "test-dependencies"))]
@@ -362,6 +363,11 @@ impl<
             store,
             max_checkpoints,
         }
+    }
+
+    /// Consumes this tree and returns its underlying `ShardStore`.
+    pub fn into_store(self) -> S {
+        self.store
     }
 
     /// Returns the root address of the tree.
