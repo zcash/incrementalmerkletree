@@ -19,6 +19,7 @@ pub use self::prunable::{
     IncompleteAt, InsertionError, LocatedPrunableTree, PrunableTree, QueryError, RetentionFlags,
 };
 
+pub mod caching;
 pub mod memory;
 
 #[cfg(any(bench, test, feature = "test-dependencies"))]
@@ -178,9 +179,11 @@ pub trait ShardStore {
         F: Fn(&mut Checkpoint) -> Result<(), Self::Error>;
 
     /// Removes a checkpoint from the data store.
+    ///
+    /// If no checkpoint exists with the given ID, this does nothing.
     fn remove_checkpoint(&mut self, checkpoint_id: &Self::CheckpointId) -> Result<(), Self::Error>;
 
-    /// Removes checkpoints with identifiers greater than or equal to the given identifier
+    /// Removes checkpoints with identifiers greater than or equal to the given identifier.
     fn truncate_checkpoints(
         &mut self,
         checkpoint_id: &Self::CheckpointId,
@@ -362,6 +365,11 @@ impl<
             store,
             max_checkpoints,
         }
+    }
+
+    /// Consumes this tree and returns its underlying `ShardStore`.
+    pub fn into_store(self) -> S {
+        self.store
     }
 
     /// Returns the root address of the tree.
