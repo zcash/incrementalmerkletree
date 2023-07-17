@@ -1,7 +1,7 @@
 use core::fmt::{self, Debug, Display};
 use either::Either;
 use std::collections::{BTreeMap, BTreeSet};
-use std::rc::Rc;
+use std::sync::Arc;
 use tracing::trace;
 
 use incrementalmerkletree::{
@@ -1018,10 +1018,10 @@ impl<
                                 .map(|(l, r)| {
                                     // the node values of child nodes cannot contain the hashes of
                                     // empty nodes or nodes with positions greater than the
-                                    Rc::new(S::H::combine(l_addr.level(), l, r))
+                                    Arc::new(S::H::combine(l_addr.level(), l, r))
                                 }),
-                            left: new_left.map_or_else(|| left.clone(), Rc::new),
-                            right: new_right.map_or_else(|| right.clone(), Rc::new),
+                            left: new_left.map_or_else(|| left.clone(), Arc::new),
+                            right: new_right.map_or_else(|| right.clone(), Arc::new),
                         });
 
                         Ok((root, Some(new_parent)))
@@ -1049,7 +1049,7 @@ impl<
 
                     Ok((
                         root,
-                        replacement.map(|r| r.reannotate_root(Some(Rc::new(value.0.clone())))),
+                        replacement.map(|r| r.reannotate_root(Some(Arc::new(value.0.clone())))),
                     ))
                 }
             }

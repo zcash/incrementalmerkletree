@@ -42,8 +42,8 @@ where
             } else {
                 Node::Parent {
                     ann,
-                    left: Rc::new(left),
-                    right: Rc::new(right),
+                    left: Arc::new(left),
+                    right: Arc::new(right),
                 }
             })
         })
@@ -59,7 +59,7 @@ where
     H::Value: Clone + 'static,
 {
     arb_tree(
-        proptest::option::of(arb_leaf.clone().prop_map(Rc::new)),
+        proptest::option::of(arb_leaf.clone().prop_map(Arc::new)),
         (arb_leaf, arb_retention_flags()),
         depth,
         size,

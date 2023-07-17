@@ -1,4 +1,4 @@
-use std::{collections::BTreeMap, fmt, ops::Range, rc::Rc};
+use std::{collections::BTreeMap, fmt, ops::Range, sync::Arc};
 
 use incrementalmerkletree::{Address, Hashable, Level, Position, Retention};
 use tracing::trace;
@@ -255,7 +255,7 @@ fn unite<H: Hashable + Clone + PartialEq>(
     lroot: LocatedPrunableTree<H>,
     rroot: LocatedPrunableTree<H>,
     prune_below: Level,
-) -> LocatedTree<Option<Rc<H>>, (H, RetentionFlags)> {
+) -> LocatedPrunableTree<H> {
     assert_eq!(lroot.root_addr.parent(), rroot.root_addr.parent());
     LocatedTree {
         root_addr: lroot.root_addr.parent(),
@@ -264,8 +264,8 @@ fn unite<H: Hashable + Clone + PartialEq>(
         } else {
             Tree(Node::Parent {
                 ann: None,
-                left: Rc::new(lroot.root),
-                right: Rc::new(rroot.root),
+                left: Arc::new(lroot.root),
+                right: Arc::new(rroot.root),
             })
         },
     }
