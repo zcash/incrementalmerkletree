@@ -179,9 +179,11 @@ pub trait ShardStore {
         F: Fn(&mut Checkpoint) -> Result<(), Self::Error>;
 
     /// Removes a checkpoint from the data store.
+    ///
+    /// If no checkpoint exists with the given ID, this does nothing.
     fn remove_checkpoint(&mut self, checkpoint_id: &Self::CheckpointId) -> Result<(), Self::Error>;
 
-    /// Removes checkpoints with identifiers greater than or equal to the given identifier
+    /// Removes checkpoints with identifiers greater than or equal to the given identifier.
     fn truncate_checkpoints(
         &mut self,
         checkpoint_id: &Self::CheckpointId,
