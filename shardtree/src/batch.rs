@@ -382,10 +382,16 @@ fn build_minimal_tree<H: Hashable + Clone + PartialEq>(
 
 #[cfg(test)]
 mod tests {
+    use std::iter;
+
     use incrementalmerkletree::{Address, Level, Position, Retention};
 
     use super::{LocatedPrunableTree, RetentionFlags};
-    use crate::tree::tests::{leaf, nil, parent};
+    use crate::{
+        memory::MemoryShardStore,
+        tree::tests::{leaf, nil, parent},
+        BatchInsertionResult, ShardTree,
+    };
 
     #[test]
     fn located_from_iter_non_sibling_adjacent() {
@@ -464,5 +470,84 @@ mod tests {
             .unwrap()
             .unwrap();
         assert_eq!(complete.subtree.right_filled_root(), Ok("abcd".to_string()));
+    }
+
+    #[allow(clippy::type_complexity)]
+    pub(super) fn build_insert_tree_and_batch_insert(
+        leaves: Vec<(String, Retention<usize>)>,
+    ) -> (
+        ShardTree<MemoryShardStore<String, usize>, 6, 3>,
+        ShardTree<MemoryShardStore<String, usize>, 6, 3>,
+    ) {
+        let max_checkpoints = 10;
+        let start = Position::from(0);
+        let end = start + leaves.len() as u64;
+
+        // Construct a tree using `ShardTree::insert_tree`.
+        let mut left = ShardTree::new(MemoryShardStore::empty(), max_checkpoints);
+        if let Some(BatchInsertionResult {
+            subtree,
+            mut remainder,
+            ..
+        }) = LocatedPrunableTree::from_iter(start..end, 0.into(), leaves.clone().into_iter())
+        {
+            assert_eq!(remainder.next(), None);
+            left.insert_tree(subtree).unwrap();
+        }
+
+        // Construct a tree using `ShardTree::batch_insert`.
+        let mut right = ShardTree::new(MemoryShardStore::empty(), max_checkpoints);
+        right.batch_insert(start, leaves.into_iter()).unwrap();
+
+        (left, right)
+    }
+
+    #[test]
+    fn batch_insert_matches_insert_tree() {
+        {
+            let (lhs, rhs) = build_insert_tree_and_batch_insert(vec![]);
+            assert_eq!(lhs.max_leaf_position(0), Ok(None));
+            assert_eq!(rhs.max_leaf_position(0), Ok(None));
+        }
+
+        for i in 0..64 {
+            let num_leaves = i + 1;
+            let leaves = iter::repeat(("a".into(), Retention::Ephemeral))
+                .take(num_leaves)
+                .collect();
+            let expected_root = (0..64)
+                .map(|c| if c < num_leaves { 'a' } else { '_' })
+                .fold(String::with_capacity(64), |mut acc, c| {
+                    acc.push(c);
+                    acc
+                });
+
+            let (lhs, rhs) = build_insert_tree_and_batch_insert(leaves);
+            assert_eq!(lhs.max_leaf_position(0), Ok(Some(Position::from(i as u64))));
+            assert_eq!(rhs.max_leaf_position(0), Ok(Some(Position::from(i as u64))));
+
+            assert_eq!(lhs.root_at_checkpoint(0).unwrap(), expected_root);
+            assert_eq!(rhs.root_at_checkpoint(0).unwrap(), expected_root);
+        }
+    }
+}
+
+#[cfg(test)]
+mod proptests {
+    use proptest::prelude::*;
+
+    use super::tests::build_insert_tree_and_batch_insert;
+    use crate::testing::{arb_char_str, arb_leaves};
+
+    proptest! {
+        #[test]
+        fn batch_insert_matches_insert_tree(
+            leaves in arb_leaves(arb_char_str())
+        ) {
+            let (left, right) = build_insert_tree_and_batch_insert(leaves);
+
+            // Check that the resulting trees are equal.
+            assert_eq!(left.root_at_checkpoint(0), right.root_at_checkpoint(0));
+        }
     }
 }

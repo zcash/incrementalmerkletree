@@ -66,6 +66,35 @@ where
     )
 }
 
+/// Constructs a random sequence of leaves that form a tree of size up to 2^6.
+pub fn arb_leaves<H: Strategy + Clone>(
+    arb_leaf: H,
+) -> impl Strategy<Value = Vec<(H::Value, Retention<usize>)>>
+where
+    H::Value: Hashable + Clone + PartialEq,
+{
+    vec(
+        (arb_leaf, weighted(0.1), weighted(0.2)),
+        0..=(2usize.pow(6)),
+    )
+    .prop_map(|leaves| {
+        leaves
+            .into_iter()
+            .enumerate()
+            .map(|(id, (leaf, is_marked, is_checkpoint))| {
+                (
+                    leaf,
+                    match (is_checkpoint, is_marked) {
+                        (false, false) => Retention::Ephemeral,
+                        (true, is_marked) => Retention::Checkpoint { id, is_marked },
+                        (false, true) => Retention::Marked,
+                    },
+                )
+            })
+            .collect()
+    })
+}
+
 /// Constructs a random shardtree of size up to 2^6 with shards of size 2^3. Returns the tree,
 /// along with vectors of the checkpoint and mark positions.
 pub fn arb_shardtree<H: Strategy + Clone>(
@@ -80,11 +109,7 @@ pub fn arb_shardtree<H: Strategy + Clone>(
 where
     H::Value: Hashable + Clone + PartialEq,
 {
-    vec(
-        (arb_leaf, weighted(0.1), weighted(0.2)),
-        0..=(2usize.pow(6)),
-    )
-    .prop_map(|leaves| {
+    arb_leaves(arb_leaf).prop_map(|leaves| {
         let mut tree = ShardTree::new(MemoryShardStore::empty(), 10);
         let mut checkpoint_positions = vec![];
         let mut marked_positions = vec![];
@@ -93,25 +118,19 @@ where
             leaves
                 .into_iter()
                 .enumerate()
-                .map(|(id, (leaf, is_marked, is_checkpoint))| {
-                    (
-                        leaf,
-                        match (is_checkpoint, is_marked) {
-                            (false, false) => Retention::Ephemeral,
-                            (true, is_marked) => {
-                                let pos = Position::try_from(id).unwrap();
-                                checkpoint_positions.push(pos);
-                                if is_marked {
-                                    marked_positions.push(pos);
-                                }
-                                Retention::Checkpoint { id, is_marked }
+                .map(|(id, (leaf, retention))| {
+                    let pos = Position::try_from(id).unwrap();
+                    match retention {
+                        Retention::Ephemeral => (),
+                        Retention::Checkpoint { is_marked, .. } => {
+                            checkpoint_positions.push(pos);
+                            if is_marked {
+                                marked_positions.push(pos);
                             }
-                            (false, true) => {
-                                marked_positions.push(Position::try_from(id).unwrap());
-                                Retention::Marked
-                            }
-                        },
-                    )
+                        }
+                        Retention::Marked => marked_positions.push(pos),
+                    }
+                    (leaf, retention)
                 }),
         )
         .unwrap();

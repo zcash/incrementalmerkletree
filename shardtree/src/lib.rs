@@ -587,7 +587,20 @@ impl<
     ) -> Result<Vec<IncompleteAt>, ShardTreeError<S::Error>> {
         let mut all_incomplete = vec![];
         for subtree in tree.decompose_to_level(Self::subtree_level()).into_iter() {
-            let root_addr = subtree.root_addr;
+            // `ShardTree::max_leaf_position` relies on the invariant that the last shard
+            // in the subtrees vector is never created without a leaf then being added to
+            // it. `LocatedTree::decompose_to_level` can return a trailing empty subtree
+            // for some inputs, and given that it is always correct to not insert an empty
+            // subtree into `self`, we maintain the invariant by skipping empty subtrees.
+            if subtree.root().is_empty() {
+                continue;
+            }
+
+            // `LocatedTree::decompose_to_level` will return the tree as-is if it is
+            // smaller than a shard, so we can't assume that the address of `subtree` is a
+            // valid shard address.
+            let root_addr = Self::subtree_addr(subtree.root_addr.position_range_start());
+
             let contains_marked = subtree.root.contains_marked();
             let (new_subtree, mut incomplete) = self
                 .store
