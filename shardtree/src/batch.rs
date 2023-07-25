@@ -487,12 +487,13 @@ mod tests {
         let mut left = ShardTree::new(MemoryShardStore::empty(), max_checkpoints);
         if let Some(BatchInsertionResult {
             subtree,
+            checkpoints,
             mut remainder,
             ..
         }) = LocatedPrunableTree::from_iter(start..end, 0.into(), leaves.clone().into_iter())
         {
             assert_eq!(remainder.next(), None);
-            left.insert_tree(subtree).unwrap();
+            left.insert_tree(subtree, checkpoints).unwrap();
         }
 
         // Construct a tree using `ShardTree::batch_insert`.

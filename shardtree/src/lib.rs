@@ -584,6 +584,7 @@ impl<
     pub fn insert_tree(
         &mut self,
         tree: LocatedPrunableTree<H>,
+        checkpoints: BTreeMap<C, Position>,
     ) -> Result<Vec<IncompleteAt>, ShardTreeError<S::Error>> {
         let mut all_incomplete = vec![];
         for subtree in tree.decompose_to_level(Self::subtree_level()).into_iter() {
@@ -613,6 +614,14 @@ impl<
                 .map_err(ShardTreeError::Storage)?;
             all_incomplete.append(&mut incomplete);
         }
+
+        for (id, position) in checkpoints.into_iter() {
+            self.store
+                .add_checkpoint(id, Checkpoint::at_position(position))
+                .map_err(ShardTreeError::Storage)?;
+        }
+        self.prune_excess_checkpoints()?;
+
         Ok(all_incomplete)
     }
 
