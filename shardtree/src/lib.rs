@@ -1,3 +1,8 @@
+//! `shardtree` is a space-efficient fixed-depth Merkle tree that supports:
+//! - Out-of-order insertion.
+//! - Witnessing of marked leaves.
+//! - Checkpointing, and state restoration to a checkpoint.
+
 use core::fmt::Debug;
 use either::Either;
 use std::collections::{BTreeMap, BTreeSet};
@@ -61,7 +66,7 @@ impl<
         }
     }
 
-    /// Consumes this tree and returns its underlying `ShardStore`.
+    /// Consumes this tree and returns its underlying [`ShardStore`].
     pub fn into_store(self) -> S {
         self.store
     }
@@ -513,9 +518,9 @@ impl<
 
     /// Truncates the tree, discarding all information after the checkpoint at the specified depth.
     ///
-    /// This will also discard all checkpoints with depth <= the specified depth. Returns `true`
-    /// if the truncation succeeds or has no effect, or `false` if no checkpoint exists at the
-    /// specified depth.
+    /// This will also discard all checkpoints with depth less than or equal to the specified depth.
+    /// Returns `true` if the truncation succeeds or has no effect, or `false` if no checkpoint
+    /// exists at the specified depth.
     pub fn truncate_to_depth(
         &mut self,
         checkpoint_depth: usize,
@@ -536,9 +541,9 @@ impl<
 
     /// Truncates the tree, discarding all information after the specified checkpoint.
     ///
-    /// This will also discard all checkpoints with depth <= the specified depth. Returns `true`
-    /// if the truncation succeeds or has no effect, or `false` if no checkpoint exists for the
-    /// specified checkpoint identifier.
+    /// This will also discard all checkpoints with depth less than or equal to the specified depth.
+    /// Returns `true` if the truncation succeeds or has no effect, or `false` if no checkpoint
+    /// exists for the specified checkpoint identifier.
     pub fn truncate_removing_checkpoint(
         &mut self,
         checkpoint_id: &C,

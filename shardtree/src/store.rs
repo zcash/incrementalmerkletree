@@ -1,3 +1,26 @@
+//! Traits and structs for storing [`ShardTree`]s.
+//!
+//! [`ShardTree`]: crate::ShardTree
+//!
+//! # Structure
+//!
+//! The tree is represented as an ordered collection of fixed-depth subtrees, or "shards".
+//! Each shard is a [`LocatedPrunableTree`]. The roots of the shards form the leaves in
+//! the "cap", which is a [`PrunableTree`].
+//!
+//! ```text
+//! Level
+//!   3           root         \
+//!               / \           |
+//!             /     \         |
+//!   2       /         \        } cap
+//!         / \         / \     |
+//!        /   \       /   \    |
+//!   1   A     B     C     D  / \
+//!      / \   / \   / \   / \    } shards
+//!   0 /\ /\ /\ /\ /\ /\ /\ /\  /
+//! ```
+
 use std::collections::BTreeSet;
 
 use incrementalmerkletree::{Address, Position};
@@ -7,12 +30,19 @@ use crate::{LocatedPrunableTree, PrunableTree};
 pub mod caching;
 pub mod memory;
 
-/// A capability for storage of fragment subtrees of the `ShardTree` type.
+/// A capability for storage of fragment subtrees of the [`ShardTree`] type.
 ///
-/// All fragment subtrees must have roots at level `SHARD_HEIGHT`
+/// All fragment subtrees must have roots at level `SHARD_HEIGHT`.
+///
+/// [`ShardTree`]: crate::ShardTree
 pub trait ShardStore {
+    /// The type used for leaves and nodes in the tree.
     type H;
+
+    /// The type used to identify checkpointed positions in the tree.
     type CheckpointId;
+
+    /// The error type for operations on this store.
     type Error: std::error::Error;
 
     /// Returns the subtree at the given root address, if any such subtree exists.
@@ -221,6 +251,9 @@ pub enum TreeState {
     AtPosition(Position),
 }
 
+/// The information required to save the state of a [`ShardTree`] at some [`Position`].
+///
+/// [`ShardTree`]: crate::ShardTree
 #[derive(Clone, Debug)]
 pub struct Checkpoint {
     tree_state: TreeState,

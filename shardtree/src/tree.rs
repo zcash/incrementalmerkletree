@@ -1,3 +1,5 @@
+//! The core tree types.
+
 use std::ops::Deref;
 use std::sync::Arc;
 
@@ -22,7 +24,7 @@ pub enum Node<C, A, V> {
 impl<C, A, V> Node<C, A, V> {
     /// Returns whether or not this is the `Nil` tree.
     ///
-    /// This is useful for cases where the compiler can automatically dereference an `Rc`, where
+    /// This is useful for cases where the compiler can automatically dereference an [`Arc`], where
     /// one would otherwise need additional ceremony to make an equality check.
     pub fn is_nil(&self) -> bool {
         matches!(self, Node::Nil)
@@ -37,6 +39,7 @@ impl<C, A, V> Node<C, A, V> {
         }
     }
 
+    /// Returns the annotation, if this is a parent node.
     pub fn annotation(&self) -> Option<&A> {
         match self {
             Node::Parent { ann, .. } => Some(ann),
@@ -45,7 +48,7 @@ impl<C, A, V> Node<C, A, V> {
         }
     }
 
-    /// Replaces the annotation on this node, if it is a `Node::Parent`; otherwise
+    /// Replaces the annotation on this node, if it is a [`Node::Parent`]; otherwise
     /// returns this node unaltered.
     pub fn reannotate(self, ann: A) -> Self {
         match self {
@@ -56,6 +59,7 @@ impl<C, A, V> Node<C, A, V> {
 }
 
 impl<'a, C: Clone, A: Clone, V: Clone> Node<C, &'a A, &'a V> {
+    /// Maps a `Node<C, &A, &V>` to a `Node<C, A, V>` by cloning the contents of the node.
     pub fn cloned(&self) -> Node<C, A, V> {
         match self {
             Node::Parent { ann, left, right } => Node::Parent {
@@ -83,14 +87,17 @@ impl<A, V> Deref for Tree<A, V> {
 }
 
 impl<A, V> Tree<A, V> {
+    /// Constructs the empty tree.
     pub fn empty() -> Self {
         Tree(Node::Nil)
     }
 
+    /// Constructs a tree containing a single leaf.
     pub fn leaf(value: V) -> Self {
         Tree(Node::Leaf { value })
     }
 
+    /// Constructs a tree containing a pair of leaves.
     pub fn parent(ann: A, left: Self, right: Self) -> Self {
         Tree(Node::Parent {
             ann,
@@ -99,12 +106,13 @@ impl<A, V> Tree<A, V> {
         })
     }
 
+    /// Returns `true` if the tree has no leaves.
     pub fn is_empty(&self) -> bool {
         self.0.is_nil()
     }
 
-    /// Replaces the annotation at the root of the tree, if the root is a `Node::Parent`; otherwise
-    /// returns this tree unaltered.
+    /// Replaces the annotation at the root of the tree, if the root is a [`Node::Parent`];
+    /// otherwise returns this tree unaltered.
     pub fn reannotate_root(self, ann: A) -> Self {
         Tree(self.0.reannotate(ann))
     }
@@ -175,7 +183,7 @@ impl<A, V> LocatedTree<A, V> {
     }
 
     /// Returns a new [`LocatedTree`] with the provided value replacing the annotation of its root
-    /// node, if that root node is a `Node::Parent`. Otherwise .
+    /// node, if that root node is a [`Node::Parent`]. Otherwise returns this tree unaltered.
     pub fn reannotate_root(self, value: A) -> Self {
         LocatedTree {
             root_addr: self.root_addr,
@@ -189,7 +197,7 @@ impl<A, V> LocatedTree<A, V> {
         self.root.incomplete_nodes(self.root_addr)
     }
 
-    /// Returns the maximum position at which a non-Nil leaf has been observed in the tree.
+    /// Returns the maximum position at which a non-`Nil` leaf has been observed in the tree.
     ///
     /// Note that no actual leaf value may exist at this position, as it may have previously been
     /// pruned.

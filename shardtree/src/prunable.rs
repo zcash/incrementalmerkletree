@@ -1,3 +1,5 @@
+//! Helpers for working with trees that support pruning unneeded leaves and branches.
+
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 
@@ -11,6 +13,7 @@ use crate::error::{InsertionError, QueryError};
 use crate::{LocatedTree, Node, Tree};
 
 bitflags! {
+    /// Flags storing the [`Retention`] state of a leaf.
     pub struct RetentionFlags: u8 {
         /// An leaf with `EPHEMERAL` retention can be pruned as soon as we are certain that it is not part
         /// of the witness for a leaf with [`CHECKPOINT`] or [`MARKED`] retention.
@@ -61,6 +64,7 @@ impl<C> From<Retention<C>> for RetentionFlags {
     }
 }
 
+/// A [`Tree`] annotated with Merkle hashes.
 pub type PrunableTree<H> = Tree<Option<Arc<H>>, (H, RetentionFlags)>;
 
 impl<H: Hashable + Clone + PartialEq> PrunableTree<H> {
@@ -98,7 +102,7 @@ impl<H: Hashable + Clone + PartialEq> PrunableTree<H> {
     /// a vector of the addresses of `Nil` nodes that inhibited the computation of
     /// such a root.
     ///
-    /// ### Parameters:
+    /// # Parameters:
     /// * `truncate_at` An inclusive lower bound on positions in the tree beyond which all leaf
     ///    values will be treated as `Nil`.
     pub fn root_hash(&self, root_addr: Address, truncate_at: Position) -> Result<H, Vec<Address>> {
@@ -309,6 +313,7 @@ impl<H: Hashable + Clone + PartialEq> PrunableTree<H> {
     }
 }
 
+/// A [`LocatedTree`] annotated with Merkle hashes.
 pub type LocatedPrunableTree<H> = LocatedTree<Option<Arc<H>>, (H, RetentionFlags)>;
 
 /// A data structure describing the nature of a [`Node::Nil`] node in the tree that was introduced
@@ -324,7 +329,6 @@ pub struct IncompleteAt {
     pub required_for_witness: bool,
 }
 
-/// Operations on [`LocatedTree`]s that are annotated with Merkle hashes.
 impl<H: Hashable + Clone + PartialEq> LocatedPrunableTree<H> {
     /// Computes the root hash of this tree, truncated to the given position.
     ///
@@ -782,7 +786,7 @@ impl<H: Hashable + Clone + PartialEq> LocatedPrunableTree<H> {
     /// Inserts leaves and subtree roots from the provided frontier into this tree, up to the level
     /// of this tree's root.
     ///
-    /// Returns the updated tree, along with a `LocatedPrunableTree` containing only the remainder
+    /// Returns the updated tree, along with a [`LocatedPrunableTree`] containing only the remainder
     /// of the frontier's ommers that had addresses at levels greater than the root of this tree.
     ///
     /// Returns an error in the following cases:

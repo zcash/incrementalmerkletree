@@ -1,3 +1,5 @@
+//! Helpers for inserting many leaves into a tree at once.
+
 use std::{collections::BTreeMap, fmt, ops::Range, sync::Arc};
 
 use incrementalmerkletree::{Address, Hashable, Level, Position, Retention};
@@ -31,6 +33,9 @@ impl<
     /// introduced to the tree, as well as whether or not those newly introduced nodes will need to
     /// be filled with values in order to produce witnesses for inserted leaves with
     /// [`Retention::Marked`] retention.
+    ///
+    /// This method operates on a single thread. If you have parallelism available, consider using
+    /// [`LocatedPrunableTree::from_iter`] and [`Self::insert_tree`] instead.
     #[allow(clippy::type_complexity)]
     pub fn batch_insert<I: Iterator<Item = (H, Retention<C>)>>(
         &mut self,
@@ -101,7 +106,6 @@ pub struct BatchInsertionResult<H, C: Ord, I: Iterator<Item = (H, Retention<C>)>
     pub remainder: I,
 }
 
-/// Operations on [`LocatedTree`]s that are annotated with Merkle hashes.
 impl<H: Hashable + Clone + PartialEq> LocatedPrunableTree<H> {
     /// Append a values from an iterator, beginning at the first available position in the tree.
     ///
@@ -126,7 +130,7 @@ impl<H: Hashable + Clone + PartialEq> LocatedPrunableTree<H> {
     /// the end of the iterator is outside of the subtree's range, the unconsumed part of the
     /// iterator will be returned as part of the result.
     ///
-    /// Returns `Ok(None)` if the provided iterator is empty, `Ok(Some<BatchInsertionResult>)` if
+    /// Returns `Ok(None)` if the provided iterator is empty, `Ok(Some(BatchInsertionResult))` if
     /// values were successfully inserted, or an error if the start position provided is outside
     /// of this tree's position range or if a conflict with an existing subtree root is detected.
     pub fn batch_insert<C: Clone + Ord, I: Iterator<Item = (H, Retention<C>)>>(
@@ -162,9 +166,10 @@ impl<H: Hashable + Clone + PartialEq> LocatedPrunableTree<H> {
     /// This may be used in conjunction with [`ShardTree::insert_tree`] to support
     /// partially-parallelizable tree construction. Multiple subtrees may be constructed in
     /// parallel from iterators over (preferably, though not necessarily) disjoint leaf ranges, and
-    /// [`ShardTree::insert_tree`] may be used to insert those subtrees into the `ShardTree` in
+    /// [`ShardTree::insert_tree`] may be used to insert those subtrees into the [`ShardTree`] in
     /// arbitrary order.
     ///
+    /// # Parameters:
     /// * `position_range` - The range of leaf positions at which values will be inserted. This
     ///   range is also used to place an upper bound on the number of items that will be consumed
     ///   from the `values` iterator.
@@ -172,7 +177,7 @@ impl<H: Hashable + Clone + PartialEq> LocatedPrunableTree<H> {
     ///   in order to construct a witness for a marked node or to make it possible to rewind to a
     ///   checkpointed node may be pruned so long as their address is at less than the specified
     ///   level.
-    /// * `values` The iterator of `(H, [`Retention`])` pairs from which to construct the tree.
+    /// * `values` - The iterator of `(H, Retention)` pairs from which to construct the tree.
     pub fn from_iter<C: Clone + Ord, I: Iterator<Item = (H, Retention<C>)>>(
         position_range: Range<Position>,
         prune_below: Level,
