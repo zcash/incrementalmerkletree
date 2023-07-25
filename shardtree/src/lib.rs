@@ -87,7 +87,7 @@ impl<
         Address::above_position(Self::subtree_level(), pos)
     }
 
-    pub fn max_subtree_index() -> u64 {
+    fn max_subtree_index() -> u64 {
         (0x1 << (DEPTH - SHARD_HEIGHT)) - 1
     }
 
