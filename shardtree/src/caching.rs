@@ -1,7 +1,6 @@
 //! Implementation of an in-memory shard store with persistence.
 
 use std::convert::Infallible;
-use std::fmt;
 
 use incrementalmerkletree::Address;
 
@@ -25,7 +24,6 @@ where
     S: ShardStore,
     S::H: Clone,
     S::CheckpointId: Clone + Ord,
-    S::Error: fmt::Display,
 {
     backend: S,
     cache: MemoryShardStore<S::H, S::CheckpointId>,
@@ -37,7 +35,6 @@ where
     S: ShardStore,
     S::H: Clone,
     S::CheckpointId: Clone + Ord,
-    S::Error: fmt::Display,
 {
     /// Loads a `CachingShardStore` from the given backend.
     pub fn load(mut backend: S) -> Result<Self, S::Error> {
@@ -110,7 +107,6 @@ where
     S: ShardStore,
     S::H: Clone,
     S::CheckpointId: Clone + Ord,
-    S::Error: fmt::Display,
 {
     type H = S::H;
     type CheckpointId = S::CheckpointId;

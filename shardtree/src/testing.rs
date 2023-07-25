@@ -150,8 +150,6 @@ impl<
         const DEPTH: u8,
         const SHARD_HEIGHT: u8,
     > testing::Tree<H, C> for ShardTree<S, DEPTH, SHARD_HEIGHT>
-where
-    S::Error: std::fmt::Debug,
 {
     fn depth(&self) -> u8 {
         DEPTH

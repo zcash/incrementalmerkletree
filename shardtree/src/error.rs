@@ -40,7 +40,7 @@ impl<S: fmt::Display> fmt::Display for ShardTreeError<S> {
 
 impl<SE> std::error::Error for ShardTreeError<SE>
 where
-    SE: fmt::Debug + fmt::Display + std::error::Error + 'static,
+    SE: std::error::Error + 'static,
 {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         match &self {

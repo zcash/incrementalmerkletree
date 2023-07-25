@@ -94,7 +94,7 @@ impl Checkpoint {
 pub trait ShardStore {
     type H;
     type CheckpointId;
-    type Error;
+    type Error: std::error::Error;
 
     /// Returns the subtree at the given root address, if any such subtree exists.
     fn get_shard(
