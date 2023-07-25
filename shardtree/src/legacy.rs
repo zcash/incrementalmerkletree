@@ -3,8 +3,8 @@ use std::fmt;
 use incrementalmerkletree::{witness::IncrementalWitness, Address, Hashable, Level, Retention};
 
 use crate::{
-    InsertionError, LocatedPrunableTree, LocatedTree, PrunableTree, RetentionFlags, ShardStore,
-    ShardTree, ShardTreeError, Tree,
+    store::ShardStore, InsertionError, LocatedPrunableTree, LocatedTree, PrunableTree,
+    RetentionFlags, ShardTree, ShardTreeError, Tree,
 };
 
 impl<

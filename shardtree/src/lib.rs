@@ -8,7 +8,10 @@ use incrementalmerkletree::{
     frontier::NonEmptyFrontier, Address, Hashable, Level, MerklePath, Position, Retention,
 };
 
-use self::error::{InsertionError, QueryError, ShardTreeError};
+use self::{
+    error::{InsertionError, QueryError, ShardTreeError},
+    store::{Checkpoint, ShardStore, TreeState},
+};
 
 mod batch;
 pub use self::batch::BatchInsertionResult;
@@ -20,277 +23,13 @@ mod prunable;
 pub use self::prunable::{IncompleteAt, LocatedPrunableTree, PrunableTree, RetentionFlags};
 
 pub mod error;
-
-pub mod caching;
-pub mod memory;
+pub mod store;
 
 #[cfg(any(bench, test, feature = "test-dependencies"))]
 pub mod testing;
 
 #[cfg(feature = "legacy-api")]
 mod legacy;
-
-/// An enumeration of possible checkpoint locations.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
-pub enum TreeState {
-    /// Checkpoints of the empty tree.
-    Empty,
-    /// Checkpoint at a (possibly pruned) leaf state corresponding to the
-    /// wrapped leaf position.
-    AtPosition(Position),
-}
-
-#[derive(Clone, Debug)]
-pub struct Checkpoint {
-    tree_state: TreeState,
-    marks_removed: BTreeSet<Position>,
-}
-
-impl Checkpoint {
-    pub fn tree_empty() -> Self {
-        Checkpoint {
-            tree_state: TreeState::Empty,
-            marks_removed: BTreeSet::new(),
-        }
-    }
-
-    pub fn at_position(position: Position) -> Self {
-        Checkpoint {
-            tree_state: TreeState::AtPosition(position),
-            marks_removed: BTreeSet::new(),
-        }
-    }
-
-    pub fn from_parts(tree_state: TreeState, marks_removed: BTreeSet<Position>) -> Self {
-        Checkpoint {
-            tree_state,
-            marks_removed,
-        }
-    }
-
-    pub fn tree_state(&self) -> TreeState {
-        self.tree_state
-    }
-
-    pub fn marks_removed(&self) -> &BTreeSet<Position> {
-        &self.marks_removed
-    }
-
-    pub fn is_tree_empty(&self) -> bool {
-        matches!(self.tree_state, TreeState::Empty)
-    }
-
-    pub fn position(&self) -> Option<Position> {
-        match self.tree_state {
-            TreeState::Empty => None,
-            TreeState::AtPosition(pos) => Some(pos),
-        }
-    }
-}
-
-/// A capability for storage of fragment subtrees of the `ShardTree` type.
-///
-/// All fragment subtrees must have roots at level `SHARD_HEIGHT`
-pub trait ShardStore {
-    type H;
-    type CheckpointId;
-    type Error: std::error::Error;
-
-    /// Returns the subtree at the given root address, if any such subtree exists.
-    fn get_shard(
-        &self,
-        shard_root: Address,
-    ) -> Result<Option<LocatedPrunableTree<Self::H>>, Self::Error>;
-
-    /// Returns the subtree containing the maximum inserted leaf position.
-    fn last_shard(&self) -> Result<Option<LocatedPrunableTree<Self::H>>, Self::Error>;
-
-    /// Inserts or replaces the subtree having the same root address as the provided tree.
-    ///
-    /// Implementations of this method MUST enforce the constraint that the root address
-    /// of the provided subtree has level `SHARD_HEIGHT`.
-    fn put_shard(&mut self, subtree: LocatedPrunableTree<Self::H>) -> Result<(), Self::Error>;
-
-    /// Returns the vector of addresses corresponding to the roots of subtrees stored in this
-    /// store.
-    fn get_shard_roots(&self) -> Result<Vec<Address>, Self::Error>;
-
-    /// Removes subtrees from the underlying store having root addresses at indices greater
-    /// than or equal to that of the specified address.
-    ///
-    /// Implementations of this method MUST enforce the constraint that the root address
-    /// provided has level `SHARD_HEIGHT`.
-    fn truncate(&mut self, from: Address) -> Result<(), Self::Error>;
-
-    /// A tree that is used to cache the known roots of subtrees in the "cap" - the top part of the
-    /// tree, which contains parent nodes produced by hashing the roots of the individual shards.
-    /// Nodes in the cap have levels in the range `SHARD_HEIGHT..DEPTH`. Note that the cap may be
-    /// sparse, in the same way that individual shards may be sparse.
-    fn get_cap(&self) -> Result<PrunableTree<Self::H>, Self::Error>;
-
-    /// Persists the provided cap to the data store.
-    fn put_cap(&mut self, cap: PrunableTree<Self::H>) -> Result<(), Self::Error>;
-
-    /// Returns the identifier for the checkpoint with the lowest associated position value.
-    fn min_checkpoint_id(&self) -> Result<Option<Self::CheckpointId>, Self::Error>;
-
-    /// Returns the identifier for the checkpoint with the highest associated position value.
-    fn max_checkpoint_id(&self) -> Result<Option<Self::CheckpointId>, Self::Error>;
-
-    /// Adds a checkpoint to the data store.
-    fn add_checkpoint(
-        &mut self,
-        checkpoint_id: Self::CheckpointId,
-        checkpoint: Checkpoint,
-    ) -> Result<(), Self::Error>;
-
-    /// Returns the number of checkpoints maintained by the data store
-    fn checkpoint_count(&self) -> Result<usize, Self::Error>;
-
-    /// Returns the position of the checkpoint, if any, along with the number of subsequent
-    /// checkpoints at the same position. Returns `None` if `checkpoint_depth == 0` or if
-    /// insufficient checkpoints exist to seek back to the requested depth.
-    fn get_checkpoint_at_depth(
-        &self,
-        checkpoint_depth: usize,
-    ) -> Result<Option<(Self::CheckpointId, Checkpoint)>, Self::Error>;
-
-    /// Returns the checkpoint corresponding to the specified checkpoint identifier.
-    fn get_checkpoint(
-        &self,
-        checkpoint_id: &Self::CheckpointId,
-    ) -> Result<Option<Checkpoint>, Self::Error>;
-
-    /// Iterates in checkpoint ID order over the first `limit` checkpoints, applying the
-    /// given callback to each.
-    fn with_checkpoints<F>(&mut self, limit: usize, callback: F) -> Result<(), Self::Error>
-    where
-        F: FnMut(&Self::CheckpointId, &Checkpoint) -> Result<(), Self::Error>;
-
-    /// Update the checkpoint having the given identifier by mutating it with the provided
-    /// function, and persist the updated checkpoint to the data store.
-    ///
-    /// Returns `Ok(true)` if the checkpoint was found, `Ok(false)` if no checkpoint with the
-    /// provided identifier exists in the data store, or an error if a storage error occurred.
-    fn update_checkpoint_with<F>(
-        &mut self,
-        checkpoint_id: &Self::CheckpointId,
-        update: F,
-    ) -> Result<bool, Self::Error>
-    where
-        F: Fn(&mut Checkpoint) -> Result<(), Self::Error>;
-
-    /// Removes a checkpoint from the data store.
-    ///
-    /// If no checkpoint exists with the given ID, this does nothing.
-    fn remove_checkpoint(&mut self, checkpoint_id: &Self::CheckpointId) -> Result<(), Self::Error>;
-
-    /// Removes checkpoints with identifiers greater than or equal to the given identifier.
-    fn truncate_checkpoints(
-        &mut self,
-        checkpoint_id: &Self::CheckpointId,
-    ) -> Result<(), Self::Error>;
-}
-
-impl<S: ShardStore> ShardStore for &mut S {
-    type H = S::H;
-    type CheckpointId = S::CheckpointId;
-    type Error = S::Error;
-
-    fn get_shard(
-        &self,
-        shard_root: Address,
-    ) -> Result<Option<LocatedPrunableTree<Self::H>>, Self::Error> {
-        S::get_shard(*self, shard_root)
-    }
-
-    fn last_shard(&self) -> Result<Option<LocatedPrunableTree<Self::H>>, Self::Error> {
-        S::last_shard(*self)
-    }
-
-    fn put_shard(&mut self, subtree: LocatedPrunableTree<Self::H>) -> Result<(), Self::Error> {
-        S::put_shard(*self, subtree)
-    }
-
-    fn get_shard_roots(&self) -> Result<Vec<Address>, Self::Error> {
-        S::get_shard_roots(*self)
-    }
-
-    fn get_cap(&self) -> Result<PrunableTree<Self::H>, Self::Error> {
-        S::get_cap(*self)
-    }
-
-    fn put_cap(&mut self, cap: PrunableTree<Self::H>) -> Result<(), Self::Error> {
-        S::put_cap(*self, cap)
-    }
-
-    fn truncate(&mut self, from: Address) -> Result<(), Self::Error> {
-        S::truncate(*self, from)
-    }
-
-    fn min_checkpoint_id(&self) -> Result<Option<Self::CheckpointId>, Self::Error> {
-        S::min_checkpoint_id(self)
-    }
-
-    fn max_checkpoint_id(&self) -> Result<Option<Self::CheckpointId>, Self::Error> {
-        S::max_checkpoint_id(self)
-    }
-
-    fn add_checkpoint(
-        &mut self,
-        checkpoint_id: Self::CheckpointId,
-        checkpoint: Checkpoint,
-    ) -> Result<(), Self::Error> {
-        S::add_checkpoint(self, checkpoint_id, checkpoint)
-    }
-
-    fn checkpoint_count(&self) -> Result<usize, Self::Error> {
-        S::checkpoint_count(self)
-    }
-
-    fn get_checkpoint_at_depth(
-        &self,
-        checkpoint_depth: usize,
-    ) -> Result<Option<(Self::CheckpointId, Checkpoint)>, Self::Error> {
-        S::get_checkpoint_at_depth(self, checkpoint_depth)
-    }
-
-    fn get_checkpoint(
-        &self,
-        checkpoint_id: &Self::CheckpointId,
-    ) -> Result<Option<Checkpoint>, Self::Error> {
-        S::get_checkpoint(self, checkpoint_id)
-    }
-
-    fn with_checkpoints<F>(&mut self, limit: usize, callback: F) -> Result<(), Self::Error>
-    where
-        F: FnMut(&Self::CheckpointId, &Checkpoint) -> Result<(), Self::Error>,
-    {
-        S::with_checkpoints(self, limit, callback)
-    }
-
-    fn update_checkpoint_with<F>(
-        &mut self,
-        checkpoint_id: &Self::CheckpointId,
-        update: F,
-    ) -> Result<bool, Self::Error>
-    where
-        F: Fn(&mut Checkpoint) -> Result<(), Self::Error>,
-    {
-        S::update_checkpoint_with(self, checkpoint_id, update)
-    }
-
-    fn remove_checkpoint(&mut self, checkpoint_id: &Self::CheckpointId) -> Result<(), Self::Error> {
-        S::remove_checkpoint(self, checkpoint_id)
-    }
-
-    fn truncate_checkpoints(
-        &mut self,
-        checkpoint_id: &Self::CheckpointId,
-    ) -> Result<(), Self::Error> {
-        S::truncate_checkpoints(self, checkpoint_id)
-    }
-}
 
 /// A sparse binary Merkle tree of the specified depth, represented as an ordered collection of
 /// subtrees (shards) of a given maximum height.
@@ -722,12 +461,12 @@ impl<
                     };
 
                     // Clear or preserve the checkpoint leaf.
-                    if let TreeState::AtPosition(pos) = checkpoint.tree_state {
+                    if let TreeState::AtPosition(pos) = checkpoint.tree_state() {
                         clear_at(pos, RetentionFlags::CHECKPOINT)
                     }
 
                     // Clear or preserve the leaves that have been marked for removal.
-                    for unmark_pos in checkpoint.marks_removed.iter() {
+                    for unmark_pos in checkpoint.marks_removed().iter() {
                         clear_at(*unmark_pos, RetentionFlags::MARKED)
                     }
 
@@ -821,7 +560,7 @@ impl<
         checkpoint_id: &C,
         checkpoint: &Checkpoint,
     ) -> Result<(), ShardTreeError<S::Error>> {
-        match checkpoint.tree_state {
+        match checkpoint.tree_state() {
             TreeState::Empty => {
                 self.store
                     .truncate(Address::from_parts(Self::subtree_level(), 0))
@@ -1356,7 +1095,7 @@ impl<
                     {
                         self.store
                             .update_checkpoint_with(cid, |checkpoint| {
-                                checkpoint.marks_removed.insert(position);
+                                checkpoint.mark_removed(position);
                                 Ok(())
                             })
                             .map_err(ShardTreeError::Storage)
@@ -1398,7 +1137,7 @@ mod tests {
     };
 
     use crate::{
-        memory::MemoryShardStore,
+        store::memory::MemoryShardStore,
         testing::{
             arb_char_str, arb_shardtree, check_shard_sizes, check_shardtree_insertion,
             check_witness_with_pruned_subtrees,

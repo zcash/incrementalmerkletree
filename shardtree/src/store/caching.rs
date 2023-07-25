@@ -4,8 +4,8 @@ use std::convert::Infallible;
 
 use incrementalmerkletree::Address;
 
-use crate::memory::MemoryShardStore;
-use crate::{Checkpoint, LocatedPrunableTree, PrunableTree, ShardStore};
+use super::{memory::MemoryShardStore, Checkpoint, ShardStore};
+use crate::{LocatedPrunableTree, PrunableTree};
 
 #[derive(Debug)]
 enum Action<C> {
@@ -223,7 +223,10 @@ mod tests {
     };
 
     use super::CachingShardStore;
-    use crate::{memory::MemoryShardStore, ShardStore, ShardTree};
+    use crate::{
+        store::{memory::MemoryShardStore, ShardStore},
+        ShardTree,
+    };
 
     fn check_equal(
         mut lhs: MemoryShardStore<String, u64>,

@@ -5,8 +5,8 @@ use tracing::trace;
 
 use crate::{
     error::{InsertionError, ShardTreeError},
-    Checkpoint, IncompleteAt, LocatedPrunableTree, LocatedTree, Node, RetentionFlags, ShardStore,
-    ShardTree, Tree,
+    store::{Checkpoint, ShardStore},
+    IncompleteAt, LocatedPrunableTree, LocatedTree, Node, RetentionFlags, ShardTree, Tree,
 };
 
 impl<
@@ -389,7 +389,7 @@ mod tests {
 
     use super::{LocatedPrunableTree, RetentionFlags};
     use crate::{
-        memory::MemoryShardStore,
+        store::memory::MemoryShardStore,
         tree::tests::{leaf, nil, parent},
         BatchInsertionResult, ShardTree,
     };
