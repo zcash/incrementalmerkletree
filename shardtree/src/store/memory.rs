@@ -8,6 +8,9 @@ use incrementalmerkletree::Address;
 use super::{Checkpoint, ShardStore};
 use crate::{LocatedPrunableTree, LocatedTree, Node, PrunableTree, Tree};
 
+/// An implementation of [`ShardStore`] that stores all state in memory.
+///
+/// State is not persisted anywhere, and will be lost when the struct is dropped.
 #[derive(Debug)]
 pub struct MemoryShardStore<H, C: Ord> {
     shards: Vec<LocatedPrunableTree<H>>,
@@ -16,6 +19,7 @@ pub struct MemoryShardStore<H, C: Ord> {
 }
 
 impl<H, C: Ord> MemoryShardStore<H, C> {
+    /// Constructs a new empty `MemoryShardStore`.
     pub fn empty() -> Self {
         Self {
             shards: vec![],

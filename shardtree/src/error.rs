@@ -1,8 +1,16 @@
+//! Error types for this crate.
+
 use std::fmt;
 use std::ops::Range;
 
 use incrementalmerkletree::{Address, Position};
 
+/// The error type for operations on a [`ShardTree`].
+///
+/// The parameter `S` is set to [`ShardStore::Error`].
+///
+/// [`ShardTree`]: crate::ShardTree
+/// [`ShardStore::Error`]: crate::ShardStore::Error
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ShardTreeError<S> {
     Query(QueryError),
@@ -50,7 +58,7 @@ where
     }
 }
 
-/// An error prevented the insertion of values into the subtree.
+/// Errors which can occur when inserting values into a subtree.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum InsertionError {
     /// The caller attempted to insert a subtree into a tree that does not contain
@@ -103,7 +111,9 @@ impl fmt::Display for InsertionError {
 
 impl std::error::Error for InsertionError {}
 
-/// Errors that may be returned in the process of querying a [`ShardTree`]
+/// Errors which can occur when querying a [`ShardTree`].
+///
+/// [`ShardTree`]: crate::ShardTree
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum QueryError {
     /// The caller attempted to query the value at an address within a tree that does not contain
@@ -114,6 +124,8 @@ pub enum QueryError {
     CheckpointPruned,
     /// It is not possible to compute a root for one or more subtrees because they contain
     /// [`Node::Nil`] values at positions that cannot be replaced with default hashes.
+    ///
+    /// [`Node::Nil`]: crate::Node::Nil
     TreeIncomplete(Vec<Address>),
 }
 
