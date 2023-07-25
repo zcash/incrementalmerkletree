@@ -1,4 +1,4 @@
-use core::fmt::{self, Debug, Display};
+use core::fmt::Debug;
 use either::Either;
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
@@ -8,6 +8,8 @@ use incrementalmerkletree::{
     frontier::NonEmptyFrontier, Address, Hashable, Level, MerklePath, Position, Retention,
 };
 
+use self::error::{InsertionError, QueryError, ShardTreeError};
+
 mod batch;
 pub use self::batch::BatchInsertionResult;
 
@@ -15,9 +17,9 @@ mod tree;
 pub use self::tree::{LocatedTree, Node, Tree};
 
 mod prunable;
-pub use self::prunable::{
-    IncompleteAt, InsertionError, LocatedPrunableTree, PrunableTree, QueryError, RetentionFlags,
-};
+pub use self::prunable::{IncompleteAt, LocatedPrunableTree, PrunableTree, RetentionFlags};
+
+pub mod error;
 
 pub mod caching;
 pub mod memory;
@@ -302,53 +304,6 @@ pub struct ShardTree<S: ShardStore, const DEPTH: u8, const SHARD_HEIGHT: u8> {
     store: S,
     /// The maximum number of checkpoints to retain before pruning.
     max_checkpoints: usize,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum ShardTreeError<S> {
-    Query(QueryError),
-    Insert(InsertionError),
-    Storage(S),
-}
-
-impl<S> From<QueryError> for ShardTreeError<S> {
-    fn from(err: QueryError) -> Self {
-        ShardTreeError::Query(err)
-    }
-}
-
-impl<S> From<InsertionError> for ShardTreeError<S> {
-    fn from(err: InsertionError) -> Self {
-        ShardTreeError::Insert(err)
-    }
-}
-
-impl<S: fmt::Display> fmt::Display for ShardTreeError<S> {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        match &self {
-            ShardTreeError::Query(q) => Display::fmt(&q, f),
-            ShardTreeError::Insert(i) => Display::fmt(&i, f),
-            ShardTreeError::Storage(s) => {
-                write!(
-                    f,
-                    "An error occurred persisting or retrieving tree data: {}",
-                    s
-                )
-            }
-        }
-    }
-}
-
-impl<SE> std::error::Error for ShardTreeError<SE>
-where
-    SE: Debug + std::fmt::Display + std::error::Error + 'static,
-{
-    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
-        match &self {
-            ShardTreeError::Storage(e) => Some(e),
-            _ => None,
-        }
-    }
 }
 
 impl<

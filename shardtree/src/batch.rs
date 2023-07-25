@@ -4,8 +4,9 @@ use incrementalmerkletree::{Address, Hashable, Level, Position, Retention};
 use tracing::trace;
 
 use crate::{
-    Checkpoint, IncompleteAt, InsertionError, LocatedPrunableTree, LocatedTree, Node,
-    RetentionFlags, ShardStore, ShardTree, ShardTreeError, Tree,
+    error::{InsertionError, ShardTreeError},
+    Checkpoint, IncompleteAt, LocatedPrunableTree, LocatedTree, Node, RetentionFlags, ShardStore,
+    ShardTree, Tree,
 };
 
 impl<
