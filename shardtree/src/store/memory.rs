@@ -5,7 +5,8 @@ use std::convert::{Infallible, TryFrom};
 
 use incrementalmerkletree::Address;
 
-use crate::{Checkpoint, LocatedPrunableTree, LocatedTree, Node, PrunableTree, ShardStore, Tree};
+use super::{Checkpoint, ShardStore};
+use crate::{LocatedPrunableTree, LocatedTree, Node, PrunableTree, Tree};
 
 #[derive(Debug)]
 pub struct MemoryShardStore<H, C: Ord> {

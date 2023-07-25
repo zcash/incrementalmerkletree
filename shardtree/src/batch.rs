@@ -4,8 +4,9 @@ use incrementalmerkletree::{Address, Hashable, Level, Position, Retention};
 use tracing::trace;
 
 use crate::{
-    Checkpoint, IncompleteAt, InsertionError, LocatedPrunableTree, LocatedTree, Node,
-    RetentionFlags, ShardStore, ShardTree, ShardTreeError, Tree,
+    error::{InsertionError, ShardTreeError},
+    store::{Checkpoint, ShardStore},
+    IncompleteAt, LocatedPrunableTree, LocatedTree, Node, RetentionFlags, ShardTree, Tree,
 };
 
 impl<
@@ -388,7 +389,7 @@ mod tests {
 
     use super::{LocatedPrunableTree, RetentionFlags};
     use crate::{
-        memory::MemoryShardStore,
+        store::memory::MemoryShardStore,
         tree::tests::{leaf, nil, parent},
         BatchInsertionResult, ShardTree,
     };

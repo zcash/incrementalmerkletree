@@ -9,7 +9,7 @@ use proptest::sample::select;
 use incrementalmerkletree::{testing, Hashable};
 
 use super::*;
-use crate::memory::MemoryShardStore;
+use crate::store::{memory::MemoryShardStore, ShardStore};
 
 pub fn arb_retention_flags() -> impl Strategy<Value = RetentionFlags> + Clone {
     select(vec![
@@ -150,8 +150,6 @@ impl<
         const DEPTH: u8,
         const SHARD_HEIGHT: u8,
     > testing::Tree<H, C> for ShardTree<S, DEPTH, SHARD_HEIGHT>
-where
-    S::Error: std::fmt::Debug,
 {
     fn depth(&self) -> u8 {
         DEPTH
