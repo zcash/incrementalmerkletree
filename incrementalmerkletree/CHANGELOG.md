@@ -6,13 +6,35 @@ and this project adheres to Rust's notion of
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## Unreleased
-### Fixed
-- `incrementalmerkletree::Address::common_ancestor` no longer produces incorrect
-  results for some pairs of addresses. It was previously using an arithmetic
-  distance between indices within a level, instead of a bitwise distance.
+### Added
+- `incrementalmerkletree::Address::{common_ancestor, is_left_child}`
+- `incrementalmerkletree::Level::new`
+- `impl From<incrementalmerkletree::Level> for {u32, u64}`
+- `incrementalmerkletree::Position::is_right_child`
+- `incrementalmerkletree::frontier`:
+  - `Frontier::take`
+  - `NonEmptyFrontier::into_parts`
+  - `CommitmentTree::{is_empty, leaf, ommers_iter}`
+  - `testing::arb_frontier`
+- `incrementalmerkletree::testing`:
+  - `TestCheckpoint`
+  - `TestHashable`
+  - `TestTree`
+- `incrementalmerkletree::witness`:
+  - `IncrementalWitness::{tip_position, witnessed_position}`
 
 ### Changed
 - `incrementalmerkletree::Hashable` trait now has a `Debug` bound.
+- The `incrementalmerkletree::testing::check_*` functions now work with trees
+  built over any node or checkpoint ID types implementing `TestHashable` or
+  `TestCheckpoint` respectively.
+
+### Removed
+- `incrementalmerkletree::Position::is_odd` (use `Position::is_right_child`
+  instead).
+- `incrementalmerkletree::witness`:
+  - `IncrementalWitness::position` (use `IncrementalWitness::witnessed_position`
+    instead).
 
 ## [0.4.0] - 2023-06-05
 
