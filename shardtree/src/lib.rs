@@ -1,7 +1,24 @@
-//! `shardtree` is a space-efficient fixed-depth Merkle tree that supports:
-//! - Out-of-order insertion.
-//! - Witnessing of marked leaves.
-//! - Checkpointing, and state restoration to a checkpoint.
+//! `shardtree` is a space-efficient fixed-depth Merkle tree structure that is densely
+//! filled from the left. It supports:
+//!
+//! - *Out-of-order insertion*: leaves and nodes may be inserted into the tree in
+//!   arbitrary order. The structure will keep track of the right-most filled position as
+//!   the frontier of the tree; any unfilled leaves to the left of this position are
+//!   considered "missing", while any unfilled leaves to the right of this position are
+//!   considered "empty".
+//! - *Witnessing*: Individual leaves of the Merkle tree may be marked such that witnesses
+//!   will be maintained for the marked leaves as additional nodes are inserted into the
+//!   tree, but leaf and node data not specifically required to maintain these witnesses
+//!   is not retained, for space efficiency.
+//! - *Checkpointing*: the tree may be reset to a previously checkpointed state, up to a
+//!   fixed number of checkpoints.
+//!
+//! Due to its structure (described in the [`store`] module), witnesses for marked leaves
+//! can be advanced up to recent checkpoints or the latest state of the tree, without
+//! having to insert each intermediate leaf individually. Instead, only the roots of all
+//! complete shards between the one containing the marked leaf and the tree frontier need
+//! to be inserted, along with the necessary nodes to build a path from the marked leaf to
+//! the root of the shard containing it.
 
 use core::fmt::Debug;
 use either::Either;
