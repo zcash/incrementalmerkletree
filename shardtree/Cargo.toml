@@ -12,6 +12,10 @@ homepage = "https://github.com/zcash/incrementalmerkletree"
 repository = "https://github.com/zcash/incrementalmerkletree"
 categories = ["algorithms", "data-structures"]
 
+[package.metadata.docs.rs]
+all-features = true
+rustdoc-args = ["--cfg", "docsrs"]
+
 [dependencies]
 assert_matches = { version = "1.5", optional = true }
 bitflags = "1.3"

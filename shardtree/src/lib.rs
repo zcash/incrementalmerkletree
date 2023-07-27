@@ -20,6 +20,8 @@
 //! to be inserted, along with the necessary nodes to build a path from the marked leaf to
 //! the root of the shard containing it.
 
+#![cfg_attr(docsrs, feature(doc_cfg))]
+
 use core::fmt::Debug;
 use either::Either;
 use std::collections::{BTreeMap, BTreeSet};
@@ -51,6 +53,7 @@ pub mod store;
 pub mod testing;
 
 #[cfg(feature = "legacy-api")]
+#[cfg_attr(docsrs, doc(cfg(feature = "legacy-api")))]
 mod legacy;
 
 /// A sparse binary Merkle tree of the specified depth, represented as an ordered collection of
