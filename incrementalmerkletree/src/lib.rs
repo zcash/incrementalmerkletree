@@ -43,6 +43,8 @@
 //! Note: we often refer to `ommers` (plural) when describing leaf-to-root paths, so in that
 //! context `ommers` refers to the node's ommer, plus each ancestor's ommer.
 
+#![cfg_attr(docsrs, feature(doc_cfg))]
+
 use either::Either;
 use std::cmp::Ordering;
 use std::convert::{TryFrom, TryInto};
@@ -53,9 +55,11 @@ use std::ops::{Add, AddAssign, Range, Sub};
 pub mod frontier;
 
 #[cfg(feature = "legacy-api")]
+#[cfg_attr(docsrs, doc(cfg(feature = "legacy-api")))]
 pub mod witness;
 
 #[cfg(feature = "test-dependencies")]
+#[cfg_attr(docsrs, doc(cfg(feature = "test-dependencies")))]
 pub mod testing;
 
 /// A type for metadata that is used to determine when and how a leaf can be pruned from a tree.

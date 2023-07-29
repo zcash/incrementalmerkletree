@@ -14,6 +14,7 @@ use crate::{LocatedTree, Node, Tree};
 
 bitflags! {
     /// Flags storing the [`Retention`] state of a leaf.
+    #[derive(Clone, Copy, Debug, PartialEq, Eq)]
     pub struct RetentionFlags: u8 {
         /// An leaf with `EPHEMERAL` retention can be pruned as soon as we are certain that it is not part
         /// of the witness for a leaf with [`CHECKPOINT`] or [`MARKED`] retention.

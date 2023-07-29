@@ -281,6 +281,7 @@ impl<H: Hashable + Clone, const DEPTH: u8> Frontier<H, DEPTH> {
 }
 
 #[cfg(feature = "legacy-api")]
+#[cfg_attr(docsrs, doc(cfg(feature = "legacy-api")))]
 pub struct PathFiller<H> {
     queue: VecDeque<H>,
 }
@@ -307,6 +308,7 @@ impl<H: Hashable> PathFiller<H> {
 /// A Merkle tree of note commitments.
 #[derive(Clone, Debug, PartialEq, Eq)]
 #[cfg(feature = "legacy-api")]
+#[cfg_attr(docsrs, doc(cfg(feature = "legacy-api")))]
 pub struct CommitmentTree<H, const DEPTH: u8> {
     pub(crate) left: Option<H>,
     pub(crate) right: Option<H>,
@@ -600,6 +602,7 @@ pub mod testing {
     use crate::frontier::CommitmentTree;
 
     #[cfg(feature = "legacy-api")]
+    #[cfg_attr(docsrs, doc(cfg(feature = "legacy-api")))]
     pub fn arb_commitment_tree<
         H: Hashable + Clone + Debug,
         T: Strategy<Value = H>,
