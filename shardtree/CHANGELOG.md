@@ -6,4 +6,7 @@ and this project adheres to Rust's notion of
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## Unreleased
+
+## [0.1.0] - 2023-09-08
+
 Initial release!

@@ -7,6 +7,12 @@ and this project adheres to Rust's notion of
 
 ## [Unreleased]
 
+## [0.4.0] - 2023-09-08
+
+### Changed
+
+- Migrated to `incrementalmerkletree 0.5`.
+
 ## [bridgetree-v0.3.0] - 2023-06-05
 
 ### Changed
