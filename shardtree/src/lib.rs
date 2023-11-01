@@ -641,7 +641,7 @@ impl<
     /// given position, and parents of such nodes, will be replaced by the empty root for the
     /// associated level.
     ///
-    /// Use [`Self::root_at_checkpoint`] to obtain the root of the overall tree.
+    /// Use [`Self::root_at_checkpoint_id`] to obtain the root of the overall tree.
     pub fn root(
         &self,
         address: Address,
@@ -970,12 +970,47 @@ impl<
         })
     }
 
+    /// Computes the root of the tree as of the checkpointed position having the specified
+    /// checkpoint id.
+    pub fn root_at_checkpoint_id(&self, checkpoint: &C) -> Result<H, ShardTreeError<S::Error>> {
+        let position = self
+            .store
+            .get_checkpoint(checkpoint)
+            .map_err(ShardTreeError::Storage)?
+            .map(|c| c.position())
+            .ok_or(QueryError::CheckpointPruned)?;
+
+        position.map_or_else(
+            || Ok(H::empty_root(Self::root_addr().level())),
+            |pos| self.root(Self::root_addr(), pos + 1),
+        )
+    }
+
+    /// Computes the root of the tree as of the checkpointed position having the specified
+    /// checkpoint id, caching intermediate values produced while computing the root.
+    pub fn root_at_checkpoint_id_caching(
+        &mut self,
+        checkpoint: &C,
+    ) -> Result<H, ShardTreeError<S::Error>> {
+        let position = self
+            .store
+            .get_checkpoint(checkpoint)
+            .map_err(ShardTreeError::Storage)?
+            .map(|c| c.position())
+            .ok_or(QueryError::CheckpointPruned)?;
+
+        position.map_or_else(
+            || Ok(H::empty_root(Self::root_addr().level())),
+            |pos| self.root_caching(Self::root_addr(), pos + 1),
+        )
+    }
+
     /// Computes the root of the tree as of the checkpointed position at the specified depth.
     ///
     /// Returns the root as of the most recently appended leaf if `checkpoint_depth == 0`. Note
     /// that if the most recently appended leaf is also a checkpoint, this will return the same
     /// result as `checkpoint_depth == 1`.
-    pub fn root_at_checkpoint(
+    pub fn root_at_checkpoint_depth(
         &self,
         checkpoint_depth: usize,
     ) -> Result<H, ShardTreeError<S::Error>> {
@@ -985,7 +1020,9 @@ impl<
         )
     }
 
-    pub fn root_at_checkpoint_caching(
+    /// Computes the root of the tree as of the checkpointed position at the specified depth,
+    /// caching intermediate values produced while computing the root.
+    pub fn root_at_checkpoint_depth_caching(
         &mut self,
         checkpoint_depth: usize,
     ) -> Result<H, ShardTreeError<S::Error>> {

@@ -185,7 +185,7 @@ impl<
     }
 
     fn root(&self, checkpoint_depth: usize) -> Option<H> {
-        match ShardTree::root_at_checkpoint(self, checkpoint_depth) {
+        match ShardTree::root_at_checkpoint_depth(self, checkpoint_depth) {
             Ok(v) => Some(v),
             Err(err) => panic!("root computation failed: {:?}", err),
         }
@@ -254,7 +254,7 @@ pub fn check_shardtree_insertion<
     );
 
     assert_matches!(
-        tree.root_at_checkpoint(1),
+        tree.root_at_checkpoint_depth(1),
         Err(ShardTreeError::Query(QueryError::TreeIncomplete(v))) if v == vec![Address::from_parts(Level::from(0), 0)]
     );
 
@@ -271,12 +271,12 @@ pub fn check_shardtree_insertion<
     );
 
     assert_matches!(
-        tree.root_at_checkpoint(0),
+        tree.root_at_checkpoint_depth(0),
         Ok(h) if h == *"abcd____________"
     );
 
     assert_matches!(
-        tree.root_at_checkpoint(1),
+        tree.root_at_checkpoint_depth(1),
         Ok(h) if h == *"ab______________"
     );
 
@@ -308,7 +308,7 @@ pub fn check_shardtree_insertion<
     );
 
     assert_matches!(
-        tree.root_at_checkpoint(0),
+        tree.root_at_checkpoint_depth(0),
         // The (0, 13) and (1, 7) incomplete subtrees are
         // not considered incomplete here because they appear
         // at the tip of the tree.
@@ -331,12 +331,12 @@ pub fn check_shardtree_insertion<
     );
 
     assert_matches!(
-        tree.root_at_checkpoint(0),
+        tree.root_at_checkpoint_depth(0),
         Ok(h) if h == *"abcdefghijkl____"
     );
 
     assert_matches!(
-        tree.root_at_checkpoint(1),
+        tree.root_at_checkpoint_depth(1),
         Ok(h) if h == *"ab______________"
     );
 }
