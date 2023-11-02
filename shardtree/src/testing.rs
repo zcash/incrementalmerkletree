@@ -192,7 +192,7 @@ impl<
     }
 
     fn witness(&self, position: Position, checkpoint_depth: usize) -> Option<Vec<H>> {
-        match ShardTree::witness(self, position, checkpoint_depth) {
+        match ShardTree::witness_at_checkpoint_depth(self, position, checkpoint_depth) {
             Ok(p) => Some(p.path_elems().to_vec()),
             Err(ShardTreeError::Query(
                 QueryError::NotContained(_)
@@ -396,7 +396,9 @@ pub fn check_witness_with_pruned_subtrees<
     .unwrap();
 
     // construct a witness for the note
-    let witness = tree.witness(Position::from(26), 0).unwrap();
+    let witness = tree
+        .witness_at_checkpoint_depth(Position::from(26), 0)
+        .unwrap();
     assert_eq!(
         witness.path_elems(),
         &[

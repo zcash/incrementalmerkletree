@@ -1032,92 +1032,154 @@ impl<
         )
     }
 
-    /// Computes the witness for the leaf at the specified position.
+    fn witness_internal(
+        &self,
+        position: Position,
+        as_of: Position,
+    ) -> Result<MerklePath<H, DEPTH>, ShardTreeError<S::Error>> {
+        let subtree_addr = Self::subtree_addr(position);
+
+        // compute the witness for the specified position up to the subtree root
+        let mut witness = self
+            .store
+            .get_shard(subtree_addr)
+            .map_err(ShardTreeError::Storage)?
+            .map_or_else(
+                || Err(QueryError::TreeIncomplete(vec![subtree_addr])),
+                |subtree| subtree.witness(position, as_of + 1),
+            )?;
+
+        // compute the remaining parts of the witness up to the root
+        let root_addr = Self::root_addr();
+        let mut cur_addr = subtree_addr;
+        while cur_addr != root_addr {
+            witness.push(self.root(cur_addr.sibling(), as_of + 1)?);
+            cur_addr = cur_addr.parent();
+        }
+
+        Ok(MerklePath::from_parts(witness, position).unwrap())
+    }
+
+    // TODO: It would be lovely if there were a way to eliminate the duplication between this and
+    // `witness_internal`: the only difference between these two is that this calls
+    // `self.root_caching` (and consequently requires a `&mut self` reference) whereas
+    // `witness_internal` just calls `self.root`.
+    fn witness_internal_caching(
+        &mut self,
+        position: Position,
+        as_of: Position,
+    ) -> Result<MerklePath<H, DEPTH>, ShardTreeError<S::Error>> {
+        let subtree_addr = Self::subtree_addr(position);
+
+        // compute the witness for the specified position up to the subtree root
+        let mut witness = self
+            .store
+            .get_shard(subtree_addr)
+            .map_err(ShardTreeError::Storage)?
+            .map_or_else(
+                || Err(QueryError::TreeIncomplete(vec![subtree_addr])),
+                |subtree| subtree.witness(position, as_of + 1),
+            )?;
+
+        // compute the remaining parts of the witness up to the root
+        let root_addr = Self::root_addr();
+        let mut cur_addr = subtree_addr;
+        while cur_addr != root_addr {
+            witness.push(self.root_caching(cur_addr.sibling(), as_of + 1)?);
+            cur_addr = cur_addr.parent();
+        }
+
+        Ok(MerklePath::from_parts(witness, position).unwrap())
+    }
+
+    /// Computes the witness for the leaf at the specified position, as of the given checkpoint
+    /// depth.
     ///
     /// Returns the witness as of the most recently appended leaf if `checkpoint_depth == 0`. Note
     /// that if the most recently appended leaf is also a checkpoint, this will return the same
     /// result as `checkpoint_depth == 1`.
-    pub fn witness(
+    pub fn witness_at_checkpoint_depth(
         &self,
         position: Position,
         checkpoint_depth: usize,
     ) -> Result<MerklePath<H, DEPTH>, ShardTreeError<S::Error>> {
-        let max_leaf_position = self.max_leaf_position(checkpoint_depth).and_then(|v| {
+        let as_of = self.max_leaf_position(checkpoint_depth).and_then(|v| {
             v.ok_or_else(|| QueryError::TreeIncomplete(vec![Self::root_addr()]).into())
         })?;
 
-        if position > max_leaf_position {
+        if position > as_of {
             Err(
                 QueryError::NotContained(Address::from_parts(Level::from(0), position.into()))
                     .into(),
             )
         } else {
-            let subtree_addr = Self::subtree_addr(position);
-
-            // compute the witness for the specified position up to the subtree root
-            let mut witness = self
-                .store
-                .get_shard(subtree_addr)
-                .map_err(ShardTreeError::Storage)?
-                .map_or_else(
-                    || Err(QueryError::TreeIncomplete(vec![subtree_addr])),
-                    |subtree| subtree.witness(position, max_leaf_position + 1),
-                )?;
-
-            // compute the remaining parts of the witness up to the root
-            let root_addr = Self::root_addr();
-            let mut cur_addr = subtree_addr;
-            while cur_addr != root_addr {
-                witness.push(self.root(cur_addr.sibling(), max_leaf_position + 1)?);
-                cur_addr = cur_addr.parent();
-            }
-
-            Ok(MerklePath::from_parts(witness, position).unwrap())
+            self.witness_internal(position, as_of)
         }
     }
 
-    /// Computes the witness for the leaf at the specified position.
+    /// Computes the witness for the leaf at the specified position, as of the given checkpoint
+    /// depth.
     ///
     /// This implementation will mutate the tree to cache intermediate root (ommer) values that are
     /// computed in the process of constructing the witness, so as to avoid the need to recompute
     /// those values from potentially large numbers of subtree roots in the future.
-    pub fn witness_caching(
+    pub fn witness_at_checkpoint_depth_caching(
         &mut self,
         position: Position,
         checkpoint_depth: usize,
     ) -> Result<MerklePath<H, DEPTH>, ShardTreeError<S::Error>> {
-        let max_leaf_position = self.max_leaf_position(checkpoint_depth).and_then(|v| {
+        let as_of = self.max_leaf_position(checkpoint_depth).and_then(|v| {
             v.ok_or_else(|| QueryError::TreeIncomplete(vec![Self::root_addr()]).into())
         })?;
 
-        if position > max_leaf_position {
+        if position > as_of {
             Err(
                 QueryError::NotContained(Address::from_parts(Level::from(0), position.into()))
                     .into(),
             )
         } else {
-            let subtree_addr = Address::above_position(Self::subtree_level(), position);
-
-            // compute the witness for the specified position up to the subtree root
-            let mut witness = self
-                .store
-                .get_shard(subtree_addr)
-                .map_err(ShardTreeError::Storage)?
-                .map_or_else(
-                    || Err(QueryError::TreeIncomplete(vec![subtree_addr])),
-                    |subtree| subtree.witness(position, max_leaf_position + 1),
-                )?;
-
-            // compute the remaining parts of the witness up to the root
-            let root_addr = Self::root_addr();
-            let mut cur_addr = subtree_addr;
-            while cur_addr != root_addr {
-                witness.push(self.root_caching(cur_addr.sibling(), max_leaf_position + 1)?);
-                cur_addr = cur_addr.parent();
-            }
-
-            Ok(MerklePath::from_parts(witness, position).unwrap())
+            self.witness_internal_caching(position, as_of)
         }
+    }
+
+    /// Computes the witness for the leaf at the specified position, as of the given checkpoint.
+    ///
+    /// Returns the witness as of the most recently appended leaf if `checkpoint_depth == 0`. Note
+    /// that if the most recently appended leaf is also a checkpoint, this will return the same
+    /// result as `checkpoint_depth == 1`.
+    pub fn witness_at_checkpoint_id(
+        &self,
+        position: Position,
+        checkpoint_id: &C,
+    ) -> Result<MerklePath<H, DEPTH>, ShardTreeError<S::Error>> {
+        let as_of = self
+            .store
+            .get_checkpoint(checkpoint_id)
+            .map_err(ShardTreeError::Storage)?
+            .and_then(|c| c.position())
+            .ok_or(QueryError::CheckpointPruned)?;
+
+        self.witness_internal(position, as_of)
+    }
+
+    /// Computes the witness for the leaf at the specified position, as of the given checkpoint.
+    ///
+    /// This implementation will mutate the tree to cache intermediate root (ommer) values that are
+    /// computed in the process of constructing the witness, so as to avoid the need to recompute
+    /// those values from potentially large numbers of subtree roots in the future.
+    pub fn witness_at_checkpoint_id_caching(
+        &mut self,
+        position: Position,
+        checkpoint_id: &C,
+    ) -> Result<MerklePath<H, DEPTH>, ShardTreeError<S::Error>> {
+        let as_of = self
+            .store
+            .get_checkpoint(checkpoint_id)
+            .map_err(ShardTreeError::Storage)?
+            .and_then(|c| c.position())
+            .ok_or(QueryError::CheckpointPruned)?;
+
+        self.witness_internal_caching(position, as_of)
     }
 
     /// Make a marked leaf at a position eligible to be pruned.
@@ -1378,8 +1440,8 @@ mod tests {
                 assert_eq!(root, caching_root);
 
                 for pos in marked_positions {
-                    let witness = tree.witness(pos, 0);
-                    let caching_witness = tree.witness_caching(pos, 0);
+                    let witness = tree.witness_at_checkpoint_depth(pos, 0);
+                    let caching_witness = tree.witness_at_checkpoint_depth_caching(pos, 0);
                     assert_matches!(witness, Ok(_));
                     assert_eq!(witness, caching_witness);
                 }
