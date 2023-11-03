@@ -96,9 +96,9 @@ pub trait ShardStore {
     /// Returns the number of checkpoints maintained by the data store
     fn checkpoint_count(&self) -> Result<usize, Self::Error>;
 
-    /// Returns the position of the checkpoint, if any, along with the number of subsequent
-    /// checkpoints at the same position. Returns `None` if `checkpoint_depth == 0` or if
-    /// insufficient checkpoints exist to seek back to the requested depth.
+    /// Returns the id and position of the checkpoint, if any. Returns `None` if
+    /// `checkpoint_depth == 0` or if insufficient checkpoints exist to seek back
+    /// to the requested depth.
     fn get_checkpoint_at_depth(
         &self,
         checkpoint_depth: usize,
