@@ -641,7 +641,7 @@ impl<
     /// given position, and parents of such nodes, will be replaced by the empty root for the
     /// associated level.
     ///
-    /// Use [`Self::root_at_checkpoint_id`] to obtain the root of the overall tree.
+    /// Use [`Self::root_at_checkpoint_depth`] to obtain the root of the overall tree.
     pub fn root(
         &self,
         address: Address,
@@ -1032,17 +1032,17 @@ impl<
         )
     }
 
-    fn witness_internal(
-        &self,
+    fn witness_helper<Ctx>(
+        mut ctx: Ctx,
         position: Position,
         as_of: Position,
+        get_shard: impl Fn(&Ctx, Address) -> Result<Option<LocatedPrunableTree<H>>, S::Error>,
+        mut root: impl FnMut(&mut Ctx, Address, Position) -> Result<H, ShardTreeError<S::Error>>,
     ) -> Result<MerklePath<H, DEPTH>, ShardTreeError<S::Error>> {
         let subtree_addr = Self::subtree_addr(position);
 
         // compute the witness for the specified position up to the subtree root
-        let mut witness = self
-            .store
-            .get_shard(subtree_addr)
+        let mut witness = get_shard(&ctx, subtree_addr)
             .map_err(ShardTreeError::Storage)?
             .map_or_else(
                 || Err(QueryError::TreeIncomplete(vec![subtree_addr])),
@@ -1053,43 +1053,39 @@ impl<
         let root_addr = Self::root_addr();
         let mut cur_addr = subtree_addr;
         while cur_addr != root_addr {
-            witness.push(self.root(cur_addr.sibling(), as_of + 1)?);
+            witness.push(root(&mut ctx, cur_addr.sibling(), as_of + 1)?);
             cur_addr = cur_addr.parent();
         }
 
         Ok(MerklePath::from_parts(witness, position).unwrap())
     }
 
-    // TODO: It would be lovely if there were a way to eliminate the duplication between this and
-    // `witness_internal`: the only difference between these two is that this calls
-    // `self.root_caching` (and consequently requires a `&mut self` reference) whereas
-    // `witness_internal` just calls `self.root`.
+    fn witness_internal(
+        &self,
+        position: Position,
+        as_of: Position,
+    ) -> Result<MerklePath<H, DEPTH>, ShardTreeError<S::Error>> {
+        Self::witness_helper(
+            self,
+            position,
+            as_of,
+            |ctx, shard_root| ctx.store.get_shard(shard_root),
+            |ctx, address, truncate_at| ctx.root(address, truncate_at),
+        )
+    }
+
     fn witness_internal_caching(
         &mut self,
         position: Position,
         as_of: Position,
     ) -> Result<MerklePath<H, DEPTH>, ShardTreeError<S::Error>> {
-        let subtree_addr = Self::subtree_addr(position);
-
-        // compute the witness for the specified position up to the subtree root
-        let mut witness = self
-            .store
-            .get_shard(subtree_addr)
-            .map_err(ShardTreeError::Storage)?
-            .map_or_else(
-                || Err(QueryError::TreeIncomplete(vec![subtree_addr])),
-                |subtree| subtree.witness(position, as_of + 1),
-            )?;
-
-        // compute the remaining parts of the witness up to the root
-        let root_addr = Self::root_addr();
-        let mut cur_addr = subtree_addr;
-        while cur_addr != root_addr {
-            witness.push(self.root_caching(cur_addr.sibling(), as_of + 1)?);
-            cur_addr = cur_addr.parent();
-        }
-
-        Ok(MerklePath::from_parts(witness, position).unwrap())
+        Self::witness_helper(
+            self,
+            position,
+            as_of,
+            |ctx, shard_root| ctx.store.get_shard(shard_root),
+            |ctx, address, truncate_at| ctx.root_caching(address, truncate_at),
+        )
     }
 
     /// Computes the witness for the leaf at the specified position, as of the given checkpoint
@@ -1143,10 +1139,6 @@ impl<
     }
 
     /// Computes the witness for the leaf at the specified position, as of the given checkpoint.
-    ///
-    /// Returns the witness as of the most recently appended leaf if `checkpoint_depth == 0`. Note
-    /// that if the most recently appended leaf is also a checkpoint, this will return the same
-    /// result as `checkpoint_depth == 1`.
     pub fn witness_at_checkpoint_id(
         &self,
         position: Position,
