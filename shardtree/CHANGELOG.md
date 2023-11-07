@@ -7,6 +7,8 @@ and this project adheres to Rust's notion of
 
 ## Unreleased
 
+## [0.2.0] - 2023-11-07
+
 ## Added
 * `Shardtree::{root_at_checkpoint_id, root_at_checkpoint_id_caching}`
 * `Shardtree::{witness_at_checkpoint_id, witness_at_checkpoint_id_caching}`
