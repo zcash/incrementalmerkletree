@@ -185,14 +185,14 @@ impl<
     }
 
     fn root(&self, checkpoint_depth: usize) -> Option<H> {
-        match ShardTree::root_at_checkpoint(self, checkpoint_depth) {
+        match ShardTree::root_at_checkpoint_depth(self, checkpoint_depth) {
             Ok(v) => Some(v),
             Err(err) => panic!("root computation failed: {:?}", err),
         }
     }
 
     fn witness(&self, position: Position, checkpoint_depth: usize) -> Option<Vec<H>> {
-        match ShardTree::witness(self, position, checkpoint_depth) {
+        match ShardTree::witness_at_checkpoint_depth(self, position, checkpoint_depth) {
             Ok(p) => Some(p.path_elems().to_vec()),
             Err(ShardTreeError::Query(
                 QueryError::NotContained(_)
@@ -254,7 +254,7 @@ pub fn check_shardtree_insertion<
     );
 
     assert_matches!(
-        tree.root_at_checkpoint(1),
+        tree.root_at_checkpoint_depth(1),
         Err(ShardTreeError::Query(QueryError::TreeIncomplete(v))) if v == vec![Address::from_parts(Level::from(0), 0)]
     );
 
@@ -271,12 +271,12 @@ pub fn check_shardtree_insertion<
     );
 
     assert_matches!(
-        tree.root_at_checkpoint(0),
+        tree.root_at_checkpoint_depth(0),
         Ok(h) if h == *"abcd____________"
     );
 
     assert_matches!(
-        tree.root_at_checkpoint(1),
+        tree.root_at_checkpoint_depth(1),
         Ok(h) if h == *"ab______________"
     );
 
@@ -308,7 +308,7 @@ pub fn check_shardtree_insertion<
     );
 
     assert_matches!(
-        tree.root_at_checkpoint(0),
+        tree.root_at_checkpoint_depth(0),
         // The (0, 13) and (1, 7) incomplete subtrees are
         // not considered incomplete here because they appear
         // at the tip of the tree.
@@ -331,12 +331,12 @@ pub fn check_shardtree_insertion<
     );
 
     assert_matches!(
-        tree.root_at_checkpoint(0),
+        tree.root_at_checkpoint_depth(0),
         Ok(h) if h == *"abcdefghijkl____"
     );
 
     assert_matches!(
-        tree.root_at_checkpoint(1),
+        tree.root_at_checkpoint_depth(1),
         Ok(h) if h == *"ab______________"
     );
 }
@@ -396,7 +396,9 @@ pub fn check_witness_with_pruned_subtrees<
     .unwrap();
 
     // construct a witness for the note
-    let witness = tree.witness(Position::from(26), 0).unwrap();
+    let witness = tree
+        .witness_at_checkpoint_depth(Position::from(26), 0)
+        .unwrap();
     assert_eq!(
         witness.path_elems(),
         &[

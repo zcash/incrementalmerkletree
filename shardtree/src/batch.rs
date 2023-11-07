@@ -533,8 +533,8 @@ mod tests {
             assert_eq!(lhs.max_leaf_position(0), Ok(Some(Position::from(i as u64))));
             assert_eq!(rhs.max_leaf_position(0), Ok(Some(Position::from(i as u64))));
 
-            assert_eq!(lhs.root_at_checkpoint(0).unwrap(), expected_root);
-            assert_eq!(rhs.root_at_checkpoint(0).unwrap(), expected_root);
+            assert_eq!(lhs.root_at_checkpoint_depth(0).unwrap(), expected_root);
+            assert_eq!(rhs.root_at_checkpoint_depth(0).unwrap(), expected_root);
         }
     }
 }
@@ -554,7 +554,7 @@ mod proptests {
             let (left, right) = build_insert_tree_and_batch_insert(leaves);
 
             // Check that the resulting trees are equal.
-            assert_eq!(left.root_at_checkpoint(0), right.root_at_checkpoint(0));
+            assert_eq!(left.root_at_checkpoint_depth(0), right.root_at_checkpoint_depth(0));
         }
     }
 }
