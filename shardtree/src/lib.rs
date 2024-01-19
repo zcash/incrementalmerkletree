@@ -66,8 +66,8 @@ mod legacy;
 pub struct ShardTree<S: ShardStore, const DEPTH: u8, const SHARD_HEIGHT: u8> {
     /// The vector of tree shards.
     store: S,
-    /// The maximum number of checkpoints to retain before pruning.
-    max_checkpoints: usize,
+    /// The minumum number of checkpoints to retain when pruning.
+    min_checkpoints_to_retain: usize,
 }
 
 impl<
@@ -79,10 +79,10 @@ impl<
     > ShardTree<S, DEPTH, SHARD_HEIGHT>
 {
     /// Creates a new empty tree.
-    pub fn new(store: S, max_checkpoints: usize) -> Self {
+    pub fn new(store: S, min_checkpoints_to_retain: usize) -> Self {
         Self {
             store,
-            max_checkpoints,
+            min_checkpoints_to_retain,
         }
     }
 
@@ -438,14 +438,19 @@ impl<
             .checkpoint_count()
             .map_err(ShardTreeError::Storage)?;
         trace!(
-            "Tree has {} checkpoints, max is {}",
+            "Tree has {} checkpoints, min to be retained is {}",
             checkpoint_count,
-            self.max_checkpoints,
+            self.min_checkpoints_to_retain,
         );
-        if checkpoint_count > self.max_checkpoints {
+        let retain_count = self.min_checkpoints_to_retain
+            + self
+                .store
+                .ensured_retained_count()
+                .map_err(ShardTreeError::Storage)?;
+        if checkpoint_count > retain_count {
             // Batch removals by subtree & create a list of the checkpoint identifiers that
             // will be removed from the checkpoints map.
-            let remove_count = checkpoint_count - self.max_checkpoints;
+            let remove_count = checkpoint_count - retain_count;
             let mut checkpoints_to_delete = vec![];
             let mut clear_positions: BTreeMap<Address, BTreeMap<Position, RetentionFlags>> =
                 BTreeMap::new();
@@ -454,8 +459,10 @@ impl<
                     // When removing is true, we are iterating through the range of
                     // checkpoints being removed. When remove is false, we are
                     // iterating through the range of checkpoints that are being
-                    // retained.
-                    let removing = checkpoints_to_delete.len() < remove_count;
+                    // retained, or skipping over a particular checkpoint that we
+                    // have been explicitly asked to retain.
+                    let removing = checkpoints_to_delete.len() < remove_count
+                        && !self.store.should_retain(cid)?;
 
                     if removing {
                         checkpoints_to_delete.push(cid.clone());
@@ -1177,9 +1184,9 @@ impl<
     /// Make a marked leaf at a position eligible to be pruned.
     ///
     /// If the checkpoint associated with the specified identifier does not exist because the
-    /// corresponding checkpoint would have been more than `max_checkpoints` deep, the removal is
-    /// recorded as of the first existing checkpoint and the associated leaves will be pruned when
-    /// that checkpoint is subsequently removed.
+    /// corresponding checkpoint would have been more than `min_checkpoints_to_retain` deep, the
+    /// removal is recorded as of the first existing checkpoint and the associated leaves will be
+    /// pruned when that checkpoint is subsequently removed.
     ///
     /// Returns `Ok(true)` if a mark was successfully removed from the leaf at the specified
     /// position, `Ok(false)` if the tree does not contain a leaf at the specified position or is
@@ -1253,7 +1260,7 @@ mod tests {
     };
 
     use crate::{
-        store::memory::MemoryShardStore,
+        store::{memory::MemoryShardStore, ShardStore},
         testing::{
             arb_char_str, arb_shardtree, check_shard_sizes, check_shardtree_insertion,
             check_witness_with_pruned_subtrees,
@@ -1355,12 +1362,48 @@ mod tests {
             ),
             Ok(()),
         );
+
+        // Append a leaf we want to retain
+        assert_eq!(tree.append('e'.to_string(), Retention::Marked), Ok(()),);
+
+        // Now a few more leaves and then checkpoint
+        for c in 'f'..='i' {
+            tree.append(c.to_string(), Retention::Ephemeral).unwrap();
+        }
+
+        // Checkpoint the tree. We'll want to retain this checkpoint.
+        assert_eq!(tree.checkpoint(12), Ok(true));
+        tree.store.ensure_retained(12).unwrap();
+
+        // Simulate adding yet another block
+        for c in 'j'..='m' {
+            tree.append(c.to_string(), Retention::Ephemeral).unwrap();
+        }
+
+        assert_eq!(tree.checkpoint(13), Ok(true));
+
+        // Witness `e` as of checkpoint 12
+        let e_witness_12 = tree
+            .witness_at_checkpoint_id(Position::from(4), &12)
+            .unwrap();
+
+        // Now add some more checkpoints, which would ordinarily cause checkpoint 12
+        // to be pruned (but will not, because we explicitly retained it.)
+        for i in 14..24 {
+            assert_eq!(tree.checkpoint(i), Ok(true));
+        }
+
+        // Verify that we can still compute the same root
+        assert_matches!(
+            tree.witness_at_checkpoint_id(Position::from(4), &12),
+            Ok(w) if w == e_witness_12
+        );
     }
 
     // Combined tree tests
     #[allow(clippy::type_complexity)]
     fn new_combined_tree<H: Hashable + Ord + Clone + core::fmt::Debug>(
-        max_checkpoints: usize,
+        min_checkpoints_to_retain: usize,
     ) -> CombinedTree<
         H,
         usize,
@@ -1368,8 +1411,8 @@ mod tests {
         ShardTree<MemoryShardStore<H, usize>, 4, 3>,
     > {
         CombinedTree::new(
-            CompleteTree::new(max_checkpoints),
-            ShardTree::new(MemoryShardStore::empty(), max_checkpoints),
+            CompleteTree::new(min_checkpoints_to_retain),
+            ShardTree::new(MemoryShardStore::empty(), min_checkpoints_to_retain),
         )
     }
 

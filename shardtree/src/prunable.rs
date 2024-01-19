@@ -23,8 +23,8 @@ bitflags! {
         /// [`MARKED`]: RetentionFlags::MARKED
         const EPHEMERAL = 0b00000000;
 
-        /// A leaf with `CHECKPOINT` retention can be pruned when there are more than `max_checkpoints`
-        /// additional checkpoint leaves, if it is not also a marked leaf.
+        /// A leaf with `CHECKPOINT` retention can be pruned when there are more than
+        /// `min_checkpoints_to_retain` additional checkpoints, if it is not also a marked leaf.
         const CHECKPOINT = 0b00000001;
 
         /// A leaf with `MARKED` retention can be pruned only as a consequence of an explicit deletion
@@ -34,10 +34,12 @@ bitflags! {
 }
 
 impl RetentionFlags {
+    /// Returns whether the [`RetentionFlags::CHECKPOINT`] flag is set.
     pub fn is_checkpoint(&self) -> bool {
         (*self & RetentionFlags::CHECKPOINT) == RetentionFlags::CHECKPOINT
     }
 
+    /// Returns whether the [`RetentionFlags::MARKED`] flag is set.
     pub fn is_marked(&self) -> bool {
         (*self & RetentionFlags::MARKED) == RetentionFlags::MARKED
     }

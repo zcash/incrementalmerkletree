@@ -1,6 +1,6 @@
 //! Implementation of an in-memory shard store with no persistence.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::convert::{Infallible, TryFrom};
 
 use incrementalmerkletree::Address;
@@ -16,6 +16,7 @@ pub struct MemoryShardStore<H, C: Ord> {
     shards: Vec<LocatedPrunableTree<H>>,
     checkpoints: BTreeMap<C, Checkpoint>,
     cap: PrunableTree<H>,
+    to_retain: BTreeSet<C>,
 }
 
 impl<H, C: Ord> MemoryShardStore<H, C> {
@@ -25,7 +26,13 @@ impl<H, C: Ord> MemoryShardStore<H, C> {
             shards: vec![],
             checkpoints: BTreeMap::new(),
             cap: PrunableTree::empty(),
+            to_retain: BTreeSet::new(),
         }
+    }
+
+    /// Returns the set of checkpoints being explicitly retained.
+    pub fn checkpoints_to_retain(&self) -> &BTreeSet<C> {
+        &self.to_retain
     }
 }
 
@@ -92,6 +99,19 @@ impl<H: Clone, C: Clone + Ord> ShardStore for MemoryShardStore<H, C> {
         Ok(())
     }
 
+    fn ensure_retained(&mut self, checkpoint_id: Self::CheckpointId) -> Result<(), Self::Error> {
+        self.to_retain.insert(checkpoint_id);
+        Ok(())
+    }
+
+    fn ensured_retained_count(&self) -> Result<usize, Self::Error> {
+        Ok(self.to_retain.len())
+    }
+
+    fn should_retain(&self, cid: &Self::CheckpointId) -> Result<bool, Self::Error> {
+        Ok(self.to_retain.contains(cid))
+    }
+
     fn checkpoint_count(&self) -> Result<usize, Self::Error> {
         Ok(self.checkpoints.len())
     }
@@ -126,7 +146,7 @@ impl<H: Clone, C: Clone + Ord> ShardStore for MemoryShardStore<H, C> {
         Ok(self.checkpoints.keys().last().cloned())
     }
 
-    fn with_checkpoints<F>(&mut self, limit: usize, mut callback: F) -> Result<(), Self::Error>
+    fn with_checkpoints<F>(&self, limit: usize, mut callback: F) -> Result<(), Self::Error>
     where
         F: FnMut(&C, &Checkpoint) -> Result<(), Self::Error>,
     {

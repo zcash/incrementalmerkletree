@@ -93,6 +93,21 @@ pub trait ShardStore {
         checkpoint: Checkpoint,
     ) -> Result<(), Self::Error>;
 
+    /// Records the provided checkpoint ID as corresponding to a checkpoint to be retained across
+    /// pruning operations.
+    ///
+    /// Implementations of this method must add the provided checkpoint ID to the set of
+    /// checkpoints to be retained even if no such checkpoint currently exists in the backing
+    /// store.
+    fn ensure_retained(&mut self, checkpoint_id: Self::CheckpointId) -> Result<(), Self::Error>;
+
+    /// Returns the number of checkpoints explicitly retained using [`ensure_retained`].
+    fn ensured_retained_count(&self) -> Result<usize, Self::Error>;
+
+    /// Returns the set of identifiers for checkpoints that should be exempt from pruning
+    /// operations.
+    fn should_retain(&self, cid: &Self::CheckpointId) -> Result<bool, Self::Error>;
+
     /// Returns the number of checkpoints maintained by the data store
     fn checkpoint_count(&self) -> Result<usize, Self::Error>;
 
@@ -112,7 +127,7 @@ pub trait ShardStore {
 
     /// Iterates in checkpoint ID order over the first `limit` checkpoints, applying the
     /// given callback to each.
-    fn with_checkpoints<F>(&mut self, limit: usize, callback: F) -> Result<(), Self::Error>
+    fn with_checkpoints<F>(&self, limit: usize, callback: F) -> Result<(), Self::Error>
     where
         F: FnMut(&Self::CheckpointId, &Checkpoint) -> Result<(), Self::Error>;
 
@@ -165,16 +180,16 @@ impl<S: ShardStore> ShardStore for &mut S {
         S::get_shard_roots(*self)
     }
 
+    fn truncate(&mut self, from: Address) -> Result<(), Self::Error> {
+        S::truncate(*self, from)
+    }
+
     fn get_cap(&self) -> Result<PrunableTree<Self::H>, Self::Error> {
         S::get_cap(*self)
     }
 
     fn put_cap(&mut self, cap: PrunableTree<Self::H>) -> Result<(), Self::Error> {
         S::put_cap(*self, cap)
-    }
-
-    fn truncate(&mut self, from: Address) -> Result<(), Self::Error> {
-        S::truncate(*self, from)
     }
 
     fn min_checkpoint_id(&self) -> Result<Option<Self::CheckpointId>, Self::Error> {
@@ -191,6 +206,18 @@ impl<S: ShardStore> ShardStore for &mut S {
         checkpoint: Checkpoint,
     ) -> Result<(), Self::Error> {
         S::add_checkpoint(self, checkpoint_id, checkpoint)
+    }
+
+    fn ensure_retained(&mut self, checkpoint_id: Self::CheckpointId) -> Result<(), Self::Error> {
+        S::ensure_retained(self, checkpoint_id)
+    }
+
+    fn ensured_retained_count(&self) -> Result<usize, Self::Error> {
+        S::ensured_retained_count(self)
+    }
+
+    fn should_retain(&self, cid: &Self::CheckpointId) -> Result<bool, Self::Error> {
+        S::should_retain(self, cid)
     }
 
     fn checkpoint_count(&self) -> Result<usize, Self::Error> {
@@ -211,11 +238,11 @@ impl<S: ShardStore> ShardStore for &mut S {
         S::get_checkpoint(self, checkpoint_id)
     }
 
-    fn with_checkpoints<F>(&mut self, limit: usize, callback: F) -> Result<(), Self::Error>
+    fn with_checkpoints<F>(&self, limit: usize, mut callback: F) -> Result<(), Self::Error>
     where
         F: FnMut(&Self::CheckpointId, &Checkpoint) -> Result<(), Self::Error>,
     {
-        S::with_checkpoints(self, limit, callback)
+        S::with_checkpoints(self, limit, |cid, c| callback(cid, c))
     }
 
     fn update_checkpoint_with<F>(
