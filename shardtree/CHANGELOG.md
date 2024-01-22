@@ -7,6 +7,13 @@ and this project adheres to Rust's notion of
 
 ## Unreleased
 
+## Added
+* `shardtree::store::ShardStore::{ensure_retained, ensured_retained_count, should_retain}`
+
+## Changed
+* `shardtree::store::ShardStore::with_checkpoints` no longer takes its `self`
+  reference argument as mutable.
+
 ## [0.2.0] - 2023-11-07
 
 ## Added

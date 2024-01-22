@@ -485,12 +485,12 @@ mod tests {
         ShardTree<MemoryShardStore<String, usize>, 6, 3>,
         ShardTree<MemoryShardStore<String, usize>, 6, 3>,
     ) {
-        let max_checkpoints = 10;
+        let min_checkpoints_to_retain = 10;
         let start = Position::from(0);
         let end = start + leaves.len() as u64;
 
         // Construct a tree using `ShardTree::insert_tree`.
-        let mut left = ShardTree::new(MemoryShardStore::empty(), max_checkpoints);
+        let mut left = ShardTree::new(MemoryShardStore::empty(), min_checkpoints_to_retain);
         if let Some(BatchInsertionResult {
             subtree,
             checkpoints,
@@ -503,7 +503,7 @@ mod tests {
         }
 
         // Construct a tree using `ShardTree::batch_insert`.
-        let mut right = ShardTree::new(MemoryShardStore::empty(), max_checkpoints);
+        let mut right = ShardTree::new(MemoryShardStore::empty(), min_checkpoints_to_retain);
         right.batch_insert(start, leaves.into_iter()).unwrap();
 
         (left, right)

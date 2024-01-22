@@ -37,7 +37,7 @@ where
     S::CheckpointId: Clone + Ord,
 {
     /// Loads a `CachingShardStore` from the given backend.
-    pub fn load(mut backend: S) -> Result<Self, S::Error> {
+    pub fn load(backend: S) -> Result<Self, S::Error> {
         let mut cache = MemoryShardStore::empty();
 
         for shard_root in backend.get_shard_roots()? {
@@ -94,6 +94,9 @@ where
                 },
             )
             .unwrap();
+        for cid in self.cache.checkpoints_to_retain() {
+            self.backend.ensure_retained(cid.clone())?;
+        }
         for (checkpoint_id, checkpoint) in checkpoints {
             self.backend.add_checkpoint(checkpoint_id, checkpoint)?;
         }
@@ -144,6 +147,14 @@ where
         self.cache.put_cap(cap)
     }
 
+    fn min_checkpoint_id(&self) -> Result<Option<Self::CheckpointId>, Self::Error> {
+        self.cache.min_checkpoint_id()
+    }
+
+    fn max_checkpoint_id(&self) -> Result<Option<Self::CheckpointId>, Self::Error> {
+        self.cache.max_checkpoint_id()
+    }
+
     fn add_checkpoint(
         &mut self,
         checkpoint_id: Self::CheckpointId,
@@ -152,15 +163,20 @@ where
         self.cache.add_checkpoint(checkpoint_id, checkpoint)
     }
 
-    fn checkpoint_count(&self) -> Result<usize, Self::Error> {
-        self.cache.checkpoint_count()
+    fn ensure_retained(&mut self, checkpoint_id: Self::CheckpointId) -> Result<(), Self::Error> {
+        self.cache.ensure_retained(checkpoint_id)
     }
 
-    fn get_checkpoint(
-        &self,
-        checkpoint_id: &Self::CheckpointId,
-    ) -> Result<Option<Checkpoint>, Self::Error> {
-        self.cache.get_checkpoint(checkpoint_id)
+    fn ensured_retained_count(&self) -> Result<usize, Self::Error> {
+        self.cache.ensured_retained_count()
+    }
+
+    fn should_retain(&self, cid: &Self::CheckpointId) -> Result<bool, Self::Error> {
+        self.cache.should_retain(cid)
+    }
+
+    fn checkpoint_count(&self) -> Result<usize, Self::Error> {
+        self.cache.checkpoint_count()
     }
 
     fn get_checkpoint_at_depth(
@@ -170,19 +186,19 @@ where
         self.cache.get_checkpoint_at_depth(checkpoint_depth)
     }
 
-    fn min_checkpoint_id(&self) -> Result<Option<Self::CheckpointId>, Self::Error> {
-        self.cache.min_checkpoint_id()
+    fn get_checkpoint(
+        &self,
+        checkpoint_id: &Self::CheckpointId,
+    ) -> Result<Option<Checkpoint>, Self::Error> {
+        self.cache.get_checkpoint(checkpoint_id)
     }
 
-    fn max_checkpoint_id(&self) -> Result<Option<Self::CheckpointId>, Self::Error> {
-        self.cache.max_checkpoint_id()
-    }
-
-    fn with_checkpoints<F>(&mut self, limit: usize, callback: F) -> Result<(), Self::Error>
+    fn with_checkpoints<F>(&self, limit: usize, mut callback: F) -> Result<(), Self::Error>
     where
         F: FnMut(&Self::CheckpointId, &Checkpoint) -> Result<(), Self::Error>,
     {
-        self.cache.with_checkpoints(limit, callback)
+        self.cache
+            .with_checkpoints(limit, |cid, c| callback(cid, c))
     }
 
     fn update_checkpoint_with<F>(
@@ -229,7 +245,7 @@ mod tests {
     };
 
     fn check_equal(
-        mut lhs: MemoryShardStore<String, u64>,
+        lhs: MemoryShardStore<String, u64>,
         rhs: CachingShardStore<MemoryShardStore<String, u64>>,
     ) {
         let rhs = rhs.flush().unwrap();
