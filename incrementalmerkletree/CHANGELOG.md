@@ -7,6 +7,9 @@ and this project adheres to Rust's notion of
 
 ## Unreleased
 
+### Added
+- `incrementalmerkletree::Frontier::tree_size`
+
 ## [0.5.0] - 2023-09-08
 
 ### Added
