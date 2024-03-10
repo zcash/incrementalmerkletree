@@ -225,6 +225,13 @@ impl<H, const DEPTH: u8> Frontier<H, DEPTH> {
             size_of::<usize>() + (f.ommers.capacity() + 1) * size_of::<H>()
         })
     }
+
+    /// Returns the size of the Merkle tree that this frontier corresponds to.
+    pub fn tree_size(&self) -> u64 {
+        self.frontier
+            .as_ref()
+            .map_or(0, |f| u64::from(f.position()) + 1)
+    }
 }
 
 impl<H: Hashable + Clone, const DEPTH: u8> Frontier<H, DEPTH> {
