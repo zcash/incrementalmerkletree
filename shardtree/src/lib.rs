@@ -91,6 +91,11 @@ impl<
         self.store
     }
 
+    /// Returns a reference to the underlying [`ShardStore`].
+    pub fn store(&self) -> &S {
+        &self.store
+    }
+
     /// Returns the root address of the tree.
     pub fn root_addr() -> Address {
         Address::from_parts(Level::from(DEPTH), 0)
