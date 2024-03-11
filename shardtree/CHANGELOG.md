@@ -8,7 +8,7 @@ and this project adheres to Rust's notion of
 ## Unreleased
 
 ## Added
-* `Shardtree::store`
+* `Shardtree::{store, store_mut}`
 - `ShardTree::insert_frontier`
 
 ## Changed

@@ -97,6 +97,11 @@ impl<
         &self.store
     }
 
+    /// Returns a mutable reference to the underlying [`ShardStore`].
+    pub fn store_mut(&mut self) -> &mut S {
+        &mut self.store
+    }
+
     /// Returns the root address of the tree.
     pub fn root_addr() -> Address {
         Address::from_parts(Level::from(DEPTH), 0)
