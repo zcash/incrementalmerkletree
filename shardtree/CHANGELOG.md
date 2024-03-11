@@ -8,11 +8,8 @@ and this project adheres to Rust's notion of
 ## Unreleased
 
 ## Added
-* `Shardtree::{store, store_mut}`
+- `ShardTree::{store, store_mut}`
 - `ShardTree::insert_frontier`
-
-## Changed
-- `shardtree::error::InsertionError` has new variant `MarkedRetentionInvalid`
 
 ## [0.2.0] - 2023-11-07
 
