@@ -78,6 +78,10 @@ pub enum InsertionError {
     /// An input data structure had malformed data when attempting to insert a value
     /// at the given address
     InputMalformed(Address),
+    // The caller attempted to mark the empty tree state as corresponding to the state
+    // for a spendable note.
+    // TODO: Add this proper error type for `shardtree-0.3.0`
+    //MarkedRetentionInvalid,
 }
 
 impl fmt::Display for InsertionError {
@@ -104,7 +108,9 @@ impl fmt::Display for InsertionError {
             InsertionError::TreeFull => write!(f, "Note commitment tree is full."),
             InsertionError::InputMalformed(addr) => {
                 write!(f, "Input malformed for insertion at address {:?}", addr)
-            }
+            } //InsertionError::MarkedRetentionInvalid => {
+              //    write!(f, "Cannot use `Marked` retention for the empty tree.")
+              //}
         }
     }
 }
