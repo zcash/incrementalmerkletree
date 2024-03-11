@@ -24,6 +24,7 @@
 
 use core::fmt::Debug;
 use either::Either;
+use incrementalmerkletree::frontier::Frontier;
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 use tracing::trace;
@@ -255,6 +256,42 @@ impl<
         self.prune_excess_checkpoints()?;
 
         Ok(())
+    }
+
+    /// Add the leaf and ommers of the provided frontier to the tree.
+    ///
+    /// The leaf and ommers will be added as nodes within the subtree corresponding to the
+    /// frontier's position, and the tree state corresponding to that frontier will be marked as
+    /// specified by the leaf retention.
+    ///
+    /// This method may be used to add a checkpoint for the empty tree; note that
+    /// [`Retention::Marked`] is invalid for the empty tree.
+    pub fn insert_frontier(
+        &mut self,
+        frontier: Frontier<H, DEPTH>,
+        leaf_retention: Retention<C>,
+    ) -> Result<(), ShardTreeError<S::Error>> {
+        if let Some(nonempty_frontier) = frontier.take() {
+            self.insert_frontier_nodes(nonempty_frontier, leaf_retention)
+        } else {
+            match leaf_retention {
+                Retention::Ephemeral => Ok(()),
+                Retention::Checkpoint {
+                    id,
+                    is_marked: false,
+                } => self
+                    .store
+                    .add_checkpoint(id, Checkpoint::tree_empty())
+                    .map_err(ShardTreeError::Storage),
+                Retention::Checkpoint {
+                    is_marked: true, ..
+                }
+                | Retention::Marked => Err(ShardTreeError::Insert(
+                    //TODO: use InsertionError::MarkedRetentionInvalid for `shardtree-0.3.0`
+                    InsertionError::CheckpointOutOfOrder,
+                )),
+            }
+        }
     }
 
     /// Add the leaf and ommers of the provided frontier as nodes within the subtree corresponding

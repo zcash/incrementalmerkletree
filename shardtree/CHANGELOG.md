@@ -9,18 +9,22 @@ and this project adheres to Rust's notion of
 
 ## Added
 * `Shardtree::store`
+- `ShardTree::insert_frontier`
+
+## Changed
+- `shardtree::error::InsertionError` has new variant `MarkedRetentionInvalid`
 
 ## [0.2.0] - 2023-11-07
 
 ## Added
-* `Shardtree::{root_at_checkpoint_id, root_at_checkpoint_id_caching}`
-* `Shardtree::{witness_at_checkpoint_id, witness_at_checkpoint_id_caching}`
+- `ShardTree::{root_at_checkpoint_id, root_at_checkpoint_id_caching}`
+- `ShardTree::{witness_at_checkpoint_id, witness_at_checkpoint_id_caching}`
 
 ## Changed
-* `Shardtree::root_at_checkpoint` and `Shardtree::root_at_checkpoint_caching` have
+- `ShardTree::root_at_checkpoint` and `ShardTree::root_at_checkpoint_caching` have
   been renamed to `root_at_checkpoint_depth` and `root_at_checkpoint_depth_caching`,
   respectively.
-* `Shardtree::witness` and `Shardtree::witness_caching` have
+- `ShardTree::witness` and `ShardTree::witness_caching` have
   been renamed to `witness_at_checkpoint_depth` and `witness_at_checkpoint_depth_caching`,
   respectively.
 
