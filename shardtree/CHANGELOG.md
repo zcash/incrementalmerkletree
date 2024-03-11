@@ -7,6 +7,9 @@ and this project adheres to Rust's notion of
 
 ## Unreleased
 
+## Added
+* `Shardtree::store`
+
 ## [0.2.0] - 2023-11-07
 
 ## Added
