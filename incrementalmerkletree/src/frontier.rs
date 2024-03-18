@@ -1,4 +1,3 @@
-use std::convert::TryFrom;
 use std::mem::size_of;
 
 use crate::{Address, Hashable, Level, MerklePath, Position, Source};
@@ -7,9 +6,12 @@ use crate::{Address, Hashable, Level, MerklePath, Position, Source};
 use {std::collections::VecDeque, std::iter::repeat};
 
 #[cfg(any(test, feature = "test-dependencies"))]
-use rand::{
-    distributions::{Distribution, Standard},
-    Rng, RngCore,
+use {
+    rand::{
+        distributions::{Distribution, Standard},
+        Rng, RngCore,
+    },
+    std::num::{NonZeroU64, NonZeroU8},
 };
 
 /// Validation errors that can occur during reconstruction of a Merkle frontier from
@@ -182,6 +184,91 @@ impl<H: Hashable + Clone> NonEmptyFrontier<H> {
     }
 }
 
+#[cfg(any(test, feature = "test-dependencies"))]
+impl<H: Hashable + Clone> NonEmptyFrontier<H>
+where
+    Standard: Distribution<H>,
+{
+    /// Generates a random frontier of a Merkle tree having the specified nonzero size.
+    pub fn random_of_size<R: RngCore>(rng: &mut R, tree_size: NonZeroU64) -> Self {
+        let position = (u64::from(tree_size) - 1).into();
+        NonEmptyFrontier::from_parts(
+            position,
+            rng.gen(),
+            std::iter::repeat_with(|| rng.gen())
+                .take(position.past_ommer_count().into())
+                .collect(),
+        )
+        .unwrap()
+    }
+
+    pub fn random_with_prior_subtree_roots<R: RngCore>(
+        rng: &mut R,
+        tree_size: NonZeroU64,
+        subtree_depth: NonZeroU8,
+    ) -> (Vec<H>, Self) {
+        let prior_subtree_count: u64 = u64::from(tree_size) >> u8::from(subtree_depth);
+        if prior_subtree_count > 0 {
+            let prior_roots: Vec<H> = std::iter::repeat_with(|| rng.gen())
+                .take(prior_subtree_count as usize)
+                .collect();
+
+            let subtree_root_level = Level::from(u8::from(subtree_depth));
+
+            // Generate replacement ommers for the random frontier from the prior subtree roots.
+            let mut replacement_ommers: Vec<(Level, H)> = vec![];
+            let mut roots_iter = prior_roots.iter();
+            loop {
+                if let Some(top) = replacement_ommers.pop() {
+                    if let Some(prev) = replacement_ommers.pop() {
+                        if top.0 == prev.0 {
+                            // Combine, then continue the outer loop so that we eagerly combine as
+                            // many values from the stack as we can before pushing more on.
+                            replacement_ommers
+                                .push((top.0 + 1, H::combine(top.0, &prev.1, &top.1)));
+                            continue;
+                        } else {
+                            // We can't combine yet, so push `prev` back on. `top` will get pushed
+                            // back on or consumed below.
+                            replacement_ommers.push(prev);
+                        }
+                    }
+
+                    if let Some(root) = roots_iter.next() {
+                        if top.0 == subtree_root_level {
+                            replacement_ommers.push((
+                                subtree_root_level + 1,
+                                H::combine(subtree_root_level, &top.1, root),
+                            ));
+                        } else {
+                            replacement_ommers.push(top);
+                            replacement_ommers.push((subtree_root_level, root.clone()));
+                        }
+                    } else {
+                        // No more roots, so we just push `top` back on and break.
+                        replacement_ommers.push(top);
+                        break;
+                    }
+                } else if let Some(root) = roots_iter.next() {
+                    replacement_ommers.push((subtree_root_level, root.clone()));
+                } else {
+                    break;
+                }
+            }
+
+            let mut result = Self::random_of_size(rng, tree_size);
+            let olen = result.ommers.len();
+            for (idx, (_, ommer)) in replacement_ommers.into_iter().enumerate() {
+                result.ommers[olen - (idx + 1)] = ommer;
+            }
+
+            (prior_roots, result)
+        } else {
+            (vec![], Self::random_of_size(rng, tree_size))
+        }
+    }
+}
+
 /// A possibly-empty Merkle frontier.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Frontier<H, const DEPTH: u8> {
@@ -300,19 +387,29 @@ where
 {
     /// Generates a random frontier of a Merkle tree having the specified size.
     pub fn random_of_size<R: RngCore>(rng: &mut R, tree_size: u64) -> Self {
-        if tree_size == 0 {
-            Frontier::empty()
-        } else {
-            let position = (tree_size - 1).into();
-            Frontier::from_parts(
-                position,
-                rng.gen(),
-                std::iter::repeat_with(|| rng.gen())
-                    .take(position.past_ommer_count().into())
-                    .collect(),
-            )
-            .unwrap()
+        assert!(tree_size <= 2u64.checked_pow(DEPTH.into()).unwrap());
+        Frontier {
+            frontier: NonZeroU64::new(tree_size)
+                .map(|sz| NonEmptyFrontier::random_of_size(rng, sz)),
         }
+    }
+
+    pub fn random_with_prior_subtree_roots<R: RngCore>(
+        rng: &mut R,
+        tree_size: u64,
+        subtree_depth: NonZeroU8,
+    ) -> (Vec<H>, Self) {
+        assert!(tree_size <= 2u64.checked_pow(DEPTH.into()).unwrap());
+        NonZeroU64::new(tree_size).map_or((vec![], Frontier::empty()), |tree_size| {
+            let (prior_roots, frontier) =
+                NonEmptyFrontier::random_with_prior_subtree_roots(rng, tree_size, subtree_depth);
+            (
+                prior_roots,
+                Frontier {
+                    frontier: Some(frontier),
+                },
+            )
+        })
     }
 }
 
@@ -577,11 +674,12 @@ impl<H: Hashable + Clone, const DEPTH: u8> CommitmentTree<H, DEPTH> {
     }
 }
 
-#[cfg(feature = "test-dependencies")]
+#[cfg(any(test, feature = "test-dependencies"))]
 pub mod testing {
     use core::fmt::Debug;
     use proptest::collection::vec;
     use proptest::prelude::*;
+    use rand::{distributions::Standard, prelude::Distribution};
     use std::collections::hash_map::DefaultHasher;
     use std::hash::Hasher;
 
@@ -613,6 +711,12 @@ pub mod testing {
             hasher.write_u64(a.0);
             hasher.write_u64(b.0);
             Self(hasher.finish())
+        }
+    }
+
+    impl Distribution<TestNode> for Standard {
+        fn sample<R: Rng + ?Sized>(&self, rng: &mut R) -> TestNode {
+            TestNode(rng.gen())
         }
     }
 
@@ -662,11 +766,14 @@ pub mod testing {
 #[cfg(test)]
 mod tests {
 
-    use super::*;
+    use rand::SeedableRng;
+    use rand_chacha::ChaChaRng;
+
+    use super::{testing::TestNode, *};
 
     #[cfg(feature = "legacy-api")]
     use {
-        super::testing::{arb_commitment_tree, arb_test_node, TestNode},
+        super::testing::{arb_commitment_tree, arb_test_node},
         proptest::prelude::*,
     };
 
@@ -790,6 +897,34 @@ mod tests {
         assert_eq!(ct, ct0);
         let frontier0: Frontier<String, 8> = ct0.to_frontier();
         assert_eq!(frontier, frontier0);
+    }
+
+    #[test]
+    fn test_random_frontier_structure() {
+        let tree_size = (2u64.pow(4)) * 3 + 5;
+
+        let mut f: Frontier<TestNode, 8> = Frontier::empty();
+        for i in 0..tree_size {
+            f.append(TestNode(i));
+        }
+        let f = f.frontier.expect("Frontier should not be empty.");
+
+        let mut rng = ChaChaRng::seed_from_u64(0);
+        let (prior_roots, f0) = Frontier::<TestNode, 8>::random_with_prior_subtree_roots(
+            &mut rng,
+            tree_size,
+            NonZeroU8::new(4).unwrap(),
+        );
+        let f0 = f0.frontier.expect("Frontier should not be empty.");
+
+        assert_eq!(prior_roots.len(), 3);
+        assert_eq!(f.position, f0.position);
+        assert_eq!(f.ommers.len(), f0.ommers.len());
+
+        let expected_largest_ommer =
+            TestNode::combine(Level::from(4), &prior_roots[0], &prior_roots[1]);
+        assert_eq!(f0.ommers[f0.ommers.len() - 1], expected_largest_ommer);
+        assert_eq!(f0.ommers[f0.ommers.len() - 2], prior_roots[2]);
     }
 
     #[cfg(feature = "legacy-api")]

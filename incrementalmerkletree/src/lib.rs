@@ -58,7 +58,7 @@ pub mod frontier;
 #[cfg_attr(docsrs, doc(cfg(feature = "legacy-api")))]
 pub mod witness;
 
-#[cfg(feature = "test-dependencies")]
+#[cfg(any(test, feature = "test-dependencies"))]
 #[cfg_attr(docsrs, doc(cfg(feature = "test-dependencies")))]
 pub mod testing;
 
@@ -611,8 +611,14 @@ impl<H: Hashable, const DEPTH: u8> MerklePath<H, DEPTH> {
 pub trait Hashable: fmt::Debug {
     fn empty_leaf() -> Self;
 
+    /// Combines two provided nodes that both exist at the specified level of the tree,
+    /// producing a new node at level `level + 1`.
     fn combine(level: Level, a: &Self, b: &Self) -> Self;
 
+    /// Produces an empty root at the specified level of the tree by combining empty leaf values.
+    ///
+    /// At each successive level, the value is produced by combining the value at the level below
+    /// with a copy of itself.
     fn empty_root(level: Level) -> Self
     where
         Self: Sized,
