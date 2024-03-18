@@ -6,6 +6,12 @@ use crate::{Address, Hashable, Level, MerklePath, Position, Source};
 #[cfg(feature = "legacy-api")]
 use {std::collections::VecDeque, std::iter::repeat};
 
+#[cfg(any(test, feature = "test-dependencies"))]
+use rand::{
+    distributions::{Distribution, Standard},
+    Rng, RngCore,
+};
+
 /// Validation errors that can occur during reconstruction of a Merkle frontier from
 /// its constituent parts.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -284,6 +290,29 @@ impl<H: Hashable + Clone, const DEPTH: u8> Frontier<H, DEPTH> {
                 })
             })
             .transpose()
+    }
+}
+
+#[cfg(any(test, feature = "test-dependencies"))]
+impl<H: Hashable + Clone, const DEPTH: u8> Frontier<H, DEPTH>
+where
+    Standard: Distribution<H>,
+{
+    /// Generates a random frontier of a Merkle tree having the specified size.
+    pub fn random_of_size<R: RngCore>(rng: &mut R, tree_size: u64) -> Self {
+        if tree_size == 0 {
+            Frontier::empty()
+        } else {
+            let position = (tree_size - 1).into();
+            Frontier::from_parts(
+                position,
+                rng.gen(),
+                std::iter::repeat_with(|| rng.gen())
+                    .take(position.past_ommer_count().into())
+                    .collect(),
+            )
+            .unwrap()
+        }
     }
 }
 

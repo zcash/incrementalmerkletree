@@ -115,6 +115,8 @@ version = "0.5.0"
 dependencies = [
  "either",
  "proptest",
+ "rand",
+ "rand_core",
 ]
 
 [[package]]
