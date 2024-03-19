@@ -116,6 +116,7 @@ dependencies = [
  "either",
  "proptest",
  "rand",
+ "rand_chacha",
  "rand_core",
 ]
 
