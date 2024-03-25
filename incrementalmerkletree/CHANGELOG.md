@@ -7,8 +7,15 @@ and this project adheres to Rust's notion of
 
 ## Unreleased
 
+## [0.5.1] - 2024-03-25
+
 ### Added
 - `incrementalmerkletree::Frontier::tree_size`
+- Additions under the `test-dependencies` feature flag:
+  - `incrementalmerkletree::frontier::{NonEmptyFrontier, Frontier}::{
+      random_of_size, random_with_prior_subtree_roots
+    }`
+  - `impl Distribution<incrementalmerkletree::frontier::testing::TestNode> for Standard`
 
 ## [0.5.0] - 2023-09-08
 
