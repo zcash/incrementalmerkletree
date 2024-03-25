@@ -7,17 +7,20 @@ and this project adheres to Rust's notion of
 
 ## Unreleased
 
-## Added
+### Added
 - `ShardTree::{store, store_mut}`
 - `ShardTree::insert_frontier`
 
+### Changed
+- `shardtree::error::InsertionError` has new variant `MarkedRetentionInvalid`
+
 ## [0.2.0] - 2023-11-07
 
-## Added
+### Added
 - `ShardTree::{root_at_checkpoint_id, root_at_checkpoint_id_caching}`
 - `ShardTree::{witness_at_checkpoint_id, witness_at_checkpoint_id_caching}`
 
-## Changed
+### Changed
 - `ShardTree::root_at_checkpoint` and `ShardTree::root_at_checkpoint_caching` have
   been renamed to `root_at_checkpoint_depth` and `root_at_checkpoint_depth_caching`,
   respectively.

@@ -292,8 +292,7 @@ impl<
                     is_marked: true, ..
                 }
                 | Retention::Marked => Err(ShardTreeError::Insert(
-                    //TODO: use InsertionError::MarkedRetentionInvalid for `shardtree-0.3.0`
-                    InsertionError::CheckpointOutOfOrder,
+                    InsertionError::MarkedRetentionInvalid,
                 )),
             }
         }
