@@ -7,6 +7,8 @@ and this project adheres to Rust's notion of
 
 ## Unreleased
 
+## [0.3.0] - 2024-03-25
+
 ### Added
 - `ShardTree::{store, store_mut}`
 - `ShardTree::insert_frontier`
