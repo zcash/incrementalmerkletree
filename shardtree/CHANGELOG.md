@@ -7,6 +7,11 @@ and this project adheres to Rust's notion of
 
 ## Unreleased
 
+## [0.3.1] - 2024-04-03
+
+### Fixed
+- Fixes a missing transitive dependency when using the `test-dependencies` feature flag.
+
 ## [0.3.0] - 2024-03-25
 
 ### Added
