@@ -7,7 +7,7 @@ use bitflags::bitflags;
 use incrementalmerkletree::{
     frontier::NonEmptyFrontier, Address, Hashable, Level, Position, Retention,
 };
-use tracing::trace;
+use tracing::{trace, warn};
 
 use crate::error::{InsertionError, QueryError};
 use crate::{LocatedTree, Node, Tree};
@@ -206,6 +206,7 @@ impl<H: Hashable + Clone + PartialEq> PrunableTree<H> {
     /// The merge operation is checked to be strictly additive and returns an error if merging
     /// would cause information loss or if a conflict between root hashes occurs at a node. The
     /// returned error contains the address of the node where such a conflict occurred.
+    #[tracing::instrument()]
     pub fn merge_checked(self, root_addr: Address, other: Self) -> Result<Self, Address> {
         #[allow(clippy::type_complexity)]
         fn go<H: Hashable + Clone + PartialEq>(
@@ -279,12 +280,11 @@ impl<H: Hashable + Clone + PartialEq> PrunableTree<H> {
             }
         }
 
-        trace!(this = ?self, other = ?other, "Merging subtrees");
         go(root_addr, self, other)
     }
 
     /// Unite two nodes by either constructing a new parent node, or, if both nodes are ephemeral
-    /// leaves or Nil, constructing a replacement root by hashing leaf values together (or a
+    /// leaves or Nil, constructing a replacement parent by hashing leaf values together (or a
     /// replacement `Nil` value).
     ///
     /// `level` must be the level of the two nodes that are being joined.
@@ -579,9 +579,10 @@ impl<H: Hashable + Clone + PartialEq> LocatedPrunableTree<H> {
             };
 
             trace!(
-                "Node at {:?} contains subtree at {:?}",
-                root_addr,
-                subtree.root_addr(),
+                root_addr = ?root_addr,
+                max_position = ?LocatedTree::max_position_internal(root_addr, into),
+                to_insert = ?subtree.root_addr(),
+                "Subtree insert"
             );
             match into {
                 Tree(Node::Nil) => Ok(replacement(None, subtree)),
@@ -656,17 +657,28 @@ impl<H: Hashable + Clone + PartialEq> LocatedPrunableTree<H> {
             }
         }
 
+        let max_position = self.max_position();
+        trace!(
+            max_position = ?max_position,
+            tree = ?self,
+            subtree_complete = subtree.root.is_complete(),
+            to_insert = ?subtree,
+            "Current shard"
+        );
         let LocatedTree { root_addr, root } = self;
         if root_addr.contains(&subtree.root_addr) {
             let complete = subtree.root.is_complete();
             go(*root_addr, root, subtree, complete, contains_marked).map(|(root, incomplete)| {
-                (
-                    LocatedTree {
-                        root_addr: *root_addr,
-                        root,
-                    },
-                    incomplete,
-                )
+                let new_tree = LocatedTree {
+                    root_addr: *root_addr,
+                    root,
+                };
+                trace!(
+                    max_position = ?new_tree.max_position(),
+                    "Replacement shard"
+                );
+                assert!(new_tree.max_position() >= max_position);
+                (new_tree, incomplete)
             })
         } else {
             Err(InsertionError::NotContained(subtree.root_addr))
@@ -835,7 +847,7 @@ impl<H: Hashable + Clone + PartialEq> LocatedPrunableTree<H> {
 
                         let p = to_clear.partition_point(|(p, _)| p < &l_addr.position_range_end());
                         trace!(
-                            "In {:?}, partitioned: {:?} {:?}",
+                            "Tree::unite at {:?}, partitioned: {:?} {:?}",
                             root_addr,
                             &to_clear[0..p],
                             &to_clear[p..],

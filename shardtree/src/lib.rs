@@ -27,7 +27,7 @@ use either::Either;
 use incrementalmerkletree::frontier::Frontier;
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
-use tracing::trace;
+use tracing::{debug, trace};
 
 use incrementalmerkletree::{
     frontier::NonEmptyFrontier, Address, Hashable, Level, MerklePath, Position, Retention,
@@ -271,6 +271,7 @@ impl<
     ///
     /// This method may be used to add a checkpoint for the empty tree; note that
     /// [`Retention::Marked`] is invalid for the empty tree.
+    #[tracing::instrument(skip(self, frontier, leaf_retention))]
     pub fn insert_frontier(
         &mut self,
         frontier: Frontier<H, DEPTH>,
@@ -301,6 +302,7 @@ impl<
     /// Add the leaf and ommers of the provided frontier as nodes within the subtree corresponding
     /// to the frontier's position, and update the cap to include the ommer nodes at levels greater
     /// than or equal to the shard height.
+    #[tracing::instrument(skip(self, frontier, leaf_retention))]
     pub fn insert_frontier_nodes(
         &mut self,
         frontier: NonEmptyFrontier<H>,
@@ -308,15 +310,24 @@ impl<
     ) -> Result<(), ShardTreeError<S::Error>> {
         let leaf_position = frontier.position();
         let subtree_root_addr = Address::above_position(Self::subtree_level(), leaf_position);
-        trace!("Subtree containing nodes: {:?}", subtree_root_addr);
 
-        let (updated_subtree, supertree) = self
+        let current_shard = self
             .store
             .get_shard(subtree_root_addr)
             .map_err(ShardTreeError::Storage)?
-            .unwrap_or_else(|| LocatedTree::empty(subtree_root_addr))
-            .insert_frontier_nodes(frontier, &leaf_retention)?;
+            .unwrap_or_else(|| LocatedTree::empty(subtree_root_addr));
 
+        trace!(
+            max_position = ?current_shard.max_position(),
+            subtree = ?current_shard,
+            "Current shard");
+        let (updated_subtree, supertree) =
+            current_shard.insert_frontier_nodes(frontier, &leaf_retention)?;
+        trace!(
+            max_position = ?updated_subtree.max_position(),
+            subtree = ?updated_subtree,
+            "Replacement shard"
+        );
         self.store
             .put_shard(updated_subtree)
             .map_err(ShardTreeError::Storage)?;
@@ -346,6 +357,7 @@ impl<
 
     /// Insert a tree by decomposing it into its `SHARD_HEIGHT` or smaller parts (if necessary)
     /// and inserting those at their appropriate locations.
+    #[tracing::instrument(skip(self, tree, checkpoints))]
     pub fn insert_tree(
         &mut self,
         tree: LocatedPrunableTree<H>,
@@ -359,6 +371,7 @@ impl<
             // for some inputs, and given that it is always correct to not insert an empty
             // subtree into `self`, we maintain the invariant by skipping empty subtrees.
             if subtree.root().is_empty() {
+                debug!("Subtree with root {:?} is empty.", subtree.root_addr);
                 continue;
             }
 
@@ -368,14 +381,15 @@ impl<
             let root_addr = Self::subtree_addr(subtree.root_addr.position_range_start());
 
             let contains_marked = subtree.root.contains_marked();
-            let (new_subtree, mut incomplete) = self
+            let current_shard = self
                 .store
                 .get_shard(root_addr)
                 .map_err(ShardTreeError::Storage)?
-                .unwrap_or_else(|| LocatedTree::empty(root_addr))
-                .insert_subtree(subtree, contains_marked)?;
+                .unwrap_or_else(|| LocatedTree::empty(root_addr));
+            let (replacement_shard, mut incomplete) =
+                current_shard.insert_subtree(subtree, contains_marked)?;
             self.store
-                .put_shard(new_subtree)
+                .put_shard(replacement_shard)
                 .map_err(ShardTreeError::Storage)?;
             all_incomplete.append(&mut incomplete);
         }
@@ -478,6 +492,7 @@ impl<
         Ok(true)
     }
 
+    #[tracing::instrument(skip(self))]
     fn prune_excess_checkpoints(&mut self) -> Result<(), ShardTreeError<S::Error>> {
         let checkpoint_count = self
             .store
