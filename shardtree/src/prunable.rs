@@ -4,6 +4,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 
 use bitflags::bitflags;
+use incrementalmerkletree::Marking;
 use incrementalmerkletree::{
     frontier::NonEmptyFrontier, Address, Hashable, Level, Position, Retention,
 };
@@ -30,6 +31,12 @@ bitflags! {
         /// A leaf with `MARKED` retention can be pruned only as a consequence of an explicit deletion
         /// action.
         const MARKED = 0b00000010;
+
+        /// A leaf with `REFERENCE` retention will not be considered prunable until the `REFERENCE`
+        /// flag is removed from the leaf. The `REFERENCE` flag will be removed at any point that
+        /// the leaf is overwritten without `REFERENCE` retention, and `REFERENCE` retention cannot
+        /// be added to an existing leaf.
+        const REFERENCE = 0b00000100;
     }
 }
 
@@ -47,14 +54,17 @@ impl<'a, C> From<&'a Retention<C>> for RetentionFlags {
     fn from(retention: &'a Retention<C>) -> Self {
         match retention {
             Retention::Ephemeral => RetentionFlags::EPHEMERAL,
-            Retention::Checkpoint { is_marked, .. } => {
-                if *is_marked {
-                    RetentionFlags::CHECKPOINT | RetentionFlags::MARKED
-                } else {
-                    RetentionFlags::CHECKPOINT
-                }
-            }
+            Retention::Checkpoint {
+                marking: Marking::Marked,
+                ..
+            } => RetentionFlags::CHECKPOINT | RetentionFlags::MARKED,
+            Retention::Checkpoint {
+                marking: Marking::Reference,
+                ..
+            } => RetentionFlags::CHECKPOINT | RetentionFlags::REFERENCE,
+            Retention::Checkpoint { .. } => RetentionFlags::CHECKPOINT,
             Retention::Marked => RetentionFlags::MARKED,
+            Retention::Reference => RetentionFlags::REFERENCE,
         }
     }
 }

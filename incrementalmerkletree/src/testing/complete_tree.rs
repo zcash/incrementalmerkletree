@@ -2,6 +2,7 @@
 use std::cmp::min;
 use std::collections::{BTreeMap, BTreeSet};
 
+use crate::Marking;
 use crate::{testing::Tree, Hashable, Level, Position, Retention};
 
 const MAX_COMPLETE_SIZE_ERROR: &str = "Positions of a `CompleteTree` must fit into the platform word size, because larger complete trees are not representable.";
@@ -104,11 +105,11 @@ impl<H: Hashable, C: Clone + Ord + core::fmt::Debug, const DEPTH: u8> CompleteTr
                 append(&mut self.leaves, value, DEPTH)?;
                 self.mark();
             }
-            Retention::Checkpoint { id, is_marked } => {
+            Retention::Checkpoint { id, marking } => {
                 let latest_checkpoint = self.checkpoints.keys().rev().next();
                 if Some(&id) > latest_checkpoint {
                     append(&mut self.leaves, value, DEPTH)?;
-                    if is_marked {
+                    if marking == Marking::Marked {
                         self.mark();
                     }
                     self.checkpoint(id, self.current_position());
@@ -119,7 +120,7 @@ impl<H: Hashable, C: Clone + Ord + core::fmt::Debug, const DEPTH: u8> CompleteTr
                     });
                 }
             }
-            Retention::Ephemeral => {
+            Retention::Ephemeral | Retention::Reference => {
                 append(&mut self.leaves, value, DEPTH)?;
             }
         }

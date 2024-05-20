@@ -1,6 +1,8 @@
 use std::fmt;
 
-use incrementalmerkletree::{witness::IncrementalWitness, Address, Hashable, Level, Retention};
+use incrementalmerkletree::{
+    witness::IncrementalWitness, Address, Hashable, Level, Marking, Retention,
+};
 
 use crate::{
     store::ShardStore, InsertionError, LocatedPrunableTree, LocatedTree, PrunableTree,
@@ -198,7 +200,7 @@ impl<H: Hashable + Clone + PartialEq> LocatedPrunableTree<H> {
                     c.ommers_iter().cloned(),
                     &Retention::Checkpoint {
                         id: checkpoint_id,
-                        is_marked: false,
+                        marking: Marking::None,
                     },
                     self.root_addr.level(),
                 )

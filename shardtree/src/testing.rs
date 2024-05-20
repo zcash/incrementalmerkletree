@@ -86,7 +86,14 @@ where
                     leaf,
                     match (is_checkpoint, is_marked) {
                         (false, false) => Retention::Ephemeral,
-                        (true, is_marked) => Retention::Checkpoint { id, is_marked },
+                        (true, is_marked) => Retention::Checkpoint {
+                            id,
+                            marking: if is_marked {
+                                Marking::Marked
+                            } else {
+                                Marking::None
+                            },
+                        },
                         (false, true) => Retention::Marked,
                     },
                 )
@@ -121,10 +128,10 @@ where
                 .map(|(id, (leaf, retention))| {
                     let pos = Position::try_from(id).unwrap();
                     match retention {
-                        Retention::Ephemeral => (),
-                        Retention::Checkpoint { is_marked, .. } => {
+                        Retention::Ephemeral | Retention::Reference => (),
+                        Retention::Checkpoint { marking, .. } => {
                             checkpoint_positions.push(pos);
-                            if is_marked {
+                            if marking == Marking::Marked {
                                 marked_positions.push(pos);
                             }
                         }
@@ -234,7 +241,7 @@ pub fn check_shardtree_insertion<
         tree.batch_insert(
             Position::from(1),
             vec![
-                ("b".to_string(), Retention::Checkpoint { id: 1, is_marked: false }),
+                ("b".to_string(), Retention::Checkpoint { id: 1, marking: Marking::None }),
                 ("c".to_string(), Retention::Ephemeral),
                 ("d".to_string(), Retention::Marked),
             ].into_iter()
@@ -285,7 +292,7 @@ pub fn check_shardtree_insertion<
             Position::from(10),
             vec![
                 ("k".to_string(), Retention::Ephemeral),
-                ("l".to_string(), Retention::Checkpoint { id: 2, is_marked: false }),
+                ("l".to_string(), Retention::Checkpoint { id: 2, marking: Marking::None }),
                 ("m".to_string(), Retention::Ephemeral),
             ].into_iter()
         ),
@@ -386,7 +393,7 @@ pub fn check_witness_with_pruned_subtrees<
                     'c' => Retention::Marked,
                     'h' => Retention::Checkpoint {
                         id: 3,
-                        is_marked: false,
+                        marking: Marking::None,
                     },
                     _ => Retention::Ephemeral,
                 },

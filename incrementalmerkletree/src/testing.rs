@@ -5,7 +5,7 @@ use core::marker::PhantomData;
 use proptest::prelude::*;
 use std::collections::BTreeSet;
 
-use crate::{Hashable, Level, Position, Retention};
+use crate::{Hashable, Level, Marking, Position, Retention};
 
 pub mod complete_tree;
 
@@ -208,10 +208,22 @@ impl<H: Hashable + Clone, C: Clone> Operation<H, C> {
     }
 }
 
+/// Returns a strategy for creating a uniformly-distributed [`Marking`]
+/// value.
+pub fn arb_marking() -> impl Strategy<Value = Marking> {
+    prop_oneof![
+        Just(Marking::Marked),
+        Just(Marking::Reference),
+        Just(Marking::None)
+    ]
+}
+
+/// Returns a strategy for creating a uniformly-distributed [`Retention`]
+/// value.
 pub fn arb_retention() -> impl Strategy<Value = Retention<()>> {
     prop_oneof![
         Just(Retention::Ephemeral),
-        any::<bool>().prop_map(|is_marked| Retention::Checkpoint { id: (), is_marked }),
+        arb_marking().prop_map(|marking| Retention::Checkpoint { id: (), marking }),
         Just(Retention::Marked),
     ]
 }
@@ -557,7 +569,7 @@ pub fn check_root_hashes<H: TestHashable, C: TestCheckpoint, T: Tree<H, C>, F: F
             0,
             Retention::Checkpoint {
                 id: 1,
-                is_marked: true,
+                marking: Marking::Marked,
             },
         );
         for _ in 0..3 {
@@ -735,7 +747,7 @@ pub fn check_witnesses<H: TestHashable, C: TestCheckpoint, T: Tree<H, C>, F: Fn(
             0,
             Checkpoint {
                 id: 1,
-                is_marked: true,
+                marking: Marking::Marked,
             },
         );
         assert!(tree.rewind());
@@ -769,7 +781,7 @@ pub fn check_witnesses<H: TestHashable, C: TestCheckpoint, T: Tree<H, C>, F: Fn(
             6,
             Checkpoint {
                 id: 1,
-                is_marked: true,
+                marking: Marking::Marked,
             },
         );
         tree.assert_append(7, Ephemeral);
@@ -838,7 +850,7 @@ pub fn check_witnesses<H: TestHashable, C: TestCheckpoint, T: Tree<H, C>, F: Fn(
                 H::from_u64(3),
                 Checkpoint {
                     id: C::from_u64(1),
-                    is_marked: true,
+                    marking: Marking::Marked,
                 },
             ),
             Append(H::from_u64(4), Marked),
@@ -847,21 +859,21 @@ pub fn check_witnesses<H: TestHashable, C: TestCheckpoint, T: Tree<H, C>, F: Fn(
                 H::from_u64(5),
                 Checkpoint {
                     id: C::from_u64(3),
-                    is_marked: false,
+                    marking: Marking::None,
                 },
             ),
             Append(
                 H::from_u64(6),
                 Checkpoint {
                     id: C::from_u64(4),
-                    is_marked: false,
+                    marking: Marking::None,
                 },
             ),
             Append(
                 H::from_u64(7),
                 Checkpoint {
                     id: C::from_u64(5),
-                    is_marked: false,
+                    marking: Marking::None,
                 },
             ),
             Witness(3u64.into(), 5),
@@ -890,7 +902,7 @@ pub fn check_witnesses<H: TestHashable, C: TestCheckpoint, T: Tree<H, C>, F: Fn(
                 H::from_u64(0),
                 Checkpoint {
                     id: C::from_u64(1),
-                    is_marked: true,
+                    marking: Marking::Marked,
                 },
             ),
             Append(H::from_u64(0), Ephemeral),
@@ -900,7 +912,7 @@ pub fn check_witnesses<H: TestHashable, C: TestCheckpoint, T: Tree<H, C>, F: Fn(
                 H::from_u64(0),
                 Checkpoint {
                     id: C::from_u64(2),
-                    is_marked: false,
+                    marking: Marking::None,
                 },
             ),
             Append(H::from_u64(0), Ephemeral),
@@ -939,7 +951,7 @@ pub fn check_witnesses<H: TestHashable, C: TestCheckpoint, T: Tree<H, C>, F: Fn(
                 H::from_u64(0),
                 Checkpoint {
                     id: C::from_u64(4),
-                    is_marked: false,
+                    marking: Marking::None,
                 },
             ),
             Rewind,
@@ -958,14 +970,14 @@ pub fn check_witnesses<H: TestHashable, C: TestCheckpoint, T: Tree<H, C>, F: Fn(
                 H::from_u64(0),
                 Checkpoint {
                     id: C::from_u64(1),
-                    is_marked: true,
+                    marking: Marking::Marked,
                 },
             ),
             Append(
                 H::from_u64(0),
                 Checkpoint {
                     id: C::from_u64(4),
-                    is_marked: false,
+                    marking: Marking::None,
                 },
             ),
             Witness(Position(2), 2),
@@ -1034,7 +1046,7 @@ pub fn check_remove_mark<C: TestCheckpoint, T: Tree<String, C>, F: Fn(usize) -> 
                 "a",
                 Retention::Checkpoint {
                     id: C::from_u64(1),
-                    is_marked: true,
+                    marking: Marking::Marked,
                 },
             ),
             witness(1, 1),

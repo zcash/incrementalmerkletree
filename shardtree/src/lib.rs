@@ -25,6 +25,7 @@
 use core::fmt::Debug;
 use either::Either;
 use incrementalmerkletree::frontier::Frontier;
+use incrementalmerkletree::Marking;
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 use tracing::{debug, trace};
@@ -281,18 +282,19 @@ impl<
             self.insert_frontier_nodes(nonempty_frontier, leaf_retention)
         } else {
             match leaf_retention {
-                Retention::Ephemeral => Ok(()),
+                Retention::Ephemeral | Retention::Reference => Ok(()),
                 Retention::Checkpoint {
                     id,
-                    is_marked: false,
+                    marking: Marking::None | Marking::Reference,
                 } => self
                     .store
                     .add_checkpoint(id, Checkpoint::tree_empty())
                     .map_err(ShardTreeError::Storage),
-                Retention::Checkpoint {
-                    is_marked: true, ..
-                }
-                | Retention::Marked => Err(ShardTreeError::Insert(
+                Retention::Marked
+                | Retention::Checkpoint {
+                    marking: Marking::Marked,
+                    ..
+                } => Err(ShardTreeError::Insert(
                     InsertionError::MarkedRetentionInvalid,
                 )),
             }
@@ -344,7 +346,7 @@ impl<
                 .map_err(ShardTreeError::Storage)?;
         }
 
-        if let Retention::Checkpoint { id, is_marked: _ } = leaf_retention {
+        if let Retention::Checkpoint { id, .. } = leaf_retention {
             trace!("Adding checkpoint {:?} at {:?}", id, leaf_position);
             self.store
                 .add_checkpoint(id, Checkpoint::at_position(leaf_position))
@@ -1310,7 +1312,7 @@ mod tests {
             check_witness_consistency, check_witnesses, complete_tree::CompleteTree, CombinedTree,
             SipHashable,
         },
-        Address, Hashable, Level, Position, Retention,
+        Address, Hashable, Level, Marking, Position, Retention,
     };
 
     use crate::{
@@ -1411,7 +1413,7 @@ mod tests {
                 'd'.to_string(),
                 Retention::Checkpoint {
                     id: 11,
-                    is_marked: false
+                    marking: Marking::None
                 },
             ),
             Ok(()),

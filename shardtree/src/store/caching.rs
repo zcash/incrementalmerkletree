@@ -219,7 +219,7 @@ mod tests {
             append_str, check_operations, unmark, witness, CombinedTree, Operation, TestHashable,
             Tree,
         },
-        Hashable, Position, Retention,
+        Hashable, Marking, Position, Retention,
     };
 
     use super::CachingShardStore;
@@ -300,7 +300,7 @@ mod tests {
                 String::from_u64(0),
                 Checkpoint {
                     id: 1,
-                    is_marked: true,
+                    marking: Marking::Marked,
                 },
             ));
             for _ in 0..3 {
@@ -542,7 +542,7 @@ mod tests {
                 String::from_u64(0),
                 Checkpoint {
                     id: 1,
-                    is_marked: true,
+                    marking: Marking::Marked,
                 },
             ));
             assert!(tree.rewind());
@@ -584,7 +584,7 @@ mod tests {
                 String::from_u64(6),
                 Checkpoint {
                     id: 1,
-                    is_marked: true,
+                    marking: Marking::Marked,
                 },
             ));
             assert!(tree.append(String::from_u64(7), Ephemeral));
@@ -671,7 +671,7 @@ mod tests {
                     String::from_u64(3),
                     Checkpoint {
                         id: 1,
-                        is_marked: true,
+                        marking: Marking::Marked,
                     },
                 ),
                 Append(String::from_u64(4), Marked),
@@ -680,21 +680,21 @@ mod tests {
                     String::from_u64(5),
                     Checkpoint {
                         id: 3,
-                        is_marked: false,
+                        marking: Marking::None,
                     },
                 ),
                 Append(
                     String::from_u64(6),
                     Checkpoint {
                         id: 4,
-                        is_marked: false,
+                        marking: Marking::None,
                     },
                 ),
                 Append(
                     String::from_u64(7),
                     Checkpoint {
                         id: 5,
-                        is_marked: false,
+                        marking: Marking::None,
                     },
                 ),
                 Witness(3u64.into(), 5),
@@ -732,7 +732,7 @@ mod tests {
                     String::from_u64(0),
                     Checkpoint {
                         id: 1,
-                        is_marked: true,
+                        marking: Marking::Marked,
                     },
                 ),
                 Append(String::from_u64(0), Ephemeral),
@@ -742,7 +742,7 @@ mod tests {
                     String::from_u64(0),
                     Checkpoint {
                         id: 2,
-                        is_marked: false,
+                        marking: Marking::None,
                     },
                 ),
                 Append(String::from_u64(0), Ephemeral),
@@ -790,7 +790,7 @@ mod tests {
                     String::from_u64(0),
                     Checkpoint {
                         id: 4,
-                        is_marked: false,
+                        marking: Marking::None,
                     },
                 ),
                 Rewind,
@@ -818,14 +818,14 @@ mod tests {
                     String::from_u64(0),
                     Checkpoint {
                         id: 1,
-                        is_marked: true,
+                        marking: Marking::Marked,
                     },
                 ),
                 Append(
                     String::from_u64(0),
                     Checkpoint {
                         id: 4,
-                        is_marked: false,
+                        marking: Marking::None,
                     },
                 ),
                 Witness(Position::from(2), 2),
@@ -962,7 +962,7 @@ mod tests {
                     "a",
                     Retention::Checkpoint {
                         id: 1,
-                        is_marked: true,
+                        marking: Marking::Marked,
                     },
                 ),
                 witness(1, 1),
