@@ -7,6 +7,10 @@ and this project adheres to Rust's notion of
 
 ## Unreleased
 
+### Added
+- `shardtree::tree::Tree::{is_leaf, map, try_map}`
+- `shardtree::tree::LocatedTree::{map, try_map}`
+
 ## [0.3.1] - 2024-04-03
 
 ### Fixed

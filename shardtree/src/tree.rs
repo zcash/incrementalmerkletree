@@ -117,6 +117,11 @@ impl<A, V> Tree<A, V> {
         Tree(self.0.reannotate(ann))
     }
 
+    /// Returns `true` this is a [`Node::Leaf`], `false` otherwise.
+    pub fn is_leaf(&self) -> bool {
+        matches!(&self.0, Node::Leaf { .. })
+    }
+
     /// Returns `true` if no [`Node::Nil`] nodes are present in the tree, `false` otherwise.
     pub fn is_complete(&self) -> bool {
         match &self.0 {
@@ -151,6 +156,41 @@ impl<A, V> Tree<A, V> {
             Node::Leaf { .. } => vec![],
             Node::Nil => vec![root_addr],
         }
+    }
+
+    /// Applies the provided function to each leaf of the tree and returns
+    /// a new tree having the same structure as the original.
+    pub fn map<B, F: Fn(&V) -> B>(&self, f: &F) -> Tree<A, B>
+    where
+        A: Clone,
+    {
+        match &self.0 {
+            Node::Parent { ann, left, right } => Tree(Node::Parent {
+                ann: ann.clone(),
+                left: Arc::new(left.map(f)),
+                right: Arc::new(right.map(f)),
+            }),
+            Node::Leaf { value } => Tree(Node::Leaf { value: f(value) }),
+            Node::Nil => Tree(Node::Nil),
+        }
+    }
+
+    /// Applies the provided function to each leaf of the tree and returns
+    /// a new tree having the same structure as the original, or an error
+    /// if any transformation of the leaf fails.
+    pub fn try_map<B, E, F: Fn(&V) -> Result<B, E>>(&self, f: &F) -> Result<Tree<A, B>, E>
+    where
+        A: Clone,
+    {
+        Ok(Tree(match &self.0 {
+            Node::Parent { ann, left, right } => Node::Parent {
+                ann: ann.clone(),
+                left: Arc::new(left.try_map(f)?),
+                right: Arc::new(right.try_map(f)?),
+            },
+            Node::Leaf { value } => Node::Leaf { value: f(value)? },
+            Node::Nil => Node::Nil,
+        }))
     }
 }
 
@@ -239,6 +279,31 @@ impl<A, V> LocatedTree<A, V> {
         } else {
             None
         }
+    }
+
+    /// Applies the provided function to each leaf of the tree and returns
+    /// a new tree having the same structure as the original.
+    pub fn map<B, F: Fn(&V) -> B>(&self, f: &F) -> LocatedTree<A, B>
+    where
+        A: Clone,
+    {
+        LocatedTree {
+            root_addr: self.root_addr,
+            root: self.root.map(f),
+        }
+    }
+
+    /// Applies the provided function to each leaf of the tree and returns
+    /// a new tree having the same structure as the original, or an error
+    /// if any transformation of the leaf fails.
+    pub fn try_map<B, E, F: Fn(&V) -> Result<B, E>>(&self, f: &F) -> Result<LocatedTree<A, B>, E>
+    where
+        A: Clone,
+    {
+        Ok(LocatedTree {
+            root_addr: self.root_addr,
+            root: self.root.try_map(f)?,
+        })
     }
 }
 

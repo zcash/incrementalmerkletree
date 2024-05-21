@@ -302,10 +302,11 @@ impl<H: Hashable + Clone + PartialEq> PrunableTree<H> {
         match (left, right) {
             (Tree(Node::Nil), Tree(Node::Nil)) => Tree(Node::Nil),
             (Tree(Node::Leaf { value: lv }), Tree(Node::Leaf { value: rv }))
-                // we can prune right-hand leaves that are not marked; if a leaf
-                // is a checkpoint then that information will be propagated to
-                // the replacement leaf
-                if lv.1 == RetentionFlags::EPHEMERAL && (rv.1 & RetentionFlags::MARKED) == RetentionFlags::EPHEMERAL =>
+                // we can prune right-hand leaves that are not marked or reference leaves; if a
+                // leaf is a checkpoint then that information will be propagated to the replacement
+                // leaf
+                if lv.1 == RetentionFlags::EPHEMERAL &&
+                    (rv.1 & (RetentionFlags::MARKED | RetentionFlags::REFERENCE)) == RetentionFlags::EPHEMERAL =>
             {
                 Tree(
                     Node::Leaf {
@@ -600,12 +601,45 @@ impl<H: Hashable + Clone + PartialEq> LocatedPrunableTree<H> {
 
                 match into {
                     Tree(Node::Nil) => Ok(replacement(None, subtree)),
-                    Tree(Node::Leaf { value: (value, _) }) => {
+                    Tree(Node::Leaf {
+                        value: (value, retention),
+                    }) => {
                         if root_addr == subtree.root_addr {
+                            // The current leaf is at the location we wish to transplant the root
+                            // of the subtree being inserted, so we either replace the leaf
+                            // entirely with the subtree, or reannotate the root so as to avoid
+                            // discarding the existing leaf value.
+
                             if is_complete {
-                                // It is safe to replace the existing root unannotated, because we
-                                // can always recompute the root from a complete subtree.
-                                Ok((subtree.root, vec![]))
+                                Ok((
+                                    if subtree.root.is_leaf() {
+                                        // When replacing a leaf with a leaf, `REFERENCE` retention
+                                        // will be discarded unless both leaves have `REFERENCE`
+                                        // retention.
+                                        subtree
+                                            .root
+                                            .try_map::<(H, RetentionFlags), InsertionError, _>(
+                                                &|(v0, ret0)| {
+                                                    if v0 == value {
+                                                        let retention_result: RetentionFlags =
+                                                            ((*retention | *ret0)
+                                                                - RetentionFlags::REFERENCE)
+                                                                | (RetentionFlags::REFERENCE
+                                                                    & *retention
+                                                                    & *ret0);
+                                                        Ok((value.clone(), retention_result))
+                                                    } else {
+                                                        Err(InsertionError::Conflict(root_addr))
+                                                    }
+                                                },
+                                            )?
+                                    } else {
+                                        // It is safe to replace the existing root unannotated, because we
+                                        // can always recompute the root from a complete subtree.
+                                        subtree.root
+                                    },
+                                    vec![],
+                                ))
                             } else if subtree.root.node_value().iter().all(|v| v == &value) {
                                 Ok((
                                     // at this point we statically know the root to be a parent
@@ -932,7 +966,7 @@ mod tests {
 
     use super::{LocatedPrunableTree, PrunableTree, RetentionFlags};
     use crate::{
-        error::QueryError,
+        error::{InsertionError, QueryError},
         tree::{
             tests::{leaf, nil, parent},
             LocatedTree,
@@ -1101,21 +1135,16 @@ mod tests {
             root: parent(leaf(("a".to_string(), RetentionFlags::MARKED)), nil()),
         };
 
+        let conflict_addr = Address::from_parts(1.into(), 2);
         assert_eq!(
             t.insert_subtree(
                 LocatedTree {
-                    root_addr: Address::from_parts(1.into(), 2),
+                    root_addr: conflict_addr,
                     root: leaf(("b".to_string(), RetentionFlags::EPHEMERAL)),
                 },
                 false,
             ),
-            Ok((
-                LocatedTree {
-                    root_addr: Address::from_parts(2.into(), 1),
-                    root: parent(leaf(("b".to_string(), RetentionFlags::EPHEMERAL)), nil()),
-                },
-                vec![],
-            )),
+            Err(InsertionError::Conflict(conflict_addr)),
         );
     }
 
