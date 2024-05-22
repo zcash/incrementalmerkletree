@@ -8,8 +8,22 @@ and this project adheres to Rust's notion of
 ## Unreleased
 
 ### Added
-- `shardtree::tree::Tree::{is_leaf, map, try_map}`
+- `shardtree::tree::Tree::{is_leaf, map, try_map, empty_pruned}`
 - `shardtree::tree::LocatedTree::{map, try_map}`
+- `shardtree::prunable::PrunableTree::{has_computable_root}`
+
+### Changed
+- `shardtree::tree::Node` has additional variant `Node::Pruned`.
+
+### Removed
+- `shardtree::tree::Tree::is_complete` as it is no longer well-defined in the
+  presence of `Pruned` nodes. Use `PrunableTree::has_computable_root` to
+  determine whether it is possible to compute the root of a tree.
+
+### Fixed
+- Fixes an error that could occur if an inserted `Frontier` node was
+  interpreted as a node that had actually had its value observed as though it
+  had been inserted using the ordinary tree insertion methods.
 
 ## [0.3.1] - 2024-04-03
 

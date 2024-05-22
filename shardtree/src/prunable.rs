@@ -100,12 +100,25 @@ impl<H: Hashable + Clone + PartialEq> PrunableTree<H> {
             .map_or(false, |(_, retention)| retention.is_marked())
     }
 
+    /// Returns `true` if it is possible to compute or retrieve the Merkle root of this
+    /// tree.
+    pub fn has_computable_root(&self) -> bool {
+        match &self.0 {
+            Node::Parent { ann, left, right } => {
+                ann.is_some()
+                    || (left.as_ref().has_computable_root() && right.as_ref().has_computable_root())
+            }
+            Node::Leaf { .. } => true,
+            Node::Nil | Node::Pruned => false,
+        }
+    }
+
     /// Determines whether a tree has any [`Retention::Marked`] nodes.
     pub fn contains_marked(&self) -> bool {
         match &self.0 {
             Node::Parent { left, right, .. } => left.contains_marked() || right.contains_marked(),
             Node::Leaf { value: (_, r) } => r.is_marked(),
-            Node::Nil => false,
+            Node::Nil | Node::Pruned => false,
         }
     }
 
@@ -122,8 +135,8 @@ impl<H: Hashable + Clone + PartialEq> PrunableTree<H> {
             // so no need to inspect the tree
             Ok(H::empty_root(root_addr.level()))
         } else {
-            match self {
-                Tree(Node::Parent { ann, left, right }) => ann
+            match &self.0 {
+                Node::Parent { ann, left, right } => ann
                     .as_ref()
                     .filter(|_| truncate_at >= root_addr.position_range_end())
                     .map_or_else(
@@ -145,7 +158,7 @@ impl<H: Hashable + Clone + PartialEq> PrunableTree<H> {
                             Ok(rc.as_ref().clone())
                         },
                     ),
-                Tree(Node::Leaf { value }) => {
+                Node::Leaf { value } => {
                     if truncate_at >= root_addr.position_range_end() {
                         // no truncation of this leaf is necessary, just use it
                         Ok(value.0.clone())
@@ -157,7 +170,7 @@ impl<H: Hashable + Clone + PartialEq> PrunableTree<H> {
                         Err(vec![root_addr])
                     }
                 }
-                Tree(Node::Nil) => Err(vec![root_addr]),
+                Node::Nil | Node::Pruned => Err(vec![root_addr]),
             }
         }
     }
@@ -192,7 +205,7 @@ impl<H: Hashable + Clone + PartialEq> PrunableTree<H> {
                 }
                 result
             }
-            Node::Nil => BTreeSet::new(),
+            Node::Nil | Node::Pruned => BTreeSet::new(),
         }
     }
 
@@ -229,6 +242,7 @@ impl<H: Hashable + Clone + PartialEq> PrunableTree<H> {
             let no_default_fill = addr.position_range_end();
             match (t0, t1) {
                 (Tree(Node::Nil), other) | (other, Tree(Node::Nil)) => Ok(other),
+                (Tree(Node::Pruned), other) | (other, Tree(Node::Pruned)) => Ok(other),
                 (Tree(Node::Leaf { value: vl }), Tree(Node::Leaf { value: vr })) => {
                     if vl.0 == vr.0 {
                         // Merge the flags together.
@@ -301,6 +315,8 @@ impl<H: Hashable + Clone + PartialEq> PrunableTree<H> {
     pub(crate) fn unite(level: Level, ann: Option<Arc<H>>, left: Self, right: Self) -> Self {
         match (left, right) {
             (Tree(Node::Nil), Tree(Node::Nil)) => Tree(Node::Nil),
+            (Tree(Node::Nil | Node::Pruned), Tree(Node::Pruned)) => Tree(Node::Pruned),
+            (Tree(Node::Pruned), Tree(Node::Nil)) => Tree(Node::Pruned),
             (Tree(Node::Leaf { value: lv }), Tree(Node::Leaf { value: rv }))
                 // we can prune right-hand leaves that are not marked or reference leaves; if a
                 // leaf is a checkpoint then that information will be propagated to the replacement
@@ -518,7 +534,7 @@ impl<H: Hashable + Clone + PartialEq> LocatedPrunableTree<H> {
                         None
                     }
                 }
-                Node::Nil => None,
+                Node::Nil | Node::Pruned => None,
             }
         }
 
@@ -555,7 +571,6 @@ impl<H: Hashable + Clone + PartialEq> LocatedPrunableTree<H> {
             root_addr: Address,
             into: &PrunableTree<H>,
             subtree: LocatedPrunableTree<H>,
-            is_complete: bool,
             contains_marked: bool,
         ) -> Result<(PrunableTree<H>, Vec<IncompleteAt>), InsertionError> {
             trace!(
@@ -571,7 +586,9 @@ impl<H: Hashable + Clone + PartialEq> LocatedPrunableTree<H> {
                 // In the case that we are replacing a node entirely, we need to extend the
                 // subtree up to the level of the node being replaced, adding Nil siblings
                 // and recording the presence of those incomplete nodes when necessary
-                let replacement = |ann: Option<Arc<H>>, mut node: LocatedPrunableTree<H>| {
+                let replacement = |ann: Option<Arc<H>>,
+                                   mut node: LocatedPrunableTree<H>,
+                                   pruned: bool| {
                     // construct the replacement node bottom-up
                     let mut incomplete = vec![];
                     while node.root_addr.level() < root_addr.level() {
@@ -579,19 +596,21 @@ impl<H: Hashable + Clone + PartialEq> LocatedPrunableTree<H> {
                             address: node.root_addr.sibling(),
                             required_for_witness: contains_marked,
                         });
+                        let empty = Arc::new(Tree(if pruned { Node::Pruned } else { Node::Nil }));
+                        let full = Arc::new(node.root);
                         node = LocatedTree {
                             root_addr: node.root_addr.parent(),
                             root: if node.root_addr.is_right_child() {
                                 Tree(Node::Parent {
                                     ann: None,
-                                    left: Arc::new(Tree(Node::Nil)),
-                                    right: Arc::new(node.root),
+                                    left: empty,
+                                    right: full,
                                 })
                             } else {
                                 Tree(Node::Parent {
                                     ann: None,
-                                    left: Arc::new(node.root),
-                                    right: Arc::new(Tree(Node::Nil)),
+                                    left: full,
+                                    right: empty,
                                 })
                             },
                         };
@@ -600,7 +619,8 @@ impl<H: Hashable + Clone + PartialEq> LocatedPrunableTree<H> {
                 };
 
                 match into {
-                    Tree(Node::Nil) => Ok(replacement(None, subtree)),
+                    Tree(Node::Nil) => Ok(replacement(None, subtree, false)),
+                    Tree(Node::Pruned) => Ok(replacement(None, subtree, true)),
                     Tree(Node::Leaf {
                         value: (value, retention),
                     }) => {
@@ -610,7 +630,7 @@ impl<H: Hashable + Clone + PartialEq> LocatedPrunableTree<H> {
                             // entirely with the subtree, or reannotate the root so as to avoid
                             // discarding the existing leaf value.
 
-                            if is_complete {
+                            if subtree.root.has_computable_root() {
                                 Ok((
                                     if subtree.root.is_leaf() {
                                         // When replacing a leaf with a leaf, `REFERENCE` retention
@@ -635,7 +655,7 @@ impl<H: Hashable + Clone + PartialEq> LocatedPrunableTree<H> {
                                             )?
                                     } else {
                                         // It is safe to replace the existing root unannotated, because we
-                                        // can always recompute the root from a complete subtree.
+                                        // can always recompute the root from the subtree.
                                         subtree.root
                                     },
                                     vec![],
@@ -655,7 +675,22 @@ impl<H: Hashable + Clone + PartialEq> LocatedPrunableTree<H> {
                                 Err(InsertionError::Conflict(root_addr))
                             }
                         } else {
-                            Ok(replacement(Some(Arc::new(value.clone())), subtree))
+                            Ok(replacement(
+                                Some(Arc::new(value.clone())),
+                                subtree,
+                                // The subtree being inserted may have its root at some level lower
+                                // than the next level down. The siblings of nodes that will be
+                                // generated while descending to the subtree root level will be
+                                // `Nil` nodes (indicating that the value of these nodes have never
+                                // been observed) if the leaf being replaced has `REFERENCE`
+                                // retention. Any other leaf without `REFERENCE` retention will
+                                // have been produced by pruning of previously observed node
+                                // values, so in those cases we use `Pruned` nodes for the absent
+                                // siblings. This allows us to retain the distinction between what
+                                // parts of the tree have been directly observed and what parts
+                                // have not.
+                                !retention.contains(RetentionFlags::REFERENCE),
+                            ))
                         }
                     }
                     parent if root_addr == subtree.root_addr => {
@@ -673,7 +708,7 @@ impl<H: Hashable + Clone + PartialEq> LocatedPrunableTree<H> {
                         let (l_addr, r_addr) = root_addr.children().unwrap();
                         if l_addr.contains(&subtree.root_addr) {
                             let (new_left, incomplete) =
-                                go(l_addr, left.as_ref(), subtree, is_complete, contains_marked)?;
+                                go(l_addr, left.as_ref(), subtree, contains_marked)?;
                             Ok((
                                 Tree::unite(
                                     root_addr.level() - 1,
@@ -684,13 +719,8 @@ impl<H: Hashable + Clone + PartialEq> LocatedPrunableTree<H> {
                                 incomplete,
                             ))
                         } else {
-                            let (new_right, incomplete) = go(
-                                r_addr,
-                                right.as_ref(),
-                                subtree,
-                                is_complete,
-                                contains_marked,
-                            )?;
+                            let (new_right, incomplete) =
+                                go(r_addr, right.as_ref(), subtree, contains_marked)?;
                             Ok((
                                 Tree::unite(
                                     root_addr.level() - 1,
@@ -710,22 +740,16 @@ impl<H: Hashable + Clone + PartialEq> LocatedPrunableTree<H> {
         trace!(
             max_position = ?max_position,
             tree = ?self,
-            subtree_complete = subtree.root.is_complete(),
             to_insert = ?subtree,
             "Current shard"
         );
         let LocatedTree { root_addr, root } = self;
         if root_addr.contains(&subtree.root_addr) {
-            let complete = subtree.root.is_complete();
-            go(*root_addr, root, subtree, complete, contains_marked).map(|(root, incomplete)| {
+            go(*root_addr, root, subtree, contains_marked).map(|(root, incomplete)| {
                 let new_tree = LocatedTree {
                     root_addr: *root_addr,
                     root,
                 };
-                trace!(
-                    max_position = ?new_tree.max_position(),
-                    "Replacement shard"
-                );
                 assert!(new_tree.max_position() >= max_position);
                 (new_tree, incomplete)
             })
@@ -786,9 +810,7 @@ impl<H: Hashable + Clone + PartialEq> LocatedPrunableTree<H> {
         split_at: Level,
     ) -> (Self, Option<Self>) {
         let mut addr = Address::from(position);
-        let mut subtree = Tree(Node::Leaf {
-            value: (leaf, leaf_retention.into()),
-        });
+        let mut subtree = Tree::leaf((leaf, leaf_retention.into()));
 
         while addr.level() < split_at {
             if addr.is_left_child() {
@@ -890,8 +912,8 @@ impl<H: Hashable + Clone + PartialEq> LocatedPrunableTree<H> {
                 // nothing to do, so we just return the root
                 root.clone()
             } else {
-                match root {
-                    Tree(Node::Parent { ann, left, right }) => {
+                match &root.0 {
+                    Node::Parent { ann, left, right } => {
                         let (l_addr, r_addr) = root_addr.children().unwrap();
 
                         let p = to_clear.partition_point(|(p, _)| p < &l_addr.position_range_end());
@@ -908,7 +930,7 @@ impl<H: Hashable + Clone + PartialEq> LocatedPrunableTree<H> {
                             go(&to_clear[p..], r_addr, right),
                         )
                     }
-                    Tree(Node::Leaf { value: (h, r) }) => {
+                    Node::Leaf { value: (h, r) } => {
                         trace!("In {:?}, clearing {:?}", root_addr, to_clear);
                         // When we reach a leaf, we should be down to just a single position
                         // which should correspond to the last level-0 child of the address's
@@ -916,18 +938,16 @@ impl<H: Hashable + Clone + PartialEq> LocatedPrunableTree<H> {
                         // a partially-pruned branch, and if it's a marked node then it will
                         // be a level-0 leaf.
                         match to_clear {
-                            [(pos, flags)] => {
-                                assert_eq!(*pos, root_addr.max_position());
-                                Tree(Node::Leaf {
-                                    value: (h.clone(), *r & !*flags),
-                                })
-                            }
+                            [(_, flags)] => Tree(Node::Leaf {
+                                value: (h.clone(), *r & !*flags),
+                            }),
                             _ => {
                                 panic!("Tree state inconsistent with checkpoints.");
                             }
                         }
                     }
-                    Tree(Node::Nil) => Tree(Node::Nil),
+                    Node::Nil => Tree(Node::Nil),
+                    Node::Pruned => Tree(Node::Pruned),
                 }
             }
         }
@@ -1129,7 +1149,7 @@ mod tests {
     }
 
     #[test]
-    fn located_insert_subtree_leaf_overwrites() {
+    fn located_insert_subtree_prevents_leaf_overwrite_conflict() {
         let t: LocatedPrunableTree<String> = LocatedTree {
             root_addr: Address::from_parts(2.into(), 1),
             root: parent(leaf(("a".to_string(), RetentionFlags::MARKED)), nil()),

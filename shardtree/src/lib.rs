@@ -234,16 +234,17 @@ impl<
 
         let (append_result, position, checkpoint_id) =
             if let Some(subtree) = self.store.last_shard().map_err(ShardTreeError::Storage)? {
-                if subtree.root.is_complete() {
-                    let addr = subtree.root_addr;
-
-                    if addr.index() < Self::max_subtree_index() {
-                        LocatedTree::empty(addr.next_at_level()).append(value, retention)?
-                    } else {
-                        return Err(InsertionError::TreeFull.into());
+                match subtree.max_position() {
+                    // If the subtree is full, then construct a successor tree.
+                    Some(pos) if pos == subtree.root_addr.max_position() => {
+                        let addr = subtree.root_addr;
+                        if subtree.root_addr.index() < Self::max_subtree_index() {
+                            LocatedTree::empty(addr.next_at_level()).append(value, retention)?
+                        } else {
+                            return Err(InsertionError::TreeFull.into());
+                        }
                     }
-                } else {
-                    subtree.append(value, retention)?
+                    _ => subtree.append(value, retention)?,
                 }
             } else {
                 let root_addr = Address::from_parts(Self::subtree_level(), 0);
@@ -412,8 +413,8 @@ impl<
             root_addr: Address,
             root: &PrunableTree<H>,
         ) -> Option<(PrunableTree<H>, Position)> {
-            match root {
-                Tree(Node::Parent { ann, left, right }) => {
+            match &root.0 {
+                Node::Parent { ann, left, right } => {
                     let (l_addr, r_addr) = root_addr.children().unwrap();
                     go(r_addr, right).map_or_else(
                         || {
@@ -442,13 +443,13 @@ impl<
                         },
                     )
                 }
-                Tree(Node::Leaf { value: (h, r) }) => Some((
+                Node::Leaf { value: (h, r) } => Some((
                     Tree(Node::Leaf {
                         value: (h.clone(), *r | RetentionFlags::CHECKPOINT),
                     }),
                     root_addr.max_position(),
                 )),
-                Tree(Node::Nil) => None,
+                Node::Nil | Node::Pruned => None,
             }
         }
 
@@ -576,12 +577,19 @@ impl<
 
             // Prune each affected subtree
             for (subtree_addr, positions) in clear_positions.into_iter() {
-                let cleared = self
+                let to_clear = self
                     .store
                     .get_shard(subtree_addr)
-                    .map_err(ShardTreeError::Storage)?
-                    .map(|subtree| subtree.clear_flags(positions));
-                if let Some(cleared) = cleared {
+                    .map_err(ShardTreeError::Storage)?;
+
+                if let Some(to_clear) = to_clear {
+                    let pre_clearing_max_position = to_clear.max_position();
+                    let cleared = to_clear.clear_flags(positions);
+
+                    // Clearing flags should not modify the max position of leaves represented
+                    // in the shard.
+                    assert!(cleared.max_position() == pre_clearing_max_position);
+
                     self.store
                         .put_shard(cleared)
                         .map_err(ShardTreeError::Storage)?;
@@ -757,8 +765,8 @@ impl<
         // roots.
         truncate_at: Position,
     ) -> Result<(H, Option<PrunableTree<H>>), ShardTreeError<S::Error>> {
-        match &cap.root {
-            Tree(Node::Parent { ann, left, right }) => {
+        match &cap.root.0 {
+            Node::Parent { ann, left, right } => {
                 match ann {
                     Some(cached_root) if target_addr.contains(&cap.root_addr) => {
                         Ok((cached_root.as_ref().clone(), None))
@@ -832,7 +840,7 @@ impl<
                     }
                 }
             }
-            Tree(Node::Leaf { value }) => {
+            Node::Leaf { value } => {
                 if truncate_at >= cap.root_addr.position_range_end()
                     && target_addr.contains(&cap.root_addr)
                 {
@@ -857,7 +865,7 @@ impl<
                     ))
                 }
             }
-            Tree(Node::Nil) => {
+            Node::Nil | Node::Pruned => {
                 if cap.root_addr == target_addr
                     || cap.root_addr.level() == ShardTree::<S, DEPTH, SHARD_HEIGHT>::subtree_level()
                 {
@@ -867,7 +875,7 @@ impl<
                     Ok((
                         root.clone(),
                         if truncate_at >= cap.root_addr.position_range_end() {
-                            // return the compute root as a new leaf to be cached if it contains no
+                            // return the computed root as a new leaf to be cached if it contains no
                             // empty hashes due to truncation
                             Some(Tree::leaf((root, RetentionFlags::EPHEMERAL)))
                         } else {
@@ -1301,21 +1309,24 @@ impl<
 
 #[cfg(test)]
 mod tests {
+    use std::convert::Infallible;
+
     use assert_matches::assert_matches;
     use proptest::prelude::*;
 
     use incrementalmerkletree::{
-        frontier::NonEmptyFrontier,
+        frontier::{Frontier, NonEmptyFrontier},
         testing::{
             arb_operation, check_append, check_checkpoint_rewind, check_operations,
             check_remove_mark, check_rewind_remove_mark, check_root_hashes,
             check_witness_consistency, check_witnesses, complete_tree::CompleteTree, CombinedTree,
             SipHashable,
         },
-        Address, Hashable, Level, Marking, Position, Retention,
+        Address, Hashable, Level, Marking, MerklePath, Position, Retention,
     };
 
     use crate::{
+        error::{QueryError, ShardTreeError},
         store::memory::MemoryShardStore,
         testing::{
             arb_char_str, arb_shardtree, check_shard_sizes, check_shardtree_insertion,
@@ -1418,6 +1429,95 @@ mod tests {
             ),
             Ok(()),
         );
+    }
+
+    #[test]
+    fn avoid_pruning_reference() {
+        fn test_with_marking(
+            frontier_marking: Marking,
+        ) -> Result<MerklePath<String, 6>, ShardTreeError<Infallible>> {
+            let mut tree = ShardTree::<MemoryShardStore<String, usize>, 6, 3>::new(
+                MemoryShardStore::empty(),
+                5,
+            );
+
+            let frontier_end = Position::from((1 << 3) - 3);
+            let mut f0 = Frontier::<String, 6>::empty();
+            for c in 'a'..='f' {
+                f0.append(c.to_string());
+            }
+
+            let frontier = Frontier::from_parts(
+                frontier_end,
+                "f".to_owned(),
+                vec!["e".to_owned(), "abcd".to_owned()],
+            )
+            .unwrap();
+
+            // Insert a frontier two leaves from the end of the first shard, checkpointed,
+            // with the specified marking.
+            tree.insert_frontier(
+                frontier,
+                Retention::Checkpoint {
+                    id: 1,
+                    marking: frontier_marking,
+                },
+            )?;
+
+            // Insert a few leaves beginning at the subsequent position, so as to cross the shard
+            // boundary.
+            tree.batch_insert(
+                frontier_end + 1,
+                ('g'..='j')
+                    .into_iter()
+                    .map(|c| (c.to_string(), Retention::Ephemeral)),
+            )?;
+
+            // Trigger pruning by adding 5 more checkpoints
+            for i in 2..7 {
+                tree.checkpoint(i).unwrap();
+            }
+
+            // Insert nodes that require the pruned nodes for witnessing
+            tree.batch_insert(
+                frontier_end - 1,
+                ('e'..='f')
+                    .into_iter()
+                    .map(|c| (c.to_string(), Retention::Marked)),
+            )?;
+
+            // Compute the witness
+            tree.witness_at_checkpoint_id(frontier_end, &6)
+        }
+
+        // If we insert the frontier with Marking::None, the frontier nodes are treated
+        // as ephemeral nodes and are pruned, leaving an incomplete tree.
+        assert_matches!(
+            test_with_marking(Marking::None),
+            Err(ShardTreeError::Query(QueryError::TreeIncomplete(_)))
+        );
+
+        // If we insert the frontier with Marking::Reference, the frontier nodes will
+        // not be pruned on completion of the subtree, and thus we'll be able to compute
+        // the witness.
+        let expected_witness = MerklePath::from_parts(
+            [
+                "e",
+                "gh",
+                "abcd",
+                "ij______",
+                "________________",
+                "________________________________",
+            ]
+            .iter()
+            .map(|s| s.to_string())
+            .collect(),
+            Position::from(5),
+        )
+        .unwrap();
+
+        let witness = test_with_marking(Marking::Reference).unwrap();
+        assert_eq!(witness, expected_witness);
     }
 
     // Combined tree tests

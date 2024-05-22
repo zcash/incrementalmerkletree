@@ -106,14 +106,14 @@ impl<C> Retention<C> {
     /// Returns whether the associated node has [`Retention::Marked`] retention
     /// or [`Retention::Checkpoint`] retention with [`Marking::Marked`] marking.
     pub fn is_marked(&self) -> bool {
-        match self {
+        matches!(
+            self,
             Retention::Marked
-            | Retention::Checkpoint {
-                marking: Marking::Marked,
-                ..
-            } => true,
-            _ => false,
-        }
+                | Retention::Checkpoint {
+                    marking: Marking::Marked,
+                    ..
+                }
+        )
     }
 
     /// Applies the provided function to the checkpoint identifier, if any, and returns a new

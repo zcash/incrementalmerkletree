@@ -19,6 +19,9 @@ pub enum Node<C, A, V> {
     Leaf { value: V },
     /// The empty tree; a subtree or leaf for which no information is available.
     Nil,
+    /// An empty node in the tree created as a consequence of partial reinserion of data into a
+    /// subtree after the subtree was previously pruned.
+    Pruned,
 }
 
 impl<C, A, V> Node<C, A, V> {
@@ -35,7 +38,8 @@ impl<C, A, V> Node<C, A, V> {
         match self {
             Node::Parent { .. } => None,
             Node::Leaf { value } => Some(value),
-            Node::Nil { .. } => None,
+            Node::Nil => None,
+            Node::Pruned => None,
         }
     }
 
@@ -45,6 +49,7 @@ impl<C, A, V> Node<C, A, V> {
             Node::Parent { ann, .. } => Some(ann),
             Node::Leaf { .. } => None,
             Node::Nil => None,
+            Node::Pruned => None,
         }
     }
 
@@ -71,6 +76,7 @@ impl<'a, C: Clone, A: Clone, V: Clone> Node<C, &'a A, &'a V> {
                 value: (*value).clone(),
             },
             Node::Nil => Node::Nil,
+            Node::Pruned => Node::Pruned,
         }
     }
 }
@@ -90,6 +96,11 @@ impl<A, V> Tree<A, V> {
     /// Constructs the empty tree.
     pub fn empty() -> Self {
         Tree(Node::Nil)
+    }
+
+    /// Constructs the empty tree consisting of a single pruned node.
+    pub fn empty_pruned() -> Self {
+        Tree(Node::Pruned)
     }
 
     /// Constructs a tree containing a single leaf.
@@ -122,18 +133,8 @@ impl<A, V> Tree<A, V> {
         matches!(&self.0, Node::Leaf { .. })
     }
 
-    /// Returns `true` if no [`Node::Nil`] nodes are present in the tree, `false` otherwise.
-    pub fn is_complete(&self) -> bool {
-        match &self.0 {
-            Node::Parent { left, right, .. } => {
-                left.as_ref().is_complete() && right.as_ref().is_complete()
-            }
-            Node::Leaf { .. } => true,
-            Node::Nil { .. } => false,
-        }
-    }
-
-    /// Returns a vector of the addresses of [`Node::Nil`] subtree roots within this tree.
+    /// Returns a vector of the addresses of [`Node::Nil`] and [`Node::Pruned`] subtree roots
+    /// within this tree.
     ///
     /// The given address must correspond to the root of this tree, or this method will
     /// yield incorrect results or may panic.
@@ -154,7 +155,7 @@ impl<A, V> Tree<A, V> {
                 left_incomplete
             }
             Node::Leaf { .. } => vec![],
-            Node::Nil => vec![root_addr],
+            Node::Nil | Node::Pruned => vec![root_addr],
         }
     }
 
@@ -164,15 +165,16 @@ impl<A, V> Tree<A, V> {
     where
         A: Clone,
     {
-        match &self.0 {
-            Node::Parent { ann, left, right } => Tree(Node::Parent {
+        Tree(match &self.0 {
+            Node::Parent { ann, left, right } => Node::Parent {
                 ann: ann.clone(),
                 left: Arc::new(left.map(f)),
                 right: Arc::new(right.map(f)),
-            }),
-            Node::Leaf { value } => Tree(Node::Leaf { value: f(value) }),
-            Node::Nil => Tree(Node::Nil),
-        }
+            },
+            Node::Leaf { value } => Node::Leaf { value: f(value) },
+            Node::Nil => Node::Nil,
+            Node::Pruned => Node::Pruned,
+        })
     }
 
     /// Applies the provided function to each leaf of the tree and returns
@@ -190,6 +192,7 @@ impl<A, V> Tree<A, V> {
             },
             Node::Leaf { value } => Node::Leaf { value: f(value)? },
             Node::Nil => Node::Nil,
+            Node::Pruned => Node::Pruned,
         }))
     }
 }
@@ -248,7 +251,7 @@ impl<A, V> LocatedTree<A, V> {
     pub(crate) fn max_position_internal(addr: Address, root: &Tree<A, V>) -> Option<Position> {
         match &root.0 {
             Node::Nil => None,
-            Node::Leaf { .. } => Some(addr.position_range_end() - 1),
+            Node::Leaf { .. } | Node::Pruned => Some(addr.position_range_end() - 1),
             Node::Parent { left, right, .. } => {
                 let (l_addr, r_addr) = addr.children().unwrap();
                 Self::max_position_internal(r_addr, right.as_ref())
