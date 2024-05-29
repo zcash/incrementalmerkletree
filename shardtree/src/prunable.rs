@@ -315,8 +315,6 @@ impl<H: Hashable + Clone + PartialEq> PrunableTree<H> {
     pub(crate) fn unite(level: Level, ann: Option<Arc<H>>, left: Self, right: Self) -> Self {
         match (left, right) {
             (Tree(Node::Nil), Tree(Node::Nil)) => Tree(Node::Nil),
-            (Tree(Node::Nil | Node::Pruned), Tree(Node::Pruned)) => Tree(Node::Pruned),
-            (Tree(Node::Pruned), Tree(Node::Nil)) => Tree(Node::Pruned),
             (Tree(Node::Leaf { value: lv }), Tree(Node::Leaf { value: rv }))
                 // we can prune right-hand leaves that are not marked or reference leaves; if a
                 // leaf is a checkpoint then that information will be propagated to the replacement
