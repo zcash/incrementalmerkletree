@@ -62,35 +62,73 @@ pub mod witness;
 #[cfg_attr(docsrs, doc(cfg(feature = "test-dependencies")))]
 pub mod testing;
 
+/// An enumeration of the additional marking states that can be applied
+/// to leaves with [`Retention::Checkpoint`] retention.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
+pub enum Marking {
+    /// A checkpoint with `Marked` marking will have `Marked` retention after `Checkpoint`
+    /// retention is removed.
+    Marked,
+    /// A checkpoint with `Reference` marking will have `Reference` retention after `Checkpoint`
+    /// retention is removed.
+    Reference,
+    /// A checkpoint with `None` marking will have `Ephemeral` retention after `Checkpoint`
+    /// retention is removed.
+    None,
+}
+
 /// A type for metadata that is used to determine when and how a leaf can be pruned from a tree.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub enum Retention<C> {
+    /// A leaf with `Ephemeral` retention will be pruned whenever its sibling is also a leaf with
+    /// `Ephemeral` retention.
     Ephemeral,
-    Checkpoint { id: C, is_marked: bool },
+    /// A leaf with `Checkpoint` retention will have its position retained in the tree
+    /// during pruning, but its value may be pruned (by merging with its sibling). If
+    /// `Checkpoint` retention is removed from the leaf, then the retention for the leaf will
+    /// become either `Ephemeral`, `Marked`, or `Reference` depending upon the value of the
+    /// `marking` field.
+    Checkpoint { id: C, marking: Marking },
+    /// A leaf with `Marked` retention will be retained in the tree during pruning. `Marked`
+    /// retention may only be explicitly removed.
     Marked,
+    /// A leaf with `Reference` retention will be retained in the tree during pruning. `Reference`
+    /// retention is removed whenever the associated leaf is overwritten with a tree node having
+    /// `Ephemeral`, `Checkpoint`, or `Marked` retention.
+    Reference,
 }
 
 impl<C> Retention<C> {
+    /// Returns whether the associated node has [`Retention::Checkpoint`] retention.
     pub fn is_checkpoint(&self) -> bool {
         matches!(self, Retention::Checkpoint { .. })
     }
 
+    /// Returns whether the associated node has [`Retention::Marked`] retention
+    /// or [`Retention::Checkpoint`] retention with [`Marking::Marked`] marking.
     pub fn is_marked(&self) -> bool {
-        match self {
-            Retention::Ephemeral => false,
-            Retention::Checkpoint { is_marked, .. } => *is_marked,
-            Retention::Marked => true,
-        }
+        matches!(
+            self,
+            Retention::Marked
+                | Retention::Checkpoint {
+                    marking: Marking::Marked,
+                    ..
+                }
+        )
     }
 
+    /// Applies the provided function to the checkpoint identifier, if any, and returns a new
+    /// `Retention` value having the same structure with the resulting value used as the checkpoint
+    /// identifier.
     pub fn map<'a, D, F: Fn(&'a C) -> D>(&'a self, f: F) -> Retention<D> {
         match self {
             Retention::Ephemeral => Retention::Ephemeral,
-            Retention::Checkpoint { id, is_marked } => Retention::Checkpoint {
+            Retention::Checkpoint { id, marking } => Retention::Checkpoint {
                 id: f(id),
-                is_marked: *is_marked,
+                marking: *marking,
             },
             Retention::Marked => Retention::Marked,
+            Retention::Reference => Retention::Reference,
         }
     }
 }

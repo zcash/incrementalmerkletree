@@ -7,6 +7,15 @@ and this project adheres to Rust's notion of
 
 ## Unreleased
 
+### Added
+- `incrementalmerkletree::Marking`
+
+### Changed
+- `incrementalmerkletree::Retention`
+  - Has added variant `Retention::Reference`
+  - `Retention::Checkpoint::is_marked` has been replaced by `Retention::Checkpoint::marking`
+    to permit checkpoints with `Reference` retention to be represented.
+
 ## [0.5.1] - 2024-03-25
 
 ### Added

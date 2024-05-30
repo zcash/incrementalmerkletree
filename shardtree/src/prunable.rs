@@ -4,10 +4,11 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 
 use bitflags::bitflags;
+use incrementalmerkletree::Marking;
 use incrementalmerkletree::{
     frontier::NonEmptyFrontier, Address, Hashable, Level, Position, Retention,
 };
-use tracing::trace;
+use tracing::{trace, warn};
 
 use crate::error::{InsertionError, QueryError};
 use crate::{LocatedTree, Node, Tree};
@@ -30,6 +31,12 @@ bitflags! {
         /// A leaf with `MARKED` retention can be pruned only as a consequence of an explicit deletion
         /// action.
         const MARKED = 0b00000010;
+
+        /// A leaf with `REFERENCE` retention will not be considered prunable until the `REFERENCE`
+        /// flag is removed from the leaf. The `REFERENCE` flag will be removed at any point that
+        /// the leaf is overwritten without `REFERENCE` retention, and `REFERENCE` retention cannot
+        /// be added to an existing leaf.
+        const REFERENCE = 0b00000100;
     }
 }
 
@@ -47,14 +54,17 @@ impl<'a, C> From<&'a Retention<C>> for RetentionFlags {
     fn from(retention: &'a Retention<C>) -> Self {
         match retention {
             Retention::Ephemeral => RetentionFlags::EPHEMERAL,
-            Retention::Checkpoint { is_marked, .. } => {
-                if *is_marked {
-                    RetentionFlags::CHECKPOINT | RetentionFlags::MARKED
-                } else {
-                    RetentionFlags::CHECKPOINT
-                }
-            }
+            Retention::Checkpoint {
+                marking: Marking::Marked,
+                ..
+            } => RetentionFlags::CHECKPOINT | RetentionFlags::MARKED,
+            Retention::Checkpoint {
+                marking: Marking::Reference,
+                ..
+            } => RetentionFlags::CHECKPOINT | RetentionFlags::REFERENCE,
+            Retention::Checkpoint { .. } => RetentionFlags::CHECKPOINT,
             Retention::Marked => RetentionFlags::MARKED,
+            Retention::Reference => RetentionFlags::REFERENCE,
         }
     }
 }
@@ -90,12 +100,25 @@ impl<H: Hashable + Clone + PartialEq> PrunableTree<H> {
             .map_or(false, |(_, retention)| retention.is_marked())
     }
 
+    /// Returns `true` if it is possible to compute or retrieve the Merkle root of this
+    /// tree.
+    pub fn has_computable_root(&self) -> bool {
+        match &self.0 {
+            Node::Parent { ann, left, right } => {
+                ann.is_some()
+                    || (left.as_ref().has_computable_root() && right.as_ref().has_computable_root())
+            }
+            Node::Leaf { .. } => true,
+            Node::Nil | Node::Pruned => false,
+        }
+    }
+
     /// Determines whether a tree has any [`Retention::Marked`] nodes.
     pub fn contains_marked(&self) -> bool {
         match &self.0 {
             Node::Parent { left, right, .. } => left.contains_marked() || right.contains_marked(),
             Node::Leaf { value: (_, r) } => r.is_marked(),
-            Node::Nil => false,
+            Node::Nil | Node::Pruned => false,
         }
     }
 
@@ -112,8 +135,8 @@ impl<H: Hashable + Clone + PartialEq> PrunableTree<H> {
             // so no need to inspect the tree
             Ok(H::empty_root(root_addr.level()))
         } else {
-            match self {
-                Tree(Node::Parent { ann, left, right }) => ann
+            match &self.0 {
+                Node::Parent { ann, left, right } => ann
                     .as_ref()
                     .filter(|_| truncate_at >= root_addr.position_range_end())
                     .map_or_else(
@@ -135,7 +158,7 @@ impl<H: Hashable + Clone + PartialEq> PrunableTree<H> {
                             Ok(rc.as_ref().clone())
                         },
                     ),
-                Tree(Node::Leaf { value }) => {
+                Node::Leaf { value } => {
                     if truncate_at >= root_addr.position_range_end() {
                         // no truncation of this leaf is necessary, just use it
                         Ok(value.0.clone())
@@ -147,7 +170,7 @@ impl<H: Hashable + Clone + PartialEq> PrunableTree<H> {
                         Err(vec![root_addr])
                     }
                 }
-                Tree(Node::Nil) => Err(vec![root_addr]),
+                Node::Nil | Node::Pruned => Err(vec![root_addr]),
             }
         }
     }
@@ -182,7 +205,7 @@ impl<H: Hashable + Clone + PartialEq> PrunableTree<H> {
                 }
                 result
             }
-            Node::Nil => BTreeSet::new(),
+            Node::Nil | Node::Pruned => BTreeSet::new(),
         }
     }
 
@@ -206,6 +229,7 @@ impl<H: Hashable + Clone + PartialEq> PrunableTree<H> {
     /// The merge operation is checked to be strictly additive and returns an error if merging
     /// would cause information loss or if a conflict between root hashes occurs at a node. The
     /// returned error contains the address of the node where such a conflict occurred.
+    #[tracing::instrument()]
     pub fn merge_checked(self, root_addr: Address, other: Self) -> Result<Self, Address> {
         #[allow(clippy::type_complexity)]
         fn go<H: Hashable + Clone + PartialEq>(
@@ -218,6 +242,7 @@ impl<H: Hashable + Clone + PartialEq> PrunableTree<H> {
             let no_default_fill = addr.position_range_end();
             match (t0, t1) {
                 (Tree(Node::Nil), other) | (other, Tree(Node::Nil)) => Ok(other),
+                (Tree(Node::Pruned), other) | (other, Tree(Node::Pruned)) => Ok(other),
                 (Tree(Node::Leaf { value: vl }), Tree(Node::Leaf { value: vr })) => {
                     if vl.0 == vr.0 {
                         // Merge the flags together.
@@ -279,12 +304,11 @@ impl<H: Hashable + Clone + PartialEq> PrunableTree<H> {
             }
         }
 
-        trace!(this = ?self, other = ?other, "Merging subtrees");
         go(root_addr, self, other)
     }
 
     /// Unite two nodes by either constructing a new parent node, or, if both nodes are ephemeral
-    /// leaves or Nil, constructing a replacement root by hashing leaf values together (or a
+    /// leaves or Nil, constructing a replacement parent by hashing leaf values together (or a
     /// replacement `Nil` value).
     ///
     /// `level` must be the level of the two nodes that are being joined.
@@ -292,10 +316,11 @@ impl<H: Hashable + Clone + PartialEq> PrunableTree<H> {
         match (left, right) {
             (Tree(Node::Nil), Tree(Node::Nil)) => Tree(Node::Nil),
             (Tree(Node::Leaf { value: lv }), Tree(Node::Leaf { value: rv }))
-                // we can prune right-hand leaves that are not marked; if a leaf
-                // is a checkpoint then that information will be propagated to
-                // the replacement leaf
-                if lv.1 == RetentionFlags::EPHEMERAL && (rv.1 & RetentionFlags::MARKED) == RetentionFlags::EPHEMERAL =>
+                // we can prune right-hand leaves that are not marked or reference leaves; if a
+                // leaf is a checkpoint then that information will be propagated to the replacement
+                // leaf
+                if lv.1 == RetentionFlags::EPHEMERAL &&
+                    (rv.1 & (RetentionFlags::MARKED | RetentionFlags::REFERENCE)) == RetentionFlags::EPHEMERAL =>
             {
                 Tree(
                     Node::Leaf {
@@ -507,7 +532,7 @@ impl<H: Hashable + Clone + PartialEq> LocatedPrunableTree<H> {
                         None
                     }
                 }
-                Node::Nil => None,
+                Node::Nil | Node::Pruned => None,
             }
         }
 
@@ -544,129 +569,187 @@ impl<H: Hashable + Clone + PartialEq> LocatedPrunableTree<H> {
             root_addr: Address,
             into: &PrunableTree<H>,
             subtree: LocatedPrunableTree<H>,
-            is_complete: bool,
             contains_marked: bool,
         ) -> Result<(PrunableTree<H>, Vec<IncompleteAt>), InsertionError> {
-            // In the case that we are replacing a node entirely, we need to extend the
-            // subtree up to the level of the node being replaced, adding Nil siblings
-            // and recording the presence of those incomplete nodes when necessary
-            let replacement = |ann: Option<Arc<H>>, mut node: LocatedPrunableTree<H>| {
-                // construct the replacement node bottom-up
-                let mut incomplete = vec![];
-                while node.root_addr.level() < root_addr.level() {
-                    incomplete.push(IncompleteAt {
-                        address: node.root_addr.sibling(),
-                        required_for_witness: contains_marked,
-                    });
-                    node = LocatedTree {
-                        root_addr: node.root_addr.parent(),
-                        root: if node.root_addr.is_right_child() {
-                            Tree(Node::Parent {
-                                ann: None,
-                                left: Arc::new(Tree(Node::Nil)),
-                                right: Arc::new(node.root),
-                            })
-                        } else {
-                            Tree(Node::Parent {
-                                ann: None,
-                                left: Arc::new(node.root),
-                                right: Arc::new(Tree(Node::Nil)),
-                            })
-                        },
-                    };
-                }
-                (node.root.reannotate_root(ann), incomplete)
-            };
-
             trace!(
-                "Node at {:?} contains subtree at {:?}",
-                root_addr,
-                subtree.root_addr(),
+                root_addr = ?root_addr,
+                max_position = ?LocatedTree::max_position_internal(root_addr, into),
+                to_insert = ?subtree.root_addr(),
+                "Subtree insert"
             );
-            match into {
-                Tree(Node::Nil) => Ok(replacement(None, subtree)),
-                Tree(Node::Leaf { value: (value, _) }) => {
-                    if root_addr == subtree.root_addr {
-                        if is_complete {
-                            // It is safe to replace the existing root unannotated, because we
-                            // can always recompute the root from a complete subtree.
-                            Ok((subtree.root, vec![]))
-                        } else if subtree.root.node_value().iter().all(|v| v == &value) {
+            // An empty tree cannot replace any other type of tree.
+            if subtree.root().is_nil() {
+                Ok((into.clone(), vec![]))
+            } else {
+                // In the case that we are replacing a node entirely, we need to extend the
+                // subtree up to the level of the node being replaced, adding Nil siblings
+                // and recording the presence of those incomplete nodes when necessary
+                let replacement = |ann: Option<Arc<H>>,
+                                   mut node: LocatedPrunableTree<H>,
+                                   pruned: bool| {
+                    // construct the replacement node bottom-up
+                    let mut incomplete = vec![];
+                    while node.root_addr.level() < root_addr.level() {
+                        incomplete.push(IncompleteAt {
+                            address: node.root_addr.sibling(),
+                            required_for_witness: contains_marked,
+                        });
+                        let empty = Arc::new(Tree(if pruned { Node::Pruned } else { Node::Nil }));
+                        let full = Arc::new(node.root);
+                        node = LocatedTree {
+                            root_addr: node.root_addr.parent(),
+                            root: if node.root_addr.is_right_child() {
+                                Tree(Node::Parent {
+                                    ann: None,
+                                    left: empty,
+                                    right: full,
+                                })
+                            } else {
+                                Tree(Node::Parent {
+                                    ann: None,
+                                    left: full,
+                                    right: empty,
+                                })
+                            },
+                        };
+                    }
+                    (node.root.reannotate_root(ann), incomplete)
+                };
+
+                match into {
+                    Tree(Node::Nil) => Ok(replacement(None, subtree, false)),
+                    Tree(Node::Pruned) => Ok(replacement(None, subtree, true)),
+                    Tree(Node::Leaf {
+                        value: (value, retention),
+                    }) => {
+                        if root_addr == subtree.root_addr {
+                            // The current leaf is at the location we wish to transplant the root
+                            // of the subtree being inserted, so we either replace the leaf
+                            // entirely with the subtree, or reannotate the root so as to avoid
+                            // discarding the existing leaf value.
+
+                            if subtree.root.has_computable_root() {
+                                Ok((
+                                    if subtree.root.is_leaf() {
+                                        // When replacing a leaf with a leaf, `REFERENCE` retention
+                                        // will be discarded unless both leaves have `REFERENCE`
+                                        // retention.
+                                        subtree
+                                            .root
+                                            .try_map::<(H, RetentionFlags), InsertionError, _>(
+                                                &|(v0, ret0)| {
+                                                    if v0 == value {
+                                                        let retention_result: RetentionFlags =
+                                                            ((*retention | *ret0)
+                                                                - RetentionFlags::REFERENCE)
+                                                                | (RetentionFlags::REFERENCE
+                                                                    & *retention
+                                                                    & *ret0);
+                                                        Ok((value.clone(), retention_result))
+                                                    } else {
+                                                        Err(InsertionError::Conflict(root_addr))
+                                                    }
+                                                },
+                                            )?
+                                    } else {
+                                        // It is safe to replace the existing root unannotated, because we
+                                        // can always recompute the root from the subtree.
+                                        subtree.root
+                                    },
+                                    vec![],
+                                ))
+                            } else if subtree.root.node_value().iter().all(|v| v == &value) {
+                                Ok((
+                                    // at this point we statically know the root to be a parent
+                                    subtree.root.reannotate_root(Some(Arc::new(value.clone()))),
+                                    vec![],
+                                ))
+                            } else {
+                                warn!(
+                                    cur_root = ?value,
+                                    new_root = ?subtree.root.node_value(),
+                                    "Insertion conflict",
+                                );
+                                Err(InsertionError::Conflict(root_addr))
+                            }
+                        } else {
+                            Ok(replacement(
+                                Some(Arc::new(value.clone())),
+                                subtree,
+                                // The subtree being inserted may have its root at some level lower
+                                // than the next level down. The siblings of nodes that will be
+                                // generated while descending to the subtree root level will be
+                                // `Nil` nodes (indicating that the value of these nodes have never
+                                // been observed) if the leaf being replaced has `REFERENCE`
+                                // retention. Any other leaf without `REFERENCE` retention will
+                                // have been produced by pruning of previously observed node
+                                // values, so in those cases we use `Pruned` nodes for the absent
+                                // siblings. This allows us to retain the distinction between what
+                                // parts of the tree have been directly observed and what parts
+                                // have not.
+                                !retention.contains(RetentionFlags::REFERENCE),
+                            ))
+                        }
+                    }
+                    parent if root_addr == subtree.root_addr => {
+                        // Merge the existing subtree with the subtree being inserted.
+                        // A merge operation can't introduce any new incomplete roots.
+                        parent
+                            .clone()
+                            .merge_checked(root_addr, subtree.root)
+                            .map_err(InsertionError::Conflict)
+                            .map(|tree| (tree, vec![]))
+                    }
+                    Tree(Node::Parent { ann, left, right }) => {
+                        // In this case, we have an existing parent but we need to dig down farther
+                        // before we can insert the subtree that we're carrying for insertion.
+                        let (l_addr, r_addr) = root_addr.children().unwrap();
+                        if l_addr.contains(&subtree.root_addr) {
+                            let (new_left, incomplete) =
+                                go(l_addr, left.as_ref(), subtree, contains_marked)?;
                             Ok((
-                                // at this point we statically know the root to be a parent
-                                subtree.root.reannotate_root(Some(Arc::new(value.clone()))),
-                                vec![],
+                                Tree::unite(
+                                    root_addr.level() - 1,
+                                    ann.clone(),
+                                    new_left,
+                                    right.as_ref().clone(),
+                                ),
+                                incomplete,
                             ))
                         } else {
-                            trace!(
-                                cur_root = ?value,
-                                new_root = ?subtree.root.node_value(),
-                                "Insertion conflict",
-                            );
-                            Err(InsertionError::Conflict(root_addr))
+                            let (new_right, incomplete) =
+                                go(r_addr, right.as_ref(), subtree, contains_marked)?;
+                            Ok((
+                                Tree::unite(
+                                    root_addr.level() - 1,
+                                    ann.clone(),
+                                    left.as_ref().clone(),
+                                    new_right,
+                                ),
+                                incomplete,
+                            ))
                         }
-                    } else {
-                        Ok(replacement(Some(Arc::new(value.clone())), subtree))
-                    }
-                }
-                parent if root_addr == subtree.root_addr => {
-                    // Merge the existing subtree with the subtree being inserted.
-                    // A merge operation can't introduce any new incomplete roots.
-                    parent
-                        .clone()
-                        .merge_checked(root_addr, subtree.root)
-                        .map_err(InsertionError::Conflict)
-                        .map(|tree| (tree, vec![]))
-                }
-                Tree(Node::Parent { ann, left, right }) => {
-                    // In this case, we have an existing parent but we need to dig down farther
-                    // before we can insert the subtree that we're carrying for insertion.
-                    let (l_addr, r_addr) = root_addr.children().unwrap();
-                    if l_addr.contains(&subtree.root_addr) {
-                        let (new_left, incomplete) =
-                            go(l_addr, left.as_ref(), subtree, is_complete, contains_marked)?;
-                        Ok((
-                            Tree::unite(
-                                root_addr.level() - 1,
-                                ann.clone(),
-                                new_left,
-                                right.as_ref().clone(),
-                            ),
-                            incomplete,
-                        ))
-                    } else {
-                        let (new_right, incomplete) = go(
-                            r_addr,
-                            right.as_ref(),
-                            subtree,
-                            is_complete,
-                            contains_marked,
-                        )?;
-                        Ok((
-                            Tree::unite(
-                                root_addr.level() - 1,
-                                ann.clone(),
-                                left.as_ref().clone(),
-                                new_right,
-                            ),
-                            incomplete,
-                        ))
                     }
                 }
             }
         }
 
+        let max_position = self.max_position();
+        trace!(
+            max_position = ?max_position,
+            tree = ?self,
+            to_insert = ?subtree,
+            "Current shard"
+        );
         let LocatedTree { root_addr, root } = self;
         if root_addr.contains(&subtree.root_addr) {
-            let complete = subtree.root.is_complete();
-            go(*root_addr, root, subtree, complete, contains_marked).map(|(root, incomplete)| {
-                (
-                    LocatedTree {
-                        root_addr: *root_addr,
-                        root,
-                    },
-                    incomplete,
-                )
+            go(*root_addr, root, subtree, contains_marked).map(|(root, incomplete)| {
+                let new_tree = LocatedTree {
+                    root_addr: *root_addr,
+                    root,
+                };
+                assert!(new_tree.max_position() >= max_position);
+                (new_tree, incomplete)
             })
         } else {
             Err(InsertionError::NotContained(subtree.root_addr))
@@ -725,9 +808,7 @@ impl<H: Hashable + Clone + PartialEq> LocatedPrunableTree<H> {
         split_at: Level,
     ) -> (Self, Option<Self>) {
         let mut addr = Address::from(position);
-        let mut subtree = Tree(Node::Leaf {
-            value: (leaf, leaf_retention.into()),
-        });
+        let mut subtree = Tree::leaf((leaf, leaf_retention.into()));
 
         while addr.level() < split_at {
             if addr.is_left_child() {
@@ -829,13 +910,13 @@ impl<H: Hashable + Clone + PartialEq> LocatedPrunableTree<H> {
                 // nothing to do, so we just return the root
                 root.clone()
             } else {
-                match root {
-                    Tree(Node::Parent { ann, left, right }) => {
+                match &root.0 {
+                    Node::Parent { ann, left, right } => {
                         let (l_addr, r_addr) = root_addr.children().unwrap();
 
                         let p = to_clear.partition_point(|(p, _)| p < &l_addr.position_range_end());
                         trace!(
-                            "In {:?}, partitioned: {:?} {:?}",
+                            "Tree::unite at {:?}, partitioned: {:?} {:?}",
                             root_addr,
                             &to_clear[0..p],
                             &to_clear[p..],
@@ -847,7 +928,7 @@ impl<H: Hashable + Clone + PartialEq> LocatedPrunableTree<H> {
                             go(&to_clear[p..], r_addr, right),
                         )
                     }
-                    Tree(Node::Leaf { value: (h, r) }) => {
+                    Node::Leaf { value: (h, r) } => {
                         trace!("In {:?}, clearing {:?}", root_addr, to_clear);
                         // When we reach a leaf, we should be down to just a single position
                         // which should correspond to the last level-0 child of the address's
@@ -855,18 +936,16 @@ impl<H: Hashable + Clone + PartialEq> LocatedPrunableTree<H> {
                         // a partially-pruned branch, and if it's a marked node then it will
                         // be a level-0 leaf.
                         match to_clear {
-                            [(pos, flags)] => {
-                                assert_eq!(*pos, root_addr.max_position());
-                                Tree(Node::Leaf {
-                                    value: (h.clone(), *r & !*flags),
-                                })
-                            }
+                            [(_, flags)] => Tree(Node::Leaf {
+                                value: (h.clone(), *r & !*flags),
+                            }),
                             _ => {
                                 panic!("Tree state inconsistent with checkpoints.");
                             }
                         }
                     }
-                    Tree(Node::Nil) => Tree(Node::Nil),
+                    Node::Nil => Tree(Node::Nil),
+                    Node::Pruned => Tree(Node::Pruned),
                 }
             }
         }
@@ -905,7 +984,7 @@ mod tests {
 
     use super::{LocatedPrunableTree, PrunableTree, RetentionFlags};
     use crate::{
-        error::QueryError,
+        error::{InsertionError, QueryError},
         tree::{
             tests::{leaf, nil, parent},
             LocatedTree,
@@ -1068,27 +1147,22 @@ mod tests {
     }
 
     #[test]
-    fn located_insert_subtree_leaf_overwrites() {
+    fn located_insert_subtree_prevents_leaf_overwrite_conflict() {
         let t: LocatedPrunableTree<String> = LocatedTree {
             root_addr: Address::from_parts(2.into(), 1),
             root: parent(leaf(("a".to_string(), RetentionFlags::MARKED)), nil()),
         };
 
+        let conflict_addr = Address::from_parts(1.into(), 2);
         assert_eq!(
             t.insert_subtree(
                 LocatedTree {
-                    root_addr: Address::from_parts(1.into(), 2),
+                    root_addr: conflict_addr,
                     root: leaf(("b".to_string(), RetentionFlags::EPHEMERAL)),
                 },
                 false,
             ),
-            Ok((
-                LocatedTree {
-                    root_addr: Address::from_parts(2.into(), 1),
-                    root: parent(leaf(("b".to_string(), RetentionFlags::EPHEMERAL)), nil()),
-                },
-                vec![],
-            )),
+            Err(InsertionError::Conflict(conflict_addr)),
         );
     }
 
