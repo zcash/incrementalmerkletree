@@ -83,7 +83,8 @@ pub enum Retention<C> {
     /// A leaf with `Ephemeral` retention will be pruned whenever its sibling is also a leaf with
     /// `Ephemeral` retention.
     Ephemeral,
-    /// A leaf with `Checkpoint` retention will be retained in the tree during pruning. If
+    /// A leaf with `Checkpoint` retention will have its position retained in the tree
+    /// during pruning, but its value may be pruned (by merging with its sibling). If
     /// `Checkpoint` retention is removed from the leaf, then the retention for the leaf will
     /// become either `Ephemeral`, `Marked`, or `Reference` depending upon the value of the
     /// `marking` field.
