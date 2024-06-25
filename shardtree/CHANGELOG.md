@@ -24,6 +24,9 @@ and this project adheres to Rust's notion of
 - Fixes an error that could occur if an inserted `Frontier` node was
   interpreted as a node that had actually had its value observed as though it
   had been inserted using the ordinary tree insertion methods.
+- Fixes an error in an internal method that could result in subtree root
+  annotation data being discarded when pruning a `Parent` node having
+  `Nil` nodes for both its left and right children.
 
 ## [0.3.1] - 2024-04-03
 
