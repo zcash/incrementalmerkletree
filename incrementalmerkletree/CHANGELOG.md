@@ -9,6 +9,7 @@ and this project adheres to Rust's notion of
 
 ### Added
 - `incrementalmerkletree::Marking`
+- `incrementalmerkletree::Level::ZERO`
 
 ### Changed
 - `incrementalmerkletree::Retention`

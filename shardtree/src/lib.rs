@@ -210,7 +210,8 @@ impl<
         Ok(())
     }
 
-    /// Append a single value at the first available position in the tree.
+    /// Append a single value at the first unfilled position greater than the maximum position of
+    /// any previously inserted leaf.
     ///
     /// Prefer to use [`Self::batch_insert`] when appending multiple values, as these operations
     /// require fewer traversals of the tree than are necessary when performing multiple sequential
@@ -320,17 +321,8 @@ impl<
             .map_err(ShardTreeError::Storage)?
             .unwrap_or_else(|| LocatedTree::empty(subtree_root_addr));
 
-        trace!(
-            max_position = ?current_shard.max_position(),
-            subtree = ?current_shard,
-            "Current shard");
         let (updated_subtree, supertree) =
             current_shard.insert_frontier_nodes(frontier, &leaf_retention)?;
-        trace!(
-            max_position = ?updated_subtree.max_position(),
-            subtree = ?updated_subtree,
-            "Replacement shard"
-        );
         self.store
             .put_shard(updated_subtree)
             .map_err(ShardTreeError::Storage)?;
@@ -1464,7 +1456,8 @@ mod tests {
                     id: 1,
                     marking: frontier_marking,
                 },
-            )?;
+            )
+            .unwrap();
 
             // Insert a few leaves beginning at the subsequent position, so as to cross the shard
             // boundary.
@@ -1473,7 +1466,8 @@ mod tests {
                 ('g'..='j')
                     .into_iter()
                     .map(|c| (c.to_string(), Retention::Ephemeral)),
-            )?;
+            )
+            .unwrap();
 
             // Trigger pruning by adding 5 more checkpoints
             for i in 2..7 {
@@ -1486,7 +1480,8 @@ mod tests {
                 ('e'..='f')
                     .into_iter()
                     .map(|c| (c.to_string(), Retention::Marked)),
-            )?;
+            )
+            .unwrap();
 
             // Compute the witness
             tree.witness_at_checkpoint_id(frontier_end, &6)

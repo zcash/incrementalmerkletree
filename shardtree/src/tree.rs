@@ -94,7 +94,9 @@ impl<A, V> Deref for Tree<A, V> {
 
 impl<A, V> Tree<A, V> {
     /// Constructs the empty tree.
-    pub fn empty() -> Self {
+    ///
+    /// This represents a tree for which we have no information.
+    pub const fn empty() -> Self {
         Tree(Node::Nil)
     }
 
@@ -104,6 +106,9 @@ impl<A, V> Tree<A, V> {
     }
 
     /// Constructs a tree containing a single leaf.
+    ///
+    /// This represents either leaf of the tree, or an internal parent node of the
+    /// tree having all [`Node::Pruned`] children.
     pub fn leaf(value: V) -> Self {
         Tree(Node::Leaf { value })
     }
@@ -117,7 +122,7 @@ impl<A, V> Tree<A, V> {
         })
     }
 
-    /// Returns `true` if the tree has no leaves.
+    /// Returns `true` if the tree is the [`Node::Nil`] node.
     pub fn is_empty(&self) -> bool {
         self.0.is_nil()
     }

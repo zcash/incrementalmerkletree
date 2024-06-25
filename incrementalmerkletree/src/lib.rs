@@ -280,6 +280,9 @@ impl TryFrom<Position> for usize {
 pub struct Level(u8);
 
 impl Level {
+    /// Level 0 corresponds to a leaf of the tree.
+    pub const ZERO: Self = Level(0);
+
     pub const fn new(value: u8) -> Self {
         Self(value)
     }

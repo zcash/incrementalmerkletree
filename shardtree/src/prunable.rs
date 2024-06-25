@@ -322,11 +322,7 @@ impl<H: Hashable + Clone + PartialEq> PrunableTree<H> {
             {
                 Tree::leaf((H::combine(level, &lv.0, &rv.0), rv.1))
             }
-            (left, right) => Tree::parent(
-                    ann,
-                    left,
-                    right,
-            ),
+            (left, right) => Tree::parent(ann, left, right),
         }
     }
 }
@@ -563,12 +559,6 @@ impl<H: Hashable + Clone + PartialEq> LocatedPrunableTree<H> {
             subtree: LocatedPrunableTree<H>,
             contains_marked: bool,
         ) -> Result<(PrunableTree<H>, Vec<IncompleteAt>), InsertionError> {
-            trace!(
-                root_addr = ?root_addr,
-                max_position = ?LocatedTree::max_position_internal(root_addr, into),
-                to_insert = ?subtree.root_addr(),
-                "Subtree insert"
-            );
             // An empty tree cannot replace any other type of tree.
             if subtree.root().is_nil() {
                 Ok((into.clone(), vec![]))
