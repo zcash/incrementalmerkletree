@@ -138,6 +138,20 @@ impl<A, V> Tree<A, V> {
         matches!(&self.0, Node::Leaf { .. })
     }
 
+    /// Returns `true` if no additional leaves can be appended to this tree.
+    ///
+    /// The tree is considered full if no `Nil` node exists along the right-hand
+    /// path in a depth-first traversal of this tree. In this case, no additional
+    /// nodes can be added to the right-hand side of this tree without introducing
+    /// a new `Parent` node having this tree as its left-hand child.
+    pub fn is_full(&self) -> bool {
+        match &self.0 {
+            Node::Nil => false,
+            Node::Leaf { .. } | Node::Pruned => true,
+            Node::Parent { right, .. } => right.is_full(),
+        }
+    }
+
     /// Returns a vector of the addresses of [`Node::Nil`] and [`Node::Pruned`] subtree roots
     /// within this tree.
     ///
@@ -250,19 +264,18 @@ impl<A, V> LocatedTree<A, V> {
     /// Note that no actual leaf value may exist at this position, as it may have previously been
     /// pruned.
     pub fn max_position(&self) -> Option<Position> {
-        Self::max_position_internal(self.root_addr, &self.root)
-    }
-
-    pub(crate) fn max_position_internal(addr: Address, root: &Tree<A, V>) -> Option<Position> {
-        match &root.0 {
-            Node::Nil => None,
-            Node::Leaf { .. } | Node::Pruned => Some(addr.position_range_end() - 1),
-            Node::Parent { left, right, .. } => {
-                let (l_addr, r_addr) = addr.children().unwrap();
-                Self::max_position_internal(r_addr, right.as_ref())
-                    .or_else(|| Self::max_position_internal(l_addr, left.as_ref()))
+        fn go<A, V>(addr: Address, root: &Tree<A, V>) -> Option<Position> {
+            match &root.0 {
+                Node::Nil => None,
+                Node::Leaf { .. } | Node::Pruned => Some(addr.position_range_end() - 1),
+                Node::Parent { left, right, .. } => {
+                    let (l_addr, r_addr) = addr.children().unwrap();
+                    go(r_addr, right.as_ref()).or_else(|| go(l_addr, left.as_ref()))
+                }
             }
         }
+
+        go(self.root_addr, &self.root)
     }
 
     /// Returns the value at the specified position, if any.

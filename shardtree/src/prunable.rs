@@ -362,10 +362,11 @@ impl<H: Hashable + Clone + PartialEq> LocatedPrunableTree<H> {
     /// If the tree contains any [`Node::Nil`] nodes that are to the left of filled nodes in the
     /// tree, this will return an error containing the addresses of those nodes.
     pub fn right_filled_root(&self) -> Result<H, Vec<Address>> {
-        self.root_hash(
-            self.max_position()
-                .map_or_else(|| self.root_addr.position_range_start(), |pos| pos + 1),
-        )
+        let truncate_at = self
+            .max_position()
+            .map_or_else(|| self.root_addr.position_range_start(), |pos| pos + 1);
+
+        self.root_hash(truncate_at)
     }
 
     /// Returns the positions of marked leaves in the tree.
@@ -931,6 +932,33 @@ impl<H: Hashable + Clone + PartialEq> LocatedPrunableTree<H> {
             root: go(&to_clear, self.root_addr, &self.root),
         }
     }
+
+    #[cfg(test)]
+    pub(crate) fn flag_positions(&self) -> BTreeMap<Position, RetentionFlags> {
+        fn go<H>(
+            root: &PrunableTree<H>,
+            root_addr: Address,
+            acc: &mut BTreeMap<Position, RetentionFlags>,
+        ) {
+            match &root.0 {
+                Node::Parent { left, right, .. } => {
+                    let (l_addr, r_addr) = root_addr
+                        .children()
+                        .expect("A parent node cannot appear at level 0");
+                    go(left, l_addr, acc);
+                    go(right, r_addr, acc);
+                }
+                Node::Leaf { value } if value.1 != RetentionFlags::EPHEMERAL => {
+                    acc.insert(root_addr.max_position(), value.1);
+                }
+                _ => (),
+            }
+        }
+
+        let mut result = BTreeMap::new();
+        go(&self.root, self.root_addr, &mut result);
+        result
+    }
 }
 
 // We need an applicative functor for Result for this function so that we can correctly
@@ -953,13 +981,15 @@ fn accumulate_result_with<A, B, C>(
 
 #[cfg(test)]
 mod tests {
-    use std::collections::BTreeSet;
+    use std::collections::{BTreeMap, BTreeSet};
 
     use incrementalmerkletree::{Address, Level, Position};
+    use proptest::proptest;
 
     use super::{LocatedPrunableTree, PrunableTree, RetentionFlags};
     use crate::{
         error::{InsertionError, QueryError},
+        testing::{arb_char_str, arb_prunable_tree},
         tree::{
             tests::{leaf, nil, parent},
             LocatedTree,
@@ -1178,5 +1208,35 @@ mod tests {
                 3
             )]))
         );
+    }
+
+    proptest! {
+        #[test]
+        fn clear_flags(
+            root in arb_prunable_tree(arb_char_str(), 8, 2^6)
+        ) {
+            let root_addr = Address::from_parts(Level::from(7), 0);
+            let tree = LocatedTree::from_parts(root_addr, root);
+
+            let (to_clear, to_retain) = tree.flag_positions().into_iter().enumerate().fold(
+                (BTreeMap::new(), BTreeMap::new()),
+                |(mut to_clear, mut to_retain), (i, (pos, flags))| {
+                    if i % 2 == 0 {
+                        to_clear.insert(pos, flags);
+                    } else {
+                        to_retain.insert(pos, flags);
+                    }
+                    (to_clear, to_retain)
+                }
+            );
+
+            let pre_clearing_max_position = tree.max_position();
+            let cleared = tree.clear_flags(to_clear);
+
+            // Clearing flags should not modify the max position of leaves represented
+            // in the shard.
+            assert!(cleared.max_position() == pre_clearing_max_position);
+            assert_eq!(to_retain, cleared.flag_positions());
+        }
     }
 }

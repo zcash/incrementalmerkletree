@@ -235,17 +235,17 @@ impl<
 
         let (append_result, position, checkpoint_id) =
             if let Some(subtree) = self.store.last_shard().map_err(ShardTreeError::Storage)? {
-                match subtree.max_position() {
-                    // If the subtree is full, then construct a successor tree.
-                    Some(pos) if pos == subtree.root_addr.max_position() => {
-                        let addr = subtree.root_addr;
-                        if subtree.root_addr.index() < Self::max_subtree_index() {
-                            LocatedTree::empty(addr.next_at_level()).append(value, retention)?
-                        } else {
-                            return Err(InsertionError::TreeFull.into());
-                        }
+                if subtree.root().is_full() {
+                    // If the shard is full, then construct a successor tree.
+                    let addr = subtree.root_addr;
+                    if subtree.root_addr.index() < Self::max_subtree_index() {
+                        LocatedTree::empty(addr.next_at_level()).append(value, retention)?
+                    } else {
+                        return Err(InsertionError::TreeFull.into());
                     }
-                    _ => subtree.append(value, retention)?,
+                } else {
+                    // Otherwise, just append to the shard.
+                    subtree.append(value, retention)?
                 }
             } else {
                 let root_addr = Address::from_parts(Self::subtree_level(), 0);
@@ -573,13 +573,7 @@ impl<
                     .map_err(ShardTreeError::Storage)?;
 
                 if let Some(to_clear) = to_clear {
-                    let pre_clearing_max_position = to_clear.max_position();
                     let cleared = to_clear.clear_flags(positions);
-
-                    // Clearing flags should not modify the max position of leaves represented
-                    // in the shard.
-                    assert!(cleared.max_position() == pre_clearing_max_position);
-
                     self.store
                         .put_shard(cleared)
                         .map_err(ShardTreeError::Storage)?;
