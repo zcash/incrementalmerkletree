@@ -315,7 +315,7 @@ impl<A: Default + Clone, V: Clone> LocatedTree<A, V> {
     pub fn empty(root_addr: Address) -> Self {
         Self {
             root_addr,
-            root: Tree(Node::Nil),
+            root: Tree::empty(),
         }
     }
 
@@ -324,7 +324,7 @@ impl<A: Default + Clone, V: Clone> LocatedTree<A, V> {
     pub fn with_root_value(root_addr: Address, value: V) -> Self {
         Self {
             root_addr,
-            root: Tree(Node::Leaf { value }),
+            root: Tree::leaf(value),
         }
     }
 
@@ -412,12 +412,10 @@ impl<A: Default + Clone, V: Clone> LocatedTree<A, V> {
 pub(crate) mod tests {
     use incrementalmerkletree::{Address, Level};
 
-    use super::{LocatedTree, Node, Tree};
+    use super::{LocatedTree, Tree};
 
     pub(crate) fn str_leaf<A>(c: &str) -> Tree<A, String> {
-        Tree(Node::Leaf {
-            value: c.to_string(),
-        })
+        Tree::leaf(c.to_string())
     }
 
     pub(crate) fn nil<A, B>() -> Tree<A, B> {

@@ -6,7 +6,7 @@ use std::convert::{Infallible, TryFrom};
 use incrementalmerkletree::Address;
 
 use super::{Checkpoint, ShardStore};
-use crate::{LocatedPrunableTree, LocatedTree, Node, PrunableTree, Tree};
+use crate::{LocatedPrunableTree, LocatedTree, PrunableTree, Tree};
 
 /// An implementation of [`ShardStore`] that stores all state in memory.
 ///
@@ -54,7 +54,7 @@ impl<H: Clone, C: Clone + Ord> ShardStore for MemoryShardStore<H, C> {
         {
             self.shards.push(LocatedTree {
                 root_addr: Address::from_parts(subtree_addr.level(), subtree_idx),
-                root: Tree(Node::Nil),
+                root: Tree::empty(),
             })
         }
 

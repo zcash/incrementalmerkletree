@@ -30,22 +30,15 @@ where
     A::Value: Clone + 'static,
     V::Value: Clone + 'static,
 {
-    let leaf = prop_oneof![
-        Just(Tree(Node::Nil)),
-        arb_leaf.prop_map(|value| Tree(Node::Leaf { value }))
-    ];
+    let leaf = prop_oneof![Just(Tree::empty()), arb_leaf.prop_map(Tree::leaf)];
 
     leaf.prop_recursive(depth, size, 2, move |inner| {
         (arb_annotation.clone(), inner.clone(), inner).prop_map(|(ann, left, right)| {
-            Tree(if left.is_nil() && right.is_nil() {
-                Node::Nil
+            if left.is_nil() && right.is_nil() {
+                Tree::empty()
             } else {
-                Node::Parent {
-                    ann,
-                    left: Arc::new(left),
-                    right: Arc::new(right),
-                }
-            })
+                Tree::parent(ann, left, right)
+            }
         })
     })
 }
