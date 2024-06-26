@@ -246,9 +246,7 @@ impl<H: Hashable + Clone + PartialEq> PrunableTree<H> {
                 (Tree(Node::Leaf { value: vl }), Tree(Node::Leaf { value: vr })) => {
                     if vl.0 == vr.0 {
                         // Merge the flags together.
-                        Ok(Tree(Node::Leaf {
-                            value: (vl.0, vl.1 | vr.1),
-                        }))
+                        Ok(Tree::leaf((vl.0, vl.1 | vr.1)))
                     } else {
                         trace!(left = ?vl.0, right = ?vr.0, "Merge conflict for leaves");
                         Err(addr)
@@ -314,7 +312,7 @@ impl<H: Hashable + Clone + PartialEq> PrunableTree<H> {
     /// `level` must be the level of the two nodes that are being joined.
     pub(crate) fn unite(level: Level, ann: Option<Arc<H>>, left: Self, right: Self) -> Self {
         match (left, right) {
-            (Tree(Node::Nil), Tree(Node::Nil)) => Tree(Node::Nil),
+            (Tree(Node::Nil), Tree(Node::Nil)) => Tree::empty(),
             (Tree(Node::Leaf { value: lv }), Tree(Node::Leaf { value: rv }))
                 // we can prune right-hand leaves that are not marked or reference leaves; if a
                 // leaf is a checkpoint then that information will be propagated to the replacement
@@ -322,18 +320,12 @@ impl<H: Hashable + Clone + PartialEq> PrunableTree<H> {
                 if lv.1 == RetentionFlags::EPHEMERAL &&
                     (rv.1 & (RetentionFlags::MARKED | RetentionFlags::REFERENCE)) == RetentionFlags::EPHEMERAL =>
             {
-                Tree(
-                    Node::Leaf {
-                        value: (H::combine(level, &lv.0, &rv.0), rv.1),
-                    },
-                )
+                Tree::leaf((H::combine(level, &lv.0, &rv.0), rv.1))
             }
-            (left, right) => Tree(
-                Node::Parent {
+            (left, right) => Tree::parent(
                     ann,
-                    left: Arc::new(left),
-                    right: Arc::new(right),
-                },
+                    left,
+                    right,
             ),
         }
     }
@@ -514,7 +506,7 @@ impl<H: Hashable + Clone + PartialEq> LocatedPrunableTree<H> {
                         // to the left to truncate the left child and then reconstruct the
                         // node with `Nil` as the right sibling
                         go(position, l_child, left.as_ref()).map(|left| {
-                            Tree::unite(l_child.level(), ann.clone(), left, Tree(Node::Nil))
+                            Tree::unite(l_child.level(), ann.clone(), left, Tree::empty())
                         })
                     } else {
                         // we are truncating within the range of the right node, so recurse
@@ -584,37 +576,32 @@ impl<H: Hashable + Clone + PartialEq> LocatedPrunableTree<H> {
                 // In the case that we are replacing a node entirely, we need to extend the
                 // subtree up to the level of the node being replaced, adding Nil siblings
                 // and recording the presence of those incomplete nodes when necessary
-                let replacement = |ann: Option<Arc<H>>,
-                                   mut node: LocatedPrunableTree<H>,
-                                   pruned: bool| {
-                    // construct the replacement node bottom-up
-                    let mut incomplete = vec![];
-                    while node.root_addr.level() < root_addr.level() {
-                        incomplete.push(IncompleteAt {
-                            address: node.root_addr.sibling(),
-                            required_for_witness: contains_marked,
-                        });
-                        let empty = Arc::new(Tree(if pruned { Node::Pruned } else { Node::Nil }));
-                        let full = Arc::new(node.root);
-                        node = LocatedTree {
-                            root_addr: node.root_addr.parent(),
-                            root: if node.root_addr.is_right_child() {
-                                Tree(Node::Parent {
-                                    ann: None,
-                                    left: empty,
-                                    right: full,
-                                })
+                let replacement =
+                    |ann: Option<Arc<H>>, mut node: LocatedPrunableTree<H>, pruned: bool| {
+                        // construct the replacement node bottom-up
+                        let mut incomplete = vec![];
+                        while node.root_addr.level() < root_addr.level() {
+                            incomplete.push(IncompleteAt {
+                                address: node.root_addr.sibling(),
+                                required_for_witness: contains_marked,
+                            });
+                            let empty = if pruned {
+                                Tree::empty_pruned()
                             } else {
-                                Tree(Node::Parent {
-                                    ann: None,
-                                    left: full,
-                                    right: empty,
-                                })
-                            },
-                        };
-                    }
-                    (node.root.reannotate_root(ann), incomplete)
-                };
+                                Tree::empty()
+                            };
+                            let full = node.root;
+                            node = LocatedTree {
+                                root_addr: node.root_addr.parent(),
+                                root: if node.root_addr.is_right_child() {
+                                    Tree::parent(None, empty, full)
+                                } else {
+                                    Tree::parent(None, full, empty)
+                                },
+                            };
+                        }
+                        (node.root.reannotate_root(ann), incomplete)
+                    };
 
                 match into {
                     Tree(Node::Nil) => Ok(replacement(None, subtree, false)),
@@ -936,16 +923,14 @@ impl<H: Hashable + Clone + PartialEq> LocatedPrunableTree<H> {
                         // a partially-pruned branch, and if it's a marked node then it will
                         // be a level-0 leaf.
                         match to_clear {
-                            [(_, flags)] => Tree(Node::Leaf {
-                                value: (h.clone(), *r & !*flags),
-                            }),
+                            [(_, flags)] => Tree::leaf((h.clone(), *r & !*flags)),
                             _ => {
                                 panic!("Tree state inconsistent with checkpoints.");
                             }
                         }
                     }
-                    Node::Nil => Tree(Node::Nil),
-                    Node::Pruned => Tree(Node::Pruned),
+                    Node::Nil => Tree::empty(),
+                    Node::Pruned => Tree::empty_pruned(),
                 }
             }
         }

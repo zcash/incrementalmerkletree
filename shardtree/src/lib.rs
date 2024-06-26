@@ -424,7 +424,7 @@ impl<
                                         l_addr.level(),
                                         ann.clone(),
                                         new_left,
-                                        Tree(Node::Nil),
+                                        Tree::empty(),
                                     ),
                                     pos,
                                 )
@@ -444,9 +444,7 @@ impl<
                     )
                 }
                 Node::Leaf { value: (h, r) } => Some((
-                    Tree(Node::Leaf {
-                        value: (h.clone(), *r | RetentionFlags::CHECKPOINT),
-                    }),
+                    Tree::leaf((h.clone(), *r | RetentionFlags::CHECKPOINT)),
                     root_addr.max_position(),
                 )),
                 Node::Nil | Node::Pruned => None,
@@ -822,6 +820,10 @@ impl<
                             (None, None) => unreachable!(),
                         };
 
+                        // We don't use the `Tree::parent` constructor here, because it
+                        // creates `Arc`s for the child nodes internally, but if we don't
+                        // have a new child then we want to use the `Arc` for the existing
+                        // child.
                         let new_parent = Tree(Node::Parent {
                             ann: new_left
                                 .as_ref()

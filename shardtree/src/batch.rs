@@ -1,6 +1,6 @@
 //! Helpers for inserting many leaves into a tree at once.
 
-use std::{collections::BTreeMap, fmt, ops::Range, sync::Arc};
+use std::{collections::BTreeMap, fmt, ops::Range};
 
 use incrementalmerkletree::{Address, Hashable, Level, Position, Retention};
 use tracing::trace;
@@ -8,7 +8,7 @@ use tracing::trace;
 use crate::{
     error::{InsertionError, ShardTreeError},
     store::{Checkpoint, ShardStore},
-    IncompleteAt, LocatedPrunableTree, LocatedTree, Node, RetentionFlags, ShardTree, Tree,
+    IncompleteAt, LocatedPrunableTree, LocatedTree, RetentionFlags, ShardTree, Tree,
 };
 
 impl<
@@ -203,9 +203,7 @@ impl<H: Hashable + Clone + PartialEq> LocatedPrunableTree<H> {
                 let rflags = RetentionFlags::from(retention);
                 let mut subtree = LocatedTree {
                     root_addr: Address::from(position),
-                    root: Tree(Node::Leaf {
-                        value: (value.clone(), rflags),
-                    }),
+                    root: Tree::leaf((value.clone(), rflags)),
                 };
 
                 if position.is_right_child() {
@@ -268,11 +266,7 @@ fn unite<H: Hashable + Clone + PartialEq>(
         root: if lroot.root_addr.level() < prune_below {
             Tree::unite(lroot.root_addr.level(), None, lroot.root, rroot.root)
         } else {
-            Tree(Node::Parent {
-                ann: None,
-                left: Arc::new(lroot.root),
-                right: Arc::new(rroot.root),
-            })
+            Tree::parent(None, lroot.root, rroot.root)
         },
     }
 }
@@ -297,7 +291,7 @@ fn combine_with_empty<H: Hashable + Clone + PartialEq>(
     });
     let sibling = LocatedTree {
         root_addr: sibling_addr,
-        root: Tree(Node::Nil),
+        root: Tree::empty(),
     };
     let (lroot, rroot) = if root.root_addr.is_left_child() {
         (root, sibling)
