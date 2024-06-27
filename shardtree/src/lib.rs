@@ -439,7 +439,7 @@ impl<
                     Tree::leaf((h.clone(), *r | RetentionFlags::CHECKPOINT)),
                     root_addr.max_position(),
                 )),
-                Node::Nil | Node::Pruned => None,
+                Node::Nil => None,
             }
         }
 
@@ -853,7 +853,7 @@ impl<
                     ))
                 }
             }
-            Node::Nil | Node::Pruned => {
+            Node::Nil => {
                 if cap.root_addr == target_addr
                     || cap.root_addr.level() == ShardTree::<S, DEPTH, SHARD_HEIGHT>::subtree_level()
                 {

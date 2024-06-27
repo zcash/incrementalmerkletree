@@ -19,9 +19,6 @@ pub enum Node<C, A, V> {
     Leaf { value: V },
     /// The empty tree; a subtree or leaf for which no information is available.
     Nil,
-    /// An empty node in the tree created as a consequence of partial reinserion of data into a
-    /// subtree after the subtree was previously pruned.
-    Pruned,
 }
 
 impl<C, A, V> Node<C, A, V> {
@@ -39,7 +36,6 @@ impl<C, A, V> Node<C, A, V> {
             Node::Parent { .. } => None,
             Node::Leaf { value } => Some(value),
             Node::Nil => None,
-            Node::Pruned => None,
         }
     }
 
@@ -49,7 +45,6 @@ impl<C, A, V> Node<C, A, V> {
             Node::Parent { ann, .. } => Some(ann),
             Node::Leaf { .. } => None,
             Node::Nil => None,
-            Node::Pruned => None,
         }
     }
 
@@ -76,7 +71,6 @@ impl<'a, C: Clone, A: Clone, V: Clone> Node<C, &'a A, &'a V> {
                 value: (*value).clone(),
             },
             Node::Nil => Node::Nil,
-            Node::Pruned => Node::Pruned,
         }
     }
 }
@@ -100,15 +94,10 @@ impl<A, V> Tree<A, V> {
         Tree(Node::Nil)
     }
 
-    /// Constructs the empty tree consisting of a single pruned node.
-    pub fn empty_pruned() -> Self {
-        Tree(Node::Pruned)
-    }
-
     /// Constructs a tree containing a single leaf.
     ///
     /// This represents either leaf of the tree, or an internal parent node of the
-    /// tree having all [`Node::Pruned`] children.
+    /// tree whose children have all been pruned.
     pub fn leaf(value: V) -> Self {
         Tree(Node::Leaf { value })
     }
@@ -138,21 +127,7 @@ impl<A, V> Tree<A, V> {
         matches!(&self.0, Node::Leaf { .. })
     }
 
-    /// Returns `true` if no additional leaves can be appended to this tree.
-    ///
-    /// The tree is considered full if no `Nil` node exists along the right-hand
-    /// path in a depth-first traversal of this tree. In this case, no additional
-    /// nodes can be added to the right-hand side of this tree without introducing
-    /// a new `Parent` node having this tree as its left-hand child.
-    pub fn is_full(&self) -> bool {
-        match &self.0 {
-            Node::Nil => false,
-            Node::Leaf { .. } | Node::Pruned => true,
-            Node::Parent { right, .. } => right.is_full(),
-        }
-    }
-
-    /// Returns a vector of the addresses of [`Node::Nil`] and [`Node::Pruned`] subtree roots
+    /// Returns a vector of the addresses of [`Node::Nil`] subtree roots
     /// within this tree.
     ///
     /// The given address must correspond to the root of this tree, or this method will
@@ -174,7 +149,7 @@ impl<A, V> Tree<A, V> {
                 left_incomplete
             }
             Node::Leaf { .. } => vec![],
-            Node::Nil | Node::Pruned => vec![root_addr],
+            Node::Nil => vec![root_addr],
         }
     }
 
@@ -192,7 +167,6 @@ impl<A, V> Tree<A, V> {
             },
             Node::Leaf { value } => Node::Leaf { value: f(value) },
             Node::Nil => Node::Nil,
-            Node::Pruned => Node::Pruned,
         })
     }
 
@@ -211,7 +185,6 @@ impl<A, V> Tree<A, V> {
             },
             Node::Leaf { value } => Node::Leaf { value: f(value)? },
             Node::Nil => Node::Nil,
-            Node::Pruned => Node::Pruned,
         }))
     }
 }
@@ -257,25 +230,6 @@ impl<A, V> LocatedTree<A, V> {
     /// increasing position.
     pub fn incomplete_nodes(&self) -> Vec<Address> {
         self.root.incomplete_nodes(self.root_addr)
-    }
-
-    /// Returns the maximum position at which a non-`Nil` leaf has been observed in the tree.
-    ///
-    /// Note that no actual leaf value may exist at this position, as it may have previously been
-    /// pruned.
-    pub fn max_position(&self) -> Option<Position> {
-        fn go<A, V>(addr: Address, root: &Tree<A, V>) -> Option<Position> {
-            match &root.0 {
-                Node::Nil => None,
-                Node::Leaf { .. } | Node::Pruned => Some(addr.position_range_end() - 1),
-                Node::Parent { left, right, .. } => {
-                    let (l_addr, r_addr) = addr.children().unwrap();
-                    go(r_addr, right.as_ref()).or_else(|| go(l_addr, left.as_ref()))
-                }
-            }
-        }
-
-        go(self.root_addr, &self.root)
     }
 
     /// Returns the value at the specified position, if any.
@@ -482,7 +436,6 @@ pub(crate) mod tests {
             root: parent(l.clone(), r.clone()),
         };
 
-        assert_eq!(t.max_position(), Some(7.into()));
         assert_eq!(t.value_at_position(5.into()), Some(&"b".to_string()));
         assert_eq!(t.value_at_position(8.into()), None);
         assert_eq!(t.subtree(Address::from_parts(0.into(), 1)), None);

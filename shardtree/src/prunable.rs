@@ -109,7 +109,17 @@ impl<H: Hashable + Clone + PartialEq> PrunableTree<H> {
                     || (left.as_ref().has_computable_root() && right.as_ref().has_computable_root())
             }
             Node::Leaf { .. } => true,
-            Node::Nil | Node::Pruned => false,
+            Node::Nil => false,
+        }
+    }
+
+    /// Returns `true` if no additional leaves can be appended to the right hand side of this tree
+    /// without over-filling it given its current depth.
+    pub fn is_full(&self) -> bool {
+        match &self.0 {
+            Node::Nil => false,
+            Node::Leaf { .. } => true,
+            Node::Parent { ann, right, .. } => ann.is_some() || right.is_full(),
         }
     }
 
@@ -118,7 +128,7 @@ impl<H: Hashable + Clone + PartialEq> PrunableTree<H> {
         match &self.0 {
             Node::Parent { left, right, .. } => left.contains_marked() || right.contains_marked(),
             Node::Leaf { value: (_, r) } => r.is_marked(),
-            Node::Nil | Node::Pruned => false,
+            Node::Nil => false,
         }
     }
 
@@ -170,7 +180,7 @@ impl<H: Hashable + Clone + PartialEq> PrunableTree<H> {
                         Err(vec![root_addr])
                     }
                 }
-                Node::Nil | Node::Pruned => Err(vec![root_addr]),
+                Node::Nil => Err(vec![root_addr]),
             }
         }
     }
@@ -205,7 +215,7 @@ impl<H: Hashable + Clone + PartialEq> PrunableTree<H> {
                 }
                 result
             }
-            Node::Nil | Node::Pruned => BTreeSet::new(),
+            Node::Nil => BTreeSet::new(),
         }
     }
 
@@ -242,7 +252,6 @@ impl<H: Hashable + Clone + PartialEq> PrunableTree<H> {
             let no_default_fill = addr.position_range_end();
             match (t0, t1) {
                 (Tree(Node::Nil), other) | (other, Tree(Node::Nil)) => Ok(other),
-                (Tree(Node::Pruned), other) | (other, Tree(Node::Pruned)) => Ok(other),
                 (Tree(Node::Leaf { value: vl }), Tree(Node::Leaf { value: vr })) => {
                     if vl.0 == vr.0 {
                         // Merge the flags together.
@@ -344,6 +353,32 @@ pub struct IncompleteAt {
 }
 
 impl<H: Hashable + Clone + PartialEq> LocatedPrunableTree<H> {
+    /// Returns the maximum position at which a non-`Nil` leaf has been observed in the tree.
+    ///
+    /// Note that no actual leaf value may exist at this position, as it may have previously been
+    /// pruned.
+    pub fn max_position(&self) -> Option<Position> {
+        fn go<H>(
+            addr: Address,
+            root: &Tree<Option<Arc<H>>, (H, RetentionFlags)>,
+        ) -> Option<Position> {
+            match &root.0 {
+                Node::Nil => None,
+                Node::Leaf { .. } => Some(addr.position_range_end() - 1),
+                Node::Parent { ann, left, right } => {
+                    if ann.is_some() {
+                        Some(addr.max_position())
+                    } else {
+                        let (l_addr, r_addr) = addr.children().unwrap();
+                        go(r_addr, right.as_ref()).or_else(|| go(l_addr, left.as_ref()))
+                    }
+                }
+            }
+        }
+
+        go(self.root_addr, &self.root)
+    }
+
     /// Computes the root hash of this tree, truncated to the given position.
     ///
     /// If the tree contains any [`Node::Nil`] nodes corresponding to positions less than
@@ -521,7 +556,7 @@ impl<H: Hashable + Clone + PartialEq> LocatedPrunableTree<H> {
                         None
                     }
                 }
-                Node::Nil | Node::Pruned => None,
+                Node::Nil => None,
             }
         }
 
@@ -567,36 +602,29 @@ impl<H: Hashable + Clone + PartialEq> LocatedPrunableTree<H> {
                 // In the case that we are replacing a node entirely, we need to extend the
                 // subtree up to the level of the node being replaced, adding Nil siblings
                 // and recording the presence of those incomplete nodes when necessary
-                let replacement =
-                    |ann: Option<Arc<H>>, mut node: LocatedPrunableTree<H>, pruned: bool| {
-                        // construct the replacement node bottom-up
-                        let mut incomplete = vec![];
-                        while node.root_addr.level() < root_addr.level() {
-                            incomplete.push(IncompleteAt {
-                                address: node.root_addr.sibling(),
-                                required_for_witness: contains_marked,
-                            });
-                            let empty = if pruned {
-                                Tree::empty_pruned()
+                let replacement = |ann: Option<Arc<H>>, mut node: LocatedPrunableTree<H>| {
+                    // construct the replacement node bottom-up
+                    let mut incomplete = vec![];
+                    while node.root_addr.level() < root_addr.level() {
+                        incomplete.push(IncompleteAt {
+                            address: node.root_addr.sibling(),
+                            required_for_witness: contains_marked,
+                        });
+                        let full = node.root;
+                        node = LocatedTree {
+                            root_addr: node.root_addr.parent(),
+                            root: if node.root_addr.is_right_child() {
+                                Tree::parent(None, Tree::empty(), full)
                             } else {
-                                Tree::empty()
-                            };
-                            let full = node.root;
-                            node = LocatedTree {
-                                root_addr: node.root_addr.parent(),
-                                root: if node.root_addr.is_right_child() {
-                                    Tree::parent(None, empty, full)
-                                } else {
-                                    Tree::parent(None, full, empty)
-                                },
-                            };
-                        }
-                        (node.root.reannotate_root(ann), incomplete)
-                    };
+                                Tree::parent(None, full, Tree::empty())
+                            },
+                        };
+                    }
+                    (node.root.reannotate_root(ann), incomplete)
+                };
 
                 match into {
-                    Tree(Node::Nil) => Ok(replacement(None, subtree, false)),
-                    Tree(Node::Pruned) => Ok(replacement(None, subtree, true)),
+                    Tree(Node::Nil) => Ok(replacement(None, subtree)),
                     Tree(Node::Leaf {
                         value: (value, retention),
                     }) => {
@@ -651,22 +679,7 @@ impl<H: Hashable + Clone + PartialEq> LocatedPrunableTree<H> {
                                 Err(InsertionError::Conflict(root_addr))
                             }
                         } else {
-                            Ok(replacement(
-                                Some(Arc::new(value.clone())),
-                                subtree,
-                                // The subtree being inserted may have its root at some level lower
-                                // than the next level down. The siblings of nodes that will be
-                                // generated while descending to the subtree root level will be
-                                // `Nil` nodes (indicating that the value of these nodes have never
-                                // been observed) if the leaf being replaced has `REFERENCE`
-                                // retention. Any other leaf without `REFERENCE` retention will
-                                // have been produced by pruning of previously observed node
-                                // values, so in those cases we use `Pruned` nodes for the absent
-                                // siblings. This allows us to retain the distinction between what
-                                // parts of the tree have been directly observed and what parts
-                                // have not.
-                                !retention.contains(RetentionFlags::REFERENCE),
-                            ))
+                            Ok(replacement(Some(Arc::new(value.clone())), subtree))
                         }
                     }
                     parent if root_addr == subtree.root_addr => {
@@ -921,7 +934,6 @@ impl<H: Hashable + Clone + PartialEq> LocatedPrunableTree<H> {
                         }
                     }
                     Node::Nil => Tree::empty(),
-                    Node::Pruned => Tree::empty_pruned(),
                 }
             }
         }
