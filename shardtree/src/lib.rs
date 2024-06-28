@@ -210,7 +210,8 @@ impl<
         Ok(())
     }
 
-    /// Append a single value at the first available position in the tree.
+    /// Append a single value at the first unfilled position greater than the maximum position of
+    /// any previously inserted leaf.
     ///
     /// Prefer to use [`Self::batch_insert`] when appending multiple values, as these operations
     /// require fewer traversals of the tree than are necessary when performing multiple sequential
@@ -234,17 +235,17 @@ impl<
 
         let (append_result, position, checkpoint_id) =
             if let Some(subtree) = self.store.last_shard().map_err(ShardTreeError::Storage)? {
-                match subtree.max_position() {
-                    // If the subtree is full, then construct a successor tree.
-                    Some(pos) if pos == subtree.root_addr.max_position() => {
-                        let addr = subtree.root_addr;
-                        if subtree.root_addr.index() < Self::max_subtree_index() {
-                            LocatedTree::empty(addr.next_at_level()).append(value, retention)?
-                        } else {
-                            return Err(InsertionError::TreeFull.into());
-                        }
+                if subtree.root().is_full() {
+                    // If the shard is full, then construct a successor tree.
+                    let addr = subtree.root_addr;
+                    if subtree.root_addr.index() < Self::max_subtree_index() {
+                        LocatedTree::empty(addr.next_at_level()).append(value, retention)?
+                    } else {
+                        return Err(InsertionError::TreeFull.into());
                     }
-                    _ => subtree.append(value, retention)?,
+                } else {
+                    // Otherwise, just append to the shard.
+                    subtree.append(value, retention)?
                 }
             } else {
                 let root_addr = Address::from_parts(Self::subtree_level(), 0);
@@ -320,17 +321,8 @@ impl<
             .map_err(ShardTreeError::Storage)?
             .unwrap_or_else(|| LocatedTree::empty(subtree_root_addr));
 
-        trace!(
-            max_position = ?current_shard.max_position(),
-            subtree = ?current_shard,
-            "Current shard");
         let (updated_subtree, supertree) =
             current_shard.insert_frontier_nodes(frontier, &leaf_retention)?;
-        trace!(
-            max_position = ?updated_subtree.max_position(),
-            subtree = ?updated_subtree,
-            "Replacement shard"
-        );
         self.store
             .put_shard(updated_subtree)
             .map_err(ShardTreeError::Storage)?;
@@ -447,7 +439,7 @@ impl<
                     Tree::leaf((h.clone(), *r | RetentionFlags::CHECKPOINT)),
                     root_addr.max_position(),
                 )),
-                Node::Nil | Node::Pruned => None,
+                Node::Nil => None,
             }
         }
 
@@ -581,13 +573,7 @@ impl<
                     .map_err(ShardTreeError::Storage)?;
 
                 if let Some(to_clear) = to_clear {
-                    let pre_clearing_max_position = to_clear.max_position();
                     let cleared = to_clear.clear_flags(positions);
-
-                    // Clearing flags should not modify the max position of leaves represented
-                    // in the shard.
-                    assert!(cleared.max_position() == pre_clearing_max_position);
-
                     self.store
                         .put_shard(cleared)
                         .map_err(ShardTreeError::Storage)?;
@@ -867,7 +853,7 @@ impl<
                     ))
                 }
             }
-            Node::Nil | Node::Pruned => {
+            Node::Nil => {
                 if cap.root_addr == target_addr
                     || cap.root_addr.level() == ShardTree::<S, DEPTH, SHARD_HEIGHT>::subtree_level()
                 {
@@ -1464,7 +1450,8 @@ mod tests {
                     id: 1,
                     marking: frontier_marking,
                 },
-            )?;
+            )
+            .unwrap();
 
             // Insert a few leaves beginning at the subsequent position, so as to cross the shard
             // boundary.
@@ -1473,7 +1460,8 @@ mod tests {
                 ('g'..='j')
                     .into_iter()
                     .map(|c| (c.to_string(), Retention::Ephemeral)),
-            )?;
+            )
+            .unwrap();
 
             // Trigger pruning by adding 5 more checkpoints
             for i in 2..7 {
@@ -1486,7 +1474,8 @@ mod tests {
                 ('e'..='f')
                     .into_iter()
                     .map(|c| (c.to_string(), Retention::Marked)),
-            )?;
+            )
+            .unwrap();
 
             // Compute the witness
             tree.witness_at_checkpoint_id(frontier_end, &6)
