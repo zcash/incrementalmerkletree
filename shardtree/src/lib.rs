@@ -51,7 +51,7 @@ pub use self::prunable::{IncompleteAt, LocatedPrunableTree, PrunableTree, Retent
 pub mod error;
 pub mod store;
 
-#[cfg(any(bench, test, feature = "test-dependencies"))]
+#[cfg(any(test, feature = "test-dependencies"))]
 pub mod testing;
 
 #[cfg(feature = "legacy-api")]
