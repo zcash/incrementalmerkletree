@@ -14,11 +14,11 @@ categories = ["algorithms", "data-structures"]
 rust-version = "1.60"
 
 [dependencies]
-incrementalmerkletree = { version = "0.5", path = "../incrementalmerkletree" }
+incrementalmerkletree = { version = "0.6", path = "../incrementalmerkletree" }
 proptest = { version = "1.0.0", optional = true }
 
 [dev-dependencies]
-incrementalmerkletree = { version = "0.5", path = "../incrementalmerkletree", features = ["test-dependencies"] }
+incrementalmerkletree = { version = "0.6", path = "../incrementalmerkletree", features = ["test-dependencies"] }
 proptest = "1.0.0"
 
 [features]
