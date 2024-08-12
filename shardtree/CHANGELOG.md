@@ -7,11 +7,20 @@ and this project adheres to Rust's notion of
 
 ## Unreleased
 
+## [0.4.0] - 2024-08-12
+
+This is a bugfix release that fixes a couple of subtle problems related to
+pruning in the presence of inserted `Frontier` nodes. See the `Removed` and
+`Fixed` sections below for additional details.
+
 ### Added
 - `shardtree::tree::Tree::{is_leaf, map, try_map, empty_pruned}`
 - `shardtree::tree::LocatedTree::{map, try_map}`
 - `shardtree::prunable::PrunableTree::{has_computable_root, is_full}`
 - `shardtree::prunable::LocatedPrunableTree::{max_position}`
+
+### Changed
+- Updated to use `incrementalmerkletree` v0.6.
 
 ### Removed
 - `shardtree::tree::LocatedTree::max_position` did not behave correctly regarding
