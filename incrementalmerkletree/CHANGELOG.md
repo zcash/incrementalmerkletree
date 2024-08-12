@@ -7,6 +7,8 @@ and this project adheres to Rust's notion of
 
 ## Unreleased
 
+## [0.6.0] - 2024-08-12
+
 ### Added
 - `incrementalmerkletree::Marking`
 - `incrementalmerkletree::Level::ZERO`
