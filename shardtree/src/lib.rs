@@ -103,6 +103,11 @@ impl<
         &mut self.store
     }
 
+    /// Returns the maximum number of checkpoints to retain before pruning.
+    pub fn max_checkpoints(&self) -> usize {
+        self.max_checkpoints
+    }
+
     /// Returns the root address of the tree.
     pub fn root_addr() -> Address {
         Address::from_parts(Level::from(DEPTH), 0)
