@@ -137,9 +137,9 @@ impl<H: Clone, C: Clone + Ord> ShardStore for MemoryShardStore<H, C> {
         Ok(())
     }
 
-    fn for_each_checkpoint<F>(&self, limit: usize, callback: F) -> Result<(), Self::Error>
+    fn for_each_checkpoint<F>(&self, limit: usize, mut callback: F) -> Result<(), Self::Error>
     where
-        F: Fn(&C, &Checkpoint) -> Result<(), Self::Error>,
+        F: FnMut(&C, &Checkpoint) -> Result<(), Self::Error>,
     {
         for (cid, checkpoint) in self.checkpoints.iter().take(limit) {
             callback(cid, checkpoint)?

@@ -120,7 +120,7 @@ pub trait ShardStore {
     /// essentially the immutable version of `with_checkpoints`.
     fn for_each_checkpoint<F>(&self, limit: usize, callback: F) -> Result<(), Self::Error>
     where
-        F: Fn(&Self::CheckpointId, &Checkpoint) -> Result<(), Self::Error>;
+        F: FnMut(&Self::CheckpointId, &Checkpoint) -> Result<(), Self::Error>;
 
     /// Update the checkpoint having the given identifier by mutating it with the provided
     /// function, and persist the updated checkpoint to the data store.
@@ -226,7 +226,7 @@ impl<S: ShardStore> ShardStore for &mut S {
 
     fn for_each_checkpoint<F>(&self, limit: usize, callback: F) -> Result<(), Self::Error>
     where
-        F: Fn(&Self::CheckpointId, &Checkpoint) -> Result<(), Self::Error>,
+        F: FnMut(&Self::CheckpointId, &Checkpoint) -> Result<(), Self::Error>,
     {
         S::for_each_checkpoint(self, limit, callback)
     }
