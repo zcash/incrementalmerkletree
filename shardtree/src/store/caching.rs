@@ -184,6 +184,12 @@ where
     {
         self.cache.with_checkpoints(limit, callback)
     }
+    fn for_each_checkpoint<F>(&self, limit: usize, callback: F) -> Result<(), Self::Error>
+    where
+        F: Fn(&Self::CheckpointId, &Checkpoint) -> Result<(), Self::Error>,
+    {
+        self.cache.for_each_checkpoint(limit, callback)
+    }
 
     fn update_checkpoint_with<F>(
         &mut self,
