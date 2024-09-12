@@ -7,6 +7,9 @@ and this project adheres to Rust's notion of
 
 ## Unreleased
 
+### Added
+- `shardtree::store::ShardStore::for_each_checkpoint`
+
 ## [0.4.0] - 2024-08-12
 
 This is a bugfix release that fixes a couple of subtle problems related to
