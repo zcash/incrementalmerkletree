@@ -2,8 +2,8 @@
 use std::cmp::min;
 use std::collections::{BTreeMap, BTreeSet};
 
-use crate::Marking;
-use crate::{testing::Tree, Hashable, Level, Position, Retention};
+use crate::Tree;
+use incrementalmerkletree::{Hashable, Level, Marking, Position, Retention};
 
 const MAX_COMPLETE_SIZE_ERROR: &str = "Positions of a `CompleteTree` must fit into the platform word size, because larger complete trees are not representable.";
 
@@ -320,12 +320,10 @@ mod tests {
 
     use super::CompleteTree;
     use crate::{
-        testing::{
-            check_append, check_checkpoint_rewind, check_rewind_remove_mark, check_root_hashes,
-            check_witnesses, compute_root_from_witness, SipHashable, Tree,
-        },
-        Hashable, Level, Position, Retention,
+        check_append, check_checkpoint_rewind, check_rewind_remove_mark, check_root_hashes,
+        check_witnesses, compute_root_from_witness, SipHashable, Tree,
     };
+    use incrementalmerkletree::{Hashable, Level, Position, Retention};
 
     #[test]
     fn correct_empty_root() {
@@ -384,7 +382,8 @@ mod tests {
 
     #[test]
     fn correct_witness() {
-        use crate::{testing::Tree, Retention};
+        use crate::Tree;
+        use incrementalmerkletree::Retention;
 
         const DEPTH: u8 = 3;
         let values = (0..(1 << DEPTH)).map(SipHashable);

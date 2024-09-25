@@ -6,7 +6,8 @@ use proptest::collection::vec;
 use proptest::prelude::*;
 use proptest::sample::select;
 
-use incrementalmerkletree::{testing, Hashable};
+use incrementalmerkletree::Hashable;
+use incrementalmerkletree_testing as testing;
 
 use super::*;
 use crate::store::{memory::MemoryShardStore, ShardStore};
@@ -323,9 +324,7 @@ pub fn check_shardtree_insertion<
     assert_matches!(
         tree.batch_insert(
             Position::from(4),
-            ('e'..'k')
-                .into_iter()
-                .map(|c| (c.to_string(), Retention::Ephemeral))
+            ('e'..'k').map(|c| (c.to_string(), Retention::Ephemeral))
         ),
         Ok(_)
     );
@@ -379,7 +378,7 @@ pub fn check_witness_with_pruned_subtrees<
     // simulate discovery of a note
     tree.batch_insert(
         Position::from(24),
-        ('a'..='h').into_iter().map(|c| {
+        ('a'..='h').map(|c| {
             (
                 c.to_string(),
                 match c {

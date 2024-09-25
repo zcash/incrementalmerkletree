@@ -1,6 +1,7 @@
 [workspace]
 members = [
     "incrementalmerkletree",
+    "incrementalmerkletree-testing",
     "bridgetree",
     "shardtree",
 ]
@@ -16,6 +17,7 @@ categories = ["algorithms", "data-structures"]
 [workspace.dependencies]
 # Intra-workspace dependencies
 incrementalmerkletree = { version = "0.6", path = "incrementalmerkletree" }
+incrementalmerkletree-testing = { version = "0.1", path = "incrementalmerkletree-testing" }
 
 # Testing
 proptest = "1"

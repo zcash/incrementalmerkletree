@@ -22,11 +22,13 @@ bitflags = "2"
 either = "1.8"
 incrementalmerkletree.workspace = true
 proptest = { workspace = true, optional = true }
+incrementalmerkletree-testing = { workspace = true, optional = true }
 tracing = "0.1"
 
 [dev-dependencies]
 assert_matches = "1.5"
 incrementalmerkletree = { workspace = true, features = ["test-dependencies"] }
+incrementalmerkletree-testing.workspace = true
 proptest.workspace = true
 
 [features]

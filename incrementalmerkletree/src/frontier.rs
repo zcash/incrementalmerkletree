@@ -561,7 +561,6 @@ impl<H: Hashable + Clone, const DEPTH: u8> CommitmentTree<H, DEPTH> {
                 left: Some(left),
                 right,
                 parents: (1u8..DEPTH)
-                    .into_iter()
                     .map(|i| {
                         if u64::from(f.position()) & (1 << i) == 0 {
                             None

@@ -1309,13 +1309,12 @@ mod tests {
 
     use incrementalmerkletree::{
         frontier::{Frontier, NonEmptyFrontier},
-        testing::{
-            arb_operation, check_append, check_checkpoint_rewind, check_operations,
-            check_remove_mark, check_rewind_remove_mark, check_root_hashes,
-            check_witness_consistency, check_witnesses, complete_tree::CompleteTree, CombinedTree,
-            SipHashable,
-        },
         Address, Hashable, Level, Marking, MerklePath, Position, Retention,
+    };
+    use incrementalmerkletree_testing::{
+        arb_operation, check_append, check_checkpoint_rewind, check_operations, check_remove_mark,
+        check_rewind_remove_mark, check_root_hashes, check_witness_consistency, check_witnesses,
+        complete_tree::CompleteTree, CombinedTree, SipHashable,
     };
 
     use crate::{
@@ -1462,9 +1461,7 @@ mod tests {
             // boundary.
             tree.batch_insert(
                 frontier_end + 1,
-                ('g'..='j')
-                    .into_iter()
-                    .map(|c| (c.to_string(), Retention::Ephemeral)),
+                ('g'..='j').map(|c| (c.to_string(), Retention::Ephemeral)),
             )
             .unwrap();
 
@@ -1476,9 +1473,7 @@ mod tests {
             // Insert nodes that require the pruned nodes for witnessing
             tree.batch_insert(
                 frontier_end - 1,
-                ('e'..='f')
-                    .into_iter()
-                    .map(|c| (c.to_string(), Retention::Marked)),
+                ('e'..='f').map(|c| (c.to_string(), Retention::Marked)),
             )
             .unwrap();
 

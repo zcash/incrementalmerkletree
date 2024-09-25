@@ -19,6 +19,7 @@ proptest = { workspace = true, optional = true }
 
 [dev-dependencies]
 incrementalmerkletree = { workspace = true, features = ["test-dependencies"] }
+incrementalmerkletree-testing.workspace = true
 proptest.workspace = true
 
 [features]
