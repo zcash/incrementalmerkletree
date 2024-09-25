@@ -986,13 +986,11 @@ mod tests {
     use std::fmt::Debug;
 
     use super::*;
-    use incrementalmerkletree::{
-        testing::{
-            self, apply_operation, arb_operation, check_checkpoint_rewind, check_operations,
-            check_remove_mark, check_rewind_remove_mark, check_root_hashes, check_witnesses,
-            complete_tree::CompleteTree, CombinedTree, SipHashable,
-        },
-        Hashable,
+    use incrementalmerkletree::Hashable;
+    use incrementalmerkletree_testing::{
+        self as testing, apply_operation, arb_operation, check_checkpoint_rewind, check_operations,
+        check_remove_mark, check_rewind_remove_mark, check_root_hashes, check_witnesses,
+        complete_tree::CompleteTree, CombinedTree, SipHashable,
     };
 
     impl<H: Hashable + Clone + Ord, const DEPTH: u8> testing::Tree<H, usize>

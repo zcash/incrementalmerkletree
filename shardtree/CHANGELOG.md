@@ -7,6 +7,9 @@ and this project adheres to Rust's notion of
 
 ## Unreleased
 
+### Changed
+- MSRV is now 1.64
+
 ### Added
 - `shardtree::store::ShardStore::for_each_checkpoint`
 

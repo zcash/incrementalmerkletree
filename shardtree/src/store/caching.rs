@@ -220,12 +220,9 @@ where
 
 #[cfg(test)]
 mod tests {
-    use incrementalmerkletree::{
-        testing::{
-            append_str, check_operations, unmark, witness, CombinedTree, Operation, TestHashable,
-            Tree,
-        },
-        Hashable, Marking, Position, Retention,
+    use incrementalmerkletree::{Hashable, Marking, Position, Retention};
+    use incrementalmerkletree_testing::{
+        append_str, check_operations, unmark, witness, CombinedTree, Operation, TestHashable, Tree,
     };
 
     use super::CachingShardStore;

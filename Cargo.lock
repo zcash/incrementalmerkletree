@@ -46,6 +46,7 @@ name = "bridgetree"
 version = "0.5.0"
 dependencies = [
  "incrementalmerkletree",
+ "incrementalmerkletree-testing",
  "proptest",
 ]
 
@@ -111,13 +112,21 @@ checksum = "d77f7ec81a6d05a3abb01ab6eb7590f6083d08449fe5a1c8b1e620283546ccb7"
 
 [[package]]
 name = "incrementalmerkletree"
-version = "0.6.0"
+version = "0.7.0"
 dependencies = [
  "either",
  "proptest",
  "rand",
  "rand_chacha",
  "rand_core",
+]
+
+[[package]]
+name = "incrementalmerkletree-testing"
+version = "0.1.0"
+dependencies = [
+ "incrementalmerkletree",
+ "proptest",
 ]
 
 [[package]]
@@ -324,6 +333,7 @@ dependencies = [
  "bitflags 2.4.1",
  "either",
  "incrementalmerkletree",
+ "incrementalmerkletree-testing",
  "proptest",
  "tempfile",
  "tracing",

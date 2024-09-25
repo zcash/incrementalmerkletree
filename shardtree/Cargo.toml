@@ -1,16 +1,16 @@
 [package]
 name = "shardtree"
+description = "A space-efficient Merkle tree with witnessing of marked leaves, checkpointing & state restoration."
 version = "0.4.0"
 authors = [
     "Kris Nuttycombe <kris@nutty.land>",
 ]
-edition = "2021"
-rust-version = "1.60"
-license = "MIT OR Apache-2.0"
-description = "A space-efficient Merkle tree with witnessing of marked leaves, checkpointing & state restoration."
-homepage = "https://github.com/zcash/incrementalmerkletree"
-repository = "https://github.com/zcash/incrementalmerkletree"
-categories = ["algorithms", "data-structures"]
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+homepage.workspace = true
+repository.workspace = true
+categories.workspace = true
 
 [package.metadata.docs.rs]
 all-features = true
@@ -20,14 +20,16 @@ rustdoc-args = ["--cfg", "docsrs"]
 assert_matches = { version = "1.5", optional = true }
 bitflags = "2"
 either = "1.8"
-incrementalmerkletree = { version = "0.6", path = "../incrementalmerkletree" }
-proptest = { version = "1.0.0", optional = true }
+incrementalmerkletree.workspace = true
+proptest = { workspace = true, optional = true }
+incrementalmerkletree-testing = { workspace = true, optional = true }
 tracing = "0.1"
 
 [dev-dependencies]
 assert_matches = "1.5"
-incrementalmerkletree = { version = "0.6", path = "../incrementalmerkletree", features = ["test-dependencies"] }
-proptest = "1.0.0"
+incrementalmerkletree = { workspace = true, features = ["test-dependencies"] }
+incrementalmerkletree-testing.workspace = true
+proptest.workspace = true
 
 [features]
 # The legacy-api feature guards types and functions that are useful for

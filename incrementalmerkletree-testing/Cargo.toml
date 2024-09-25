@@ -1,0 +1,23 @@
+[package]
+name = "incrementalmerkletree-testing"
+description = "Common types, interfaces, and utilities for testing Merkle tree data structures"
+version = "0.1.0"
+authors = [
+    "Kris Nuttycombe <kris@nutty.land>",
+    "Sean Bowe <ewillbefull@gmail.com>",
+]
+edition.workspace = true
+license.workspace = true
+homepage.workspace = true
+repository.workspace = true
+categories.workspace = true
+rust-version.workspace = true
+
+[package.metadata.docs.rs]
+all-features = true
+rustdoc-args = ["--cfg", "docsrs"]
+
+[dependencies]
+incrementalmerkletree = { workspace = true, features = ["test-dependencies"] }
+
+proptest.workspace = true

@@ -1,6 +1,23 @@
 [workspace]
 members = [
     "incrementalmerkletree",
+    "incrementalmerkletree-testing",
     "bridgetree",
     "shardtree",
 ]
+
+[workspace.package]
+edition = "2021"
+rust-version = "1.64"
+repository = "https://github.com/zcash/incrementalmerkletree"
+homepage = "https://github.com/zcash/incrementalmerkletree"
+license = "MIT OR Apache-2.0"
+categories = ["algorithms", "data-structures"]
+
+[workspace.dependencies]
+# Intra-workspace dependencies
+incrementalmerkletree = { version = "0.7", path = "incrementalmerkletree" }
+incrementalmerkletree-testing = { version = "0.1", path = "incrementalmerkletree-testing" }
+
+# Testing
+proptest = "1"
