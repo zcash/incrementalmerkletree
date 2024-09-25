@@ -2,8 +2,10 @@
 members = [
     "incrementalmerkletree",
     "incrementalmerkletree-testing",
-    "bridgetree",
     "shardtree",
+]
+exclude = [
+    "bridgetree",
 ]
 
 [workspace.package]
