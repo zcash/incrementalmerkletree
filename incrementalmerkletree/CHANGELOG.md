@@ -7,8 +7,14 @@ and this project adheres to Rust's notion of
 
 ## Unreleased
 
+## [0.7.0] - 2024-09-25
+
 ### Changed
 - MSRV is now 1.64
+
+### Removed
+- `incrementalmerkletree::testing::{Tree, complete_tree}` and related types and functions
+  have been removed. Use the `incrementalmerkletree-testing` crate instead.
 
 ## [0.6.0] - 2024-08-12
 
