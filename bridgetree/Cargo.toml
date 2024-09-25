@@ -1,25 +1,25 @@
 [package]
 name = "bridgetree"
+description = "A space-efficient Merkle tree designed for linear appends with witnessing of marked leaves, checkpointing & state restoration."
 version = "0.5.0"
 authors = [
     "Kris Nuttycombe <kris@nutty.land>",
     "Sean Bowe <ewillbefull@gmail.com>",
 ]
-edition = "2021"
-license = "MIT OR Apache-2.0"
-description = "A space-efficient Merkle tree designed for linear appends with witnessing of marked leaves, checkpointing & state restoration."
-homepage = "https://github.com/zcash/incrementalmerkletree"
-repository = "https://github.com/zcash/incrementalmerkletree"
-categories = ["algorithms", "data-structures"]
-rust-version = "1.60"
+edition.workspace = true
+license.workspace = true
+homepage.workspace = true
+repository.workspace = true
+categories.workspace = true
+rust-version.workspace = true
 
 [dependencies]
-incrementalmerkletree = { version = "0.6", path = "../incrementalmerkletree" }
-proptest = { version = "1.0.0", optional = true }
+incrementalmerkletree.workspace = true
+proptest = { workspace = true, optional = true }
 
 [dev-dependencies]
-incrementalmerkletree = { version = "0.6", path = "../incrementalmerkletree", features = ["test-dependencies"] }
-proptest = "1.0.0"
+incrementalmerkletree = { workspace = true, features = ["test-dependencies"] }
+proptest.workspace = true
 
 [features]
 test-dependencies = ["proptest"]
