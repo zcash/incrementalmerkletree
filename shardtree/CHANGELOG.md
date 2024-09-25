@@ -7,11 +7,90 @@ and this project adheres to Rust's notion of
 
 ## Unreleased
 
-### Changed
-- MSRV is now 1.64
+This release includes a significant refactoring and rework of several methods
+of the `shardtree::ShardTree` type and the `shardtree::store::ShardStore`
+trait. Please read the notes for this release carefully as the semantics of
+important methods have changed. These changes may require changes to clients of
+this crate; in particular, the existence of a checkpoint is required for all
+witnessing and rewinding operations.
 
 ### Added
 - `shardtree::store::ShardStore::for_each_checkpoint`
+- `shardtree::ShardTree::truncate_to_checkpoint_depth`. This replaces
+  the `ShardTree::truncate_to_depth` method, with modified semantics such that
+  the provided `checkpoint_depth` argument is now treated strictly as a
+  zero-based index into the checkpoints applied to the tree, in reverse order
+  of checkpoint identifier. It is no longer possible to truncate the tree if no
+  checkpoints have been created.
+- `shardtree::ShardTree::truncate_to_checkpoint` replaces
+  `ShardTree::truncate_removing_checkpoint`. Instead of removing
+  the checkpoint, this replacement method removes all state from the tree
+  related to leaves having positions greater than the checkpointed position,
+  but unlike `truncate_removing_checkpoint` it leaves the checkpoint itself
+  in place.
+- `shardtree::store::ShardStore::truncate_shards` replaces
+  `ShardStore::truncate`. Instead of taking an `Address` and requiring that
+  implementations impose additional runtime restriction on the level of that
+  address, the replacement method directly takes a shard index.
+- `ShardStore::truncate_truncate_checkpoints_retaining` replaces
+  `ShardStore::truncate_checkpoints`. Instead of removing the checkpoint
+  having the specified identifier, the associated checkpoint should be retained
+  but any additional metadata stored with the checkpoint, such as information
+  about marks removed after the creation of the checkpoint, should be deleted.
+
+### Changed
+- MSRV is now 1.64
+- `shardtree::ShardTree`:
+  - `ShardTree::max_leaf_position` now takes its `checkpoint_depth` argument
+    as `Option<usize>` instead of `usize`. The semantics of this method are now
+    changed such that if a checkpoint depth is provided, it is now treated
+    strictly as a zero-based index into the checkpoints of the tree in reverse
+    order of checkpoint identifier, and an error is returned if no checkpoint
+    exists at the given index. A `None` value passed for this argument causes
+    it to return the maximum position among all leaves added to the tree.
+  - `ShardTree::root_at_checkpoint_id` and `root_at_checkpoint_id_caching` now
+    each return the computed root as an optional value, returning `Ok(None)` if
+    the checkpoint corresponding to the requested identifier does not exist.
+  - `ShardTree::root_at_checkpoint_depth` and `root_at_checkpoint_depth_caching`
+    now takes the `checkpoint_depth` argument as `Option<usize>` instead of
+    `usize`. The semantics of this method are now changed such that if a
+    checkpoint depth is provided, it is now treated strictly as a zero-based
+    index into the checkpoints of the tree in reverse order of checkpoint
+    identifier, and an error is returned if no checkpoint exists at the given
+    index. A `None` value passed for this argument causes it to return the root
+    computed over all of the leaves in the tree. These methods now each return
+    the computed root as an optional value, returning `Ok(None)` if no checkpoint
+    exist at the requested checkpoint depth.
+  - `ShardTree::witness_at_checkpoint_id` and `witness_at_checkpoint_id_caching`
+    now each return the computed witness as an optional value, returning
+    `Ok(None)` if the checkpoint corresponding to the requested identifier does
+    not exist.
+  - `ShardTree::witness_at_checkpoint_depth` and `witness_at_checkpoint_depth_caching`
+    now each return the computed witness as an optional value, returning
+    `Ok(None)` if no checkpoint was available at the given checkpoint depth.The
+    semantics of this method are now changed such that if a checkpoint depth is
+    provided, it is now treated strictly as a zero-based index into the
+    checkpoints of the tree in reverse order of checkpoint identifier, and an
+    error is returned if no checkpoint exists at the given index. IT IS NO LONGER
+    POSSIBLE TO COMPUTE A WITNESS WITHOUT A CHECKPOINT BEING PRESENT IN THE TREE.
+- `shardtree::store::ShardStore`:
+  - The semantics of `ShardStore::get_checkpoint_at_depth` HAVE CHANGED WITHOUT
+    CHANGES TO THE METHOD SIGNATURE. The `checkpoint_depth` argument to this
+    method is now treated strictly as a zero-based index into the checkpoints
+    of the tree in reverse order of checkpoint identifier. Previously, this
+    method always returned `None` for `checkpoint_depth == 0`, and
+    `checkpoint_depth` was otherwise treated as a 1-based index instead of a
+    0-based index.
+
+### Removed
+- `shardtree::ShardTree::truncate_to_depth` has been replaced by
+  `ShardTree::truncate_to_checkpoint_depth`
+- `shardtree::ShardTree::truncate_removing_checkpoint` has been replaced by
+  `ShardTree::truncate_to_checkpoint`
+- `shardtree::store::ShardStore::truncate` has been replaced by
+  `ShardStore::truncate_shards`
+- `shardtree::store::ShardStore::truncate_checkpoints` has been replaced by
+  `ShardStore::truncate_checkpoints_retaining`
 
 ## [0.4.0] - 2024-08-12
 

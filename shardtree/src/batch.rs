@@ -36,6 +36,8 @@ impl<
     ///
     /// This method operates on a single thread. If you have parallelism available, consider using
     /// [`LocatedPrunableTree::from_iter`] and [`Self::insert_tree`] instead.
+    ///
+    /// [`Node::Nil`]: crate::tree::Node::Nil
     #[allow(clippy::type_complexity)]
     pub fn batch_insert<I: Iterator<Item = (H, Retention<C>)>>(
         &mut self,
@@ -96,6 +98,8 @@ pub struct BatchInsertionResult<H, C: Ord, I: Iterator<Item = (H, Retention<C>)>
     /// The vector of addresses of [`Node::Nil`] nodes that were inserted into the tree as part of
     /// the insertion operation, for nodes that are required in order to construct a witness for
     /// each inserted leaf with [`Retention::Marked`] retention.
+    ///
+    /// [`Node::Nil`]: crate::tree::Node::Nil
     pub incomplete: Vec<IncompleteAt>,
     /// The maximum position at which a leaf was inserted.
     pub max_insert_position: Option<Position>,
@@ -507,8 +511,8 @@ mod tests {
     fn batch_insert_matches_insert_tree() {
         {
             let (lhs, rhs) = build_insert_tree_and_batch_insert(vec![]);
-            assert_eq!(lhs.max_leaf_position(0), Ok(None));
-            assert_eq!(rhs.max_leaf_position(0), Ok(None));
+            assert_eq!(lhs.max_leaf_position(None), Ok(None));
+            assert_eq!(rhs.max_leaf_position(None), Ok(None));
         }
 
         for i in 0..64 {
@@ -524,11 +528,23 @@ mod tests {
                 });
 
             let (lhs, rhs) = build_insert_tree_and_batch_insert(leaves);
-            assert_eq!(lhs.max_leaf_position(0), Ok(Some(Position::from(i as u64))));
-            assert_eq!(rhs.max_leaf_position(0), Ok(Some(Position::from(i as u64))));
+            assert_eq!(
+                lhs.max_leaf_position(None),
+                Ok(Some(Position::from(i as u64)))
+            );
+            assert_eq!(
+                rhs.max_leaf_position(None),
+                Ok(Some(Position::from(i as u64)))
+            );
 
-            assert_eq!(lhs.root_at_checkpoint_depth(0).unwrap(), expected_root);
-            assert_eq!(rhs.root_at_checkpoint_depth(0).unwrap(), expected_root);
+            assert_eq!(
+                lhs.root_at_checkpoint_depth(None).unwrap().as_ref(),
+                Some(&expected_root)
+            );
+            assert_eq!(
+                rhs.root_at_checkpoint_depth(None).unwrap().as_ref(),
+                Some(&expected_root)
+            );
         }
     }
 }
@@ -548,7 +564,7 @@ mod proptests {
             let (left, right) = build_insert_tree_and_batch_insert(leaves);
 
             // Check that the resulting trees are equal.
-            assert_eq!(left.root_at_checkpoint_depth(0), right.root_at_checkpoint_depth(0));
+            assert_eq!(left.root_at_checkpoint_depth(None), right.root_at_checkpoint_depth(None));
         }
     }
 }
