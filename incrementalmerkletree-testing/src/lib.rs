@@ -19,8 +19,10 @@ pub trait Tree<H, C> {
     /// Returns the number of levels in the tree.
     fn depth(&self) -> u8;
 
-    /// Appends a new value to the tree at the next available slot. Returns true if successful and
-    /// false if the tree would exceed the maximum allowed number of levels in the tree.
+    /// Appends a new value to the tree at the next available slot.
+    ///
+    /// Returns true if successful and false if the tree would exceed
+    /// the maximum allowed number of levels in the tree.
     fn append(&mut self, value: H, retention: Retention<C>) -> bool;
 
     /// Returns the most recently appended leaf value.

@@ -52,8 +52,8 @@ witnessing and rewinding operations.
     each return the computed root as an optional value, returning `Ok(None)` if
     the checkpoint corresponding to the requested identifier does not exist.
   - `ShardTree::root_at_checkpoint_depth` and `root_at_checkpoint_depth_caching`
-    now takes the `checkpoint_depth` argument as `Option<usize>` instead of
-    `usize`. The semantics of this method are now changed such that if a
+    now take their `checkpoint_depth` argument as `Option<usize>` instead of
+    `usize`. The semantics of these methods are now changed such that if a
     checkpoint depth is provided, it is now treated strictly as a zero-based
     index into the checkpoints of the tree in reverse order of checkpoint
     identifier, and an error is returned if no checkpoint exists at the given
@@ -67,12 +67,12 @@ witnessing and rewinding operations.
     not exist.
   - `ShardTree::witness_at_checkpoint_depth` and `witness_at_checkpoint_depth_caching`
     now each return the computed witness as an optional value, returning
-    `Ok(None)` if no checkpoint was available at the given checkpoint depth.The
+    `Ok(None)` if no checkpoint was available at the given checkpoint depth. The
     semantics of this method are now changed such that if a checkpoint depth is
     provided, it is now treated strictly as a zero-based index into the
-    checkpoints of the tree in reverse order of checkpoint identifier, and an
-    error is returned if no checkpoint exists at the given index. IT IS NO LONGER
-    POSSIBLE TO COMPUTE A WITNESS WITHOUT A CHECKPOINT BEING PRESENT IN THE TREE.
+    checkpoints of the tree in reverse order of checkpoint identifier. IT IS NO
+    LONGER POSSIBLE TO COMPUTE A WITNESS WITHOUT A CHECKPOINT BEING PRESENT IN
+    THE TREE.
 - `shardtree::store::ShardStore`:
   - The semantics of `ShardStore::get_checkpoint_at_depth` HAVE CHANGED WITHOUT
     CHANGES TO THE METHOD SIGNATURE. The `checkpoint_depth` argument to this
