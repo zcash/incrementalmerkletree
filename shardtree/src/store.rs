@@ -65,11 +65,8 @@ pub trait ShardStore {
     fn get_shard_roots(&self) -> Result<Vec<Address>, Self::Error>;
 
     /// Removes subtrees from the underlying store having root addresses at indices greater
-    /// than or equal to that of the specified address.
-    ///
-    /// Implementations of this method MUST enforce the constraint that the root address
-    /// provided has level `SHARD_HEIGHT`.
-    fn truncate(&mut self, from: Address) -> Result<(), Self::Error>;
+    /// than or equal to that of the specified index.
+    fn truncate_shards(&mut self, shard_index: u64) -> Result<(), Self::Error>;
 
     /// A tree that is used to cache the known roots of subtrees in the "cap" - the top part of the
     /// tree, which contains parent nodes produced by hashing the roots of the individual shards.
@@ -96,9 +93,11 @@ pub trait ShardStore {
     /// Returns the number of checkpoints maintained by the data store
     fn checkpoint_count(&self) -> Result<usize, Self::Error>;
 
-    /// Returns the id and position of the checkpoint, if any. Returns `None` if
-    /// `checkpoint_depth == 0` or if insufficient checkpoints exist to seek back
-    /// to the requested depth.
+    /// Returns the id and position of the checkpoint at the specified depth, if it exists.
+    ///
+    /// Returns `None` if if insufficient checkpoints exist to seek back to the requested depth.
+    /// Depth 0 refers to the most recent checkpoint in the tree; depth 1 refers to the previous
+    /// checkpoint, and so forth.
     fn get_checkpoint_at_depth(
         &self,
         checkpoint_depth: usize,
@@ -140,8 +139,9 @@ pub trait ShardStore {
     /// If no checkpoint exists with the given ID, this does nothing.
     fn remove_checkpoint(&mut self, checkpoint_id: &Self::CheckpointId) -> Result<(), Self::Error>;
 
-    /// Removes checkpoints with identifiers greater than or equal to the given identifier.
-    fn truncate_checkpoints(
+    /// Removes checkpoints with identifiers greater than to the given identifier, and removes mark
+    /// removal metadata from the specified checkpoint.
+    fn truncate_checkpoints_retaining(
         &mut self,
         checkpoint_id: &Self::CheckpointId,
     ) -> Result<(), Self::Error>;
@@ -179,8 +179,8 @@ impl<S: ShardStore> ShardStore for &mut S {
         S::put_cap(*self, cap)
     }
 
-    fn truncate(&mut self, from: Address) -> Result<(), Self::Error> {
-        S::truncate(*self, from)
+    fn truncate_shards(&mut self, shard_index: u64) -> Result<(), Self::Error> {
+        S::truncate_shards(*self, shard_index)
     }
 
     fn min_checkpoint_id(&self) -> Result<Option<Self::CheckpointId>, Self::Error> {
@@ -246,11 +246,11 @@ impl<S: ShardStore> ShardStore for &mut S {
         S::remove_checkpoint(self, checkpoint_id)
     }
 
-    fn truncate_checkpoints(
+    fn truncate_checkpoints_retaining(
         &mut self,
         checkpoint_id: &Self::CheckpointId,
     ) -> Result<(), Self::Error> {
-        S::truncate_checkpoints(self, checkpoint_id)
+        S::truncate_checkpoints_retaining(self, checkpoint_id)
     }
 }
 

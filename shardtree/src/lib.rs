@@ -596,23 +596,25 @@ impl<
         Ok(())
     }
 
-    /// Truncates the tree, discarding all information after the checkpoint at the specified depth.
+    /// Truncates the tree, discarding all information after the checkpoint at the specified
+    /// checkpoint depth.
     ///
-    /// This will also discard all checkpoints with depth less than or equal to the specified depth.
     /// Returns `true` if the truncation succeeds or has no effect, or `false` if no checkpoint
-    /// exists at the specified depth.
-    pub fn truncate_to_depth(
+    /// exists at the specified depth. Depth 0 refers to the most recent checkpoint in the tree;
+    ///
+    /// ## Parameters
+    /// - `checkpoint_depth`: A zero-based index over the checkpoints that have been added to the
+    ///   tree, in reverse checkpoint identifier order.
+    pub fn truncate_to_checkpoint_depth(
         &mut self,
         checkpoint_depth: usize,
     ) -> Result<bool, ShardTreeError<S::Error>> {
-        if checkpoint_depth == 0 {
-            Ok(true)
-        } else if let Some((checkpoint_id, c)) = self
+        if let Some((checkpoint_id, c)) = self
             .store
             .get_checkpoint_at_depth(checkpoint_depth)
             .map_err(ShardTreeError::Storage)?
         {
-            self.truncate_removing_checkpoint_internal(&checkpoint_id, &c)?;
+            self.truncate_to_checkpoint_internal(&checkpoint_id, &c)?;
             Ok(true)
         } else {
             Ok(false)
@@ -621,10 +623,9 @@ impl<
 
     /// Truncates the tree, discarding all information after the specified checkpoint.
     ///
-    /// This will also discard all checkpoints with depth less than or equal to the specified depth.
     /// Returns `true` if the truncation succeeds or has no effect, or `false` if no checkpoint
     /// exists for the specified checkpoint identifier.
-    pub fn truncate_removing_checkpoint(
+    pub fn truncate_to_checkpoint(
         &mut self,
         checkpoint_id: &C,
     ) -> Result<bool, ShardTreeError<S::Error>> {
@@ -633,14 +634,14 @@ impl<
             .get_checkpoint(checkpoint_id)
             .map_err(ShardTreeError::Storage)?
         {
-            self.truncate_removing_checkpoint_internal(checkpoint_id, &c)?;
+            self.truncate_to_checkpoint_internal(checkpoint_id, &c)?;
             Ok(true)
         } else {
             Ok(false)
         }
     }
 
-    fn truncate_removing_checkpoint_internal(
+    fn truncate_to_checkpoint_internal(
         &mut self,
         checkpoint_id: &C,
         checkpoint: &Checkpoint,
@@ -648,10 +649,10 @@ impl<
         match checkpoint.tree_state() {
             TreeState::Empty => {
                 self.store
-                    .truncate(Address::from_parts(Self::subtree_level(), 0))
+                    .truncate_shards(0)
                     .map_err(ShardTreeError::Storage)?;
                 self.store
-                    .truncate_checkpoints(checkpoint_id)
+                    .truncate_checkpoints_retaining(checkpoint_id)
                     .map_err(ShardTreeError::Storage)?;
                 self.store
                     .put_cap(Tree::empty())
@@ -670,21 +671,21 @@ impl<
                     root: self.store.get_cap().map_err(ShardTreeError::Storage)?,
                 };
 
-                if let Some(truncated) = cap_tree.truncate_to_position(position) {
+                if let Some(truncated_cap) = cap_tree.truncate_to_position(position) {
                     self.store
-                        .put_cap(truncated.root)
+                        .put_cap(truncated_cap.root)
                         .map_err(ShardTreeError::Storage)?;
                 };
 
                 if let Some(truncated) = replacement {
                     self.store
-                        .truncate(subtree_addr)
+                        .truncate_shards(subtree_addr.index())
                         .map_err(ShardTreeError::Storage)?;
                     self.store
                         .put_shard(truncated)
                         .map_err(ShardTreeError::Storage)?;
                     self.store
-                        .truncate_checkpoints(checkpoint_id)
+                        .truncate_checkpoints_retaining(checkpoint_id)
                         .map_err(ShardTreeError::Storage)?;
                 }
             }
@@ -1000,99 +1001,139 @@ impl<
         }
     }
 
-    /// Returns the position of the rightmost leaf inserted as of the given checkpoint.
+    /// Returns the position of the rightmost leaf as of the checkpoint at the given depth.
     ///
-    /// Returns the maximum leaf position if `checkpoint_depth == 0` (or `Ok(None)` in this
-    /// case if the tree is empty) or an error if the checkpointed position cannot be restored
-    /// because it has been pruned. Note that no actual level-0 leaf may exist at this position.
+    /// Returns either the position of the checkpoint at the requested depth, the maximum leaf
+    /// position in the tree if no checkpoint depth is provided, or `Ok(None)` if the tree is
+    /// empty.
+    ///
+    /// Returns `ShardTreeError::Query(QueryError::CheckpointPruned)` if
+    /// `checkpoint_depth.is_some()` and no checkpoint exists at the requested depth.
+    ///
+    /// ## Parameters
+    /// - `checkpoint_depth`: A zero-based index over the checkpoints that have been added to the
+    ///   tree, in reverse checkpoint identifier order, or `None` to request the overall maximum
+    ///   leaf position in the tree.
     pub fn max_leaf_position(
         &self,
-        checkpoint_depth: usize,
+        checkpoint_depth: Option<usize>,
     ) -> Result<Option<Position>, ShardTreeError<S::Error>> {
-        Ok(if checkpoint_depth == 0 {
-            // TODO: This relies on the invariant that the last shard in the subtrees vector is
-            // never created without a leaf then being added to it. However, this may be a
-            // difficult invariant to maintain when adding empty roots, so perhaps we need a
-            // better way of tracking the actual max position of the tree; we might want to
-            // just store it directly.
-            self.store
-                .last_shard()
-                .map_err(ShardTreeError::Storage)?
-                .and_then(|t| t.max_position())
-        } else {
-            match self
+        match checkpoint_depth {
+            None => {
+                // TODO: This relies on the invariant that the last shard in the subtrees vector is
+                // never created without a leaf then being added to it. However, this may be a
+                // difficult invariant to maintain when adding empty roots, so perhaps we need a
+                // better way of tracking the actual max position of the tree; we might want to
+                // just store it directly.
+                Ok(self
+                    .store
+                    .last_shard()
+                    .map_err(ShardTreeError::Storage)?
+                    .and_then(|t| t.max_position()))
+            }
+            Some(depth) => self
                 .store
-                .get_checkpoint_at_depth(checkpoint_depth)
+                .get_checkpoint_at_depth(depth)
                 .map_err(ShardTreeError::Storage)?
-            {
-                Some((_, c)) => Ok(c.position()),
-                None => {
-                    // There is no checkpoint at the specified depth, so we report it as pruned.
-                    Err(QueryError::CheckpointPruned)
-                }
-            }?
-        })
+                .map(|(_, c)| c.position())
+                .ok_or(ShardTreeError::Query(QueryError::CheckpointPruned)),
+        }
     }
 
     /// Computes the root of the tree as of the checkpointed position having the specified
     /// checkpoint id.
-    pub fn root_at_checkpoint_id(&self, checkpoint: &C) -> Result<H, ShardTreeError<S::Error>> {
-        let position = self
-            .store
+    ///
+    /// Returns `Ok(None)` if no checkpoint matches the specified ID.
+    pub fn root_at_checkpoint_id(
+        &self,
+        checkpoint: &C,
+    ) -> Result<Option<H>, ShardTreeError<S::Error>> {
+        self.store
             .get_checkpoint(checkpoint)
             .map_err(ShardTreeError::Storage)?
-            .map(|c| c.position())
-            .ok_or(QueryError::CheckpointPruned)?;
-
-        position.map_or_else(
-            || Ok(H::empty_root(Self::root_addr().level())),
-            |pos| self.root(Self::root_addr(), pos + 1),
-        )
+            .map(|c| {
+                c.position().map_or_else(
+                    || Ok(H::empty_root(Self::root_addr().level())),
+                    |pos| self.root(Self::root_addr(), pos + 1),
+                )
+            })
+            .transpose()
     }
 
     /// Computes the root of the tree as of the checkpointed position having the specified
     /// checkpoint id, caching intermediate values produced while computing the root.
+    ///
+    /// Returns `Ok(None)` if no checkpoint matches the specified ID.
     pub fn root_at_checkpoint_id_caching(
         &mut self,
         checkpoint: &C,
-    ) -> Result<H, ShardTreeError<S::Error>> {
-        let position = self
-            .store
+    ) -> Result<Option<H>, ShardTreeError<S::Error>> {
+        self.store
             .get_checkpoint(checkpoint)
             .map_err(ShardTreeError::Storage)?
-            .map(|c| c.position())
-            .ok_or(QueryError::CheckpointPruned)?;
-
-        position.map_or_else(
-            || Ok(H::empty_root(Self::root_addr().level())),
-            |pos| self.root_caching(Self::root_addr(), pos + 1),
-        )
+            .map(|c| {
+                c.position().map_or_else(
+                    || Ok(H::empty_root(Self::root_addr().level())),
+                    |pos| self.root_caching(Self::root_addr(), pos + 1),
+                )
+            })
+            .transpose()
     }
 
     /// Computes the root of the tree as of the checkpointed position at the specified depth.
     ///
-    /// Returns the root as of the most recently appended leaf if `checkpoint_depth == 0`. Note
-    /// that if the most recently appended leaf is also a checkpoint, this will return the same
-    /// result as `checkpoint_depth == 1`.
+    /// Returns `Ok(None)` if no checkpoint exists at the requested depth.
+    ///
+    /// ## Parameters
+    /// - `checkpoint_depth`: A zero-based index over the checkpoints that have been added to the
+    ///   tree, in reverse checkpoint identifier order, or `None` to request the root computed over
+    ///   all of the leaves in the tree.
     pub fn root_at_checkpoint_depth(
         &self,
-        checkpoint_depth: usize,
-    ) -> Result<H, ShardTreeError<S::Error>> {
-        self.max_leaf_position(checkpoint_depth)?.map_or_else(
-            || Ok(H::empty_root(Self::root_addr().level())),
-            |pos| self.root(Self::root_addr(), pos + 1),
+        checkpoint_depth: Option<usize>,
+    ) -> Result<Option<H>, ShardTreeError<S::Error>> {
+        self.max_leaf_position(checkpoint_depth).map_or_else(
+            |err| match err {
+                ShardTreeError::Query(QueryError::CheckpointPruned) => Ok(None),
+                err => Err(err),
+            },
+            |position| {
+                position
+                    .map_or_else(
+                        || Ok(H::empty_root(Self::root_addr().level())),
+                        |pos| self.root(Self::root_addr(), pos + 1),
+                    )
+                    .map(Some)
+            },
         )
     }
 
     /// Computes the root of the tree as of the checkpointed position at the specified depth,
     /// caching intermediate values produced while computing the root.
+    ///
+    /// Returns `Ok(None)` if no checkpoint exists at the requested depth.
+    ///
+    /// ## Parameters
+    /// - `checkpoint_depth`: A zero-based index over the checkpoints that have been added to the
+    ///   tree, in reverse checkpoint identifier order, or `None` to request the root computed over
+    ///   all of the leaves in the tree.
     pub fn root_at_checkpoint_depth_caching(
         &mut self,
-        checkpoint_depth: usize,
-    ) -> Result<H, ShardTreeError<S::Error>> {
-        self.max_leaf_position(checkpoint_depth)?.map_or_else(
-            || Ok(H::empty_root(Self::root_addr().level())),
-            |pos| self.root_caching(Self::root_addr(), pos + 1),
+        checkpoint_depth: Option<usize>,
+    ) -> Result<Option<H>, ShardTreeError<S::Error>> {
+        self.max_leaf_position(checkpoint_depth).map_or_else(
+            |err| match err {
+                ShardTreeError::Query(QueryError::CheckpointPruned) => Ok(None),
+                err => Err(err),
+            },
+            |position| {
+                position
+                    .map_or_else(
+                        || Ok(H::empty_root(Self::root_addr().level())),
+                        |pos| self.root_caching(Self::root_addr(), pos + 1),
+                    )
+                    .map(Some)
+            },
         )
     }
 
@@ -1155,25 +1196,27 @@ impl<
     /// Computes the witness for the leaf at the specified position, as of the given checkpoint
     /// depth.
     ///
-    /// Returns the witness as of the most recently appended leaf if `checkpoint_depth == 0`. Note
-    /// that if the most recently appended leaf is also a checkpoint, this will return the same
-    /// result as `checkpoint_depth == 1`.
+    /// Returns `ShardTreeError::Query(QueryError::CheckpointPruned)` if no checkpoint exists at
+    /// the requested depth.
     pub fn witness_at_checkpoint_depth(
         &self,
         position: Position,
         checkpoint_depth: usize,
-    ) -> Result<MerklePath<H, DEPTH>, ShardTreeError<S::Error>> {
-        let as_of = self.max_leaf_position(checkpoint_depth).and_then(|v| {
-            v.ok_or_else(|| QueryError::TreeIncomplete(vec![Self::root_addr()]).into())
-        })?;
+    ) -> Result<Option<MerklePath<H, DEPTH>>, ShardTreeError<S::Error>> {
+        let checkpoint = self
+            .store
+            .get_checkpoint_at_depth(checkpoint_depth)
+            .map_err(ShardTreeError::Storage)?;
 
-        if position > as_of {
-            Err(
-                QueryError::NotContained(Address::from_parts(Level::from(0), position.into()))
-                    .into(),
-            )
-        } else {
-            self.witness_internal(position, as_of)
+        match checkpoint {
+            None => Ok(None),
+            Some((_, c)) => {
+                let as_of = c.position().filter(|p| position <= *p).ok_or_else(|| {
+                    QueryError::NotContained(Address::from_parts(Level::from(0), position.into()))
+                })?;
+
+                self.witness_internal(position, as_of).map(Some)
+            }
         }
     }
 
@@ -1183,39 +1226,56 @@ impl<
     /// This implementation will mutate the tree to cache intermediate root (ommer) values that are
     /// computed in the process of constructing the witness, so as to avoid the need to recompute
     /// those values from potentially large numbers of subtree roots in the future.
+    ///
+    /// Returns `ShardTreeError::Query(QueryError::CheckpointPruned)` if no checkpoint exists at
+    /// the requested depth. It is not possible to
     pub fn witness_at_checkpoint_depth_caching(
         &mut self,
         position: Position,
         checkpoint_depth: usize,
-    ) -> Result<MerklePath<H, DEPTH>, ShardTreeError<S::Error>> {
-        let as_of = self.max_leaf_position(checkpoint_depth).and_then(|v| {
-            v.ok_or_else(|| QueryError::TreeIncomplete(vec![Self::root_addr()]).into())
-        })?;
+    ) -> Result<Option<MerklePath<H, DEPTH>>, ShardTreeError<S::Error>> {
+        let checkpoint = self
+            .store
+            .get_checkpoint_at_depth(checkpoint_depth)
+            .map_err(ShardTreeError::Storage)?;
 
-        if position > as_of {
-            Err(
-                QueryError::NotContained(Address::from_parts(Level::from(0), position.into()))
-                    .into(),
-            )
-        } else {
-            self.witness_internal_caching(position, as_of)
+        match checkpoint {
+            None => Ok(None),
+            Some((_, c)) => {
+                let as_of = c.position().filter(|p| position <= *p).ok_or_else(|| {
+                    QueryError::NotContained(Address::from_parts(Level::from(0), position.into()))
+                })?;
+
+                self.witness_internal_caching(position, as_of).map(Some)
+            }
         }
     }
 
     /// Computes the witness for the leaf at the specified position, as of the given checkpoint.
+    ///
+    /// Returns Ok(None) if no such checkpoint exists.
     pub fn witness_at_checkpoint_id(
         &self,
         position: Position,
         checkpoint_id: &C,
-    ) -> Result<MerklePath<H, DEPTH>, ShardTreeError<S::Error>> {
-        let as_of = self
-            .store
+    ) -> Result<Option<MerklePath<H, DEPTH>>, ShardTreeError<S::Error>> {
+        self.store
             .get_checkpoint(checkpoint_id)
             .map_err(ShardTreeError::Storage)?
-            .and_then(|c| c.position())
-            .ok_or(QueryError::CheckpointPruned)?;
+            .map(|checkpoint| {
+                let as_of = checkpoint
+                    .position()
+                    .filter(|p| position <= *p)
+                    .ok_or_else(|| {
+                        QueryError::NotContained(Address::from_parts(
+                            Level::from(0),
+                            position.into(),
+                        ))
+                    })?;
 
-        self.witness_internal(position, as_of)
+                self.witness_internal(position, as_of)
+            })
+            .transpose()
     }
 
     /// Computes the witness for the leaf at the specified position, as of the given checkpoint.
@@ -1223,19 +1283,30 @@ impl<
     /// This implementation will mutate the tree to cache intermediate root (ommer) values that are
     /// computed in the process of constructing the witness, so as to avoid the need to recompute
     /// those values from potentially large numbers of subtree roots in the future.
+    ///
+    /// Returns Ok(None) if no such checkpoint exists.
     pub fn witness_at_checkpoint_id_caching(
         &mut self,
         position: Position,
         checkpoint_id: &C,
-    ) -> Result<MerklePath<H, DEPTH>, ShardTreeError<S::Error>> {
-        let as_of = self
-            .store
+    ) -> Result<Option<MerklePath<H, DEPTH>>, ShardTreeError<S::Error>> {
+        self.store
             .get_checkpoint(checkpoint_id)
             .map_err(ShardTreeError::Storage)?
-            .and_then(|c| c.position())
-            .ok_or(QueryError::CheckpointPruned)?;
+            .map(|checkpoint| {
+                let as_of = checkpoint
+                    .position()
+                    .filter(|p| position <= *p)
+                    .ok_or_else(|| {
+                        QueryError::NotContained(Address::from_parts(
+                            Level::from(0),
+                            position.into(),
+                        ))
+                    })?;
 
-        self.witness_internal_caching(position, as_of)
+                self.witness_internal_caching(position, as_of)
+            })
+            .transpose()
     }
 
     /// Make a marked leaf at a position eligible to be pruned.
@@ -1427,7 +1498,7 @@ mod tests {
     fn avoid_pruning_reference() {
         fn test_with_marking(
             frontier_marking: Marking,
-        ) -> Result<MerklePath<String, 6>, ShardTreeError<Infallible>> {
+        ) -> Result<Option<MerklePath<String, 6>>, ShardTreeError<Infallible>> {
             let mut tree = ShardTree::<MemoryShardStore<String, usize>, 6, 3>::new(
                 MemoryShardStore::empty(),
                 5,
@@ -1508,7 +1579,7 @@ mod tests {
         .unwrap();
 
         let witness = test_with_marking(Marking::Reference).unwrap();
-        assert_eq!(witness, expected_witness);
+        assert_eq!(witness, Some(expected_witness));
     }
 
     // Combined tree tests
@@ -1578,17 +1649,21 @@ mod tests {
         fn check_shardtree_caching(
             (mut tree, _, marked_positions) in arb_shardtree(arb_char_str())
         ) {
-            if let Some(max_leaf_pos) = tree.max_leaf_position(0).unwrap() {
+            if let Some(max_leaf_pos) = tree.max_leaf_position(None).unwrap() {
                 let max_complete_addr = Address::above_position(max_leaf_pos.root_level(), max_leaf_pos);
                 let root = tree.root(max_complete_addr, max_leaf_pos + 1);
                 let caching_root = tree.root_caching(max_complete_addr, max_leaf_pos + 1);
                 assert_matches!(root, Ok(_));
                 assert_eq!(root, caching_root);
+            }
 
+            if let Ok(Some(checkpoint_position)) = tree.max_leaf_position(Some(0)) {
                 for pos in marked_positions {
                     let witness = tree.witness_at_checkpoint_depth(pos, 0);
                     let caching_witness = tree.witness_at_checkpoint_depth_caching(pos, 0);
-                    assert_matches!(witness, Ok(_));
+                    if pos <= checkpoint_position {
+                        assert_matches!(witness, Ok(_));
+                    }
                     assert_eq!(witness, caching_witness);
                 }
             }

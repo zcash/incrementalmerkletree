@@ -156,11 +156,14 @@ impl<H: Hashable, C: Clone + Ord + core::fmt::Debug, const DEPTH: u8> CompleteTr
         }
     }
 
+    // Creates a new checkpoint with the specified identifier and the given tree position; if `pos`
+    // is not provided, the position of the most recently appended leaf is used, or a new
+    // checkpoint of the empty tree is added if appropriate.
     fn checkpoint(&mut self, id: C, pos: Option<Position>) {
         self.checkpoints.insert(
             id,
             Checkpoint::at_length(pos.map_or_else(
-                || 0,
+                || self.leaves.len(),
                 |p| usize::try_from(p).expect(MAX_COMPLETE_SIZE_ERROR) + 1,
             )),
         );
@@ -170,16 +173,12 @@ impl<H: Hashable, C: Clone + Ord + core::fmt::Debug, const DEPTH: u8> CompleteTr
     }
 
     fn leaves_at_checkpoint_depth(&self, checkpoint_depth: usize) -> Option<usize> {
-        if checkpoint_depth == 0 {
-            Some(self.leaves.len())
-        } else {
-            self.checkpoints
-                .iter()
-                .rev()
-                .skip(checkpoint_depth - 1)
-                .map(|(_, c)| c.leaves_len)
-                .next()
-        }
+        self.checkpoints
+            .iter()
+            .rev()
+            .skip(checkpoint_depth)
+            .map(|(_, c)| c.leaves_len)
+            .next()
     }
 
     /// Removes the oldest checkpoint. Returns true if successful and false if
@@ -237,21 +236,20 @@ impl<H: Hashable + PartialEq + Clone, C: Ord + Clone + core::fmt::Debug, const D
         }
     }
 
-    fn root(&self, checkpoint_depth: usize) -> Option<H> {
-        self.leaves_at_checkpoint_depth(checkpoint_depth)
-            .and_then(|len| root(&self.leaves[0..len], DEPTH))
+    fn root(&self, checkpoint_depth: Option<usize>) -> Option<H> {
+        checkpoint_depth.map_or_else(
+            || root(&self.leaves[..], DEPTH),
+            |depth| {
+                self.leaves_at_checkpoint_depth(depth)
+                    .and_then(|len| root(&self.leaves[0..len], DEPTH))
+            },
+        )
     }
 
     fn witness(&self, position: Position, checkpoint_depth: usize) -> Option<Vec<H>> {
-        if self.marks.contains(&position) && checkpoint_depth <= self.checkpoints.len() {
+        if self.marks.contains(&position) {
             let leaves_len = self.leaves_at_checkpoint_depth(checkpoint_depth)?;
-            let c_idx = self.checkpoints.len() - checkpoint_depth;
-            if self
-                .checkpoints
-                .iter()
-                .skip(c_idx)
-                .any(|(_, c)| c.marked.contains(&position))
-            {
+            if u64::from(position) >= u64::try_from(leaves_len).unwrap() {
                 // The requested position was marked after the checkpoint was created, so we
                 // cannot create a witness.
                 None
@@ -299,14 +297,35 @@ impl<H: Hashable + PartialEq + Clone, C: Ord + Clone + core::fmt::Debug, const D
         }
     }
 
-    fn rewind(&mut self) -> bool {
-        if let Some((id, c)) = self.checkpoints.iter().rev().next() {
-            self.leaves.truncate(c.leaves_len);
-            for pos in c.marked.iter() {
-                self.marks.remove(pos);
+    fn checkpoint_count(&self) -> usize {
+        self.checkpoints.len()
+    }
+
+    fn rewind(&mut self, depth: usize) -> bool {
+        if self.checkpoints.len() > depth {
+            let mut to_delete = vec![];
+            for (idx, (id, c)) in self
+                .checkpoints
+                .iter_mut()
+                .rev()
+                .enumerate()
+                .take(depth + 1)
+            {
+                for pos in c.marked.iter() {
+                    self.marks.remove(pos);
+                }
+                if idx < depth {
+                    to_delete.push(id.clone());
+                } else {
+                    self.leaves.truncate(c.leaves_len);
+                    c.marked.clear();
+                    c.forgotten.clear();
+                }
             }
-            let id = id.clone(); // needed to avoid mutable/immutable borrow conflict
-            self.checkpoints.remove(&id);
+            for cid in to_delete.iter() {
+                self.checkpoints.remove(cid);
+            }
+
             true
         } else {
             false
@@ -334,7 +353,7 @@ mod tests {
         }
 
         let tree = CompleteTree::<SipHashable, (), DEPTH>::new(100);
-        assert_eq!(tree.root(0).unwrap(), expected);
+        assert_eq!(tree.root(None), Some(expected));
     }
 
     #[test]
@@ -362,7 +381,7 @@ mod tests {
             ),
         );
 
-        assert_eq!(tree.root(0).unwrap(), expected);
+        assert_eq!(tree.root(None), Some(expected));
     }
 
     #[test]
@@ -408,7 +427,9 @@ mod tests {
             ),
         );
 
-        assert_eq!(tree.root(0).unwrap(), expected);
+        assert_eq!(tree.root(None), Some(expected.clone()));
+        tree.checkpoint((), None);
+        assert_eq!(tree.root(Some(0)), Some(expected.clone()));
 
         for i in 0u64..(1 << DEPTH) {
             let position = Position::try_from(i).unwrap();

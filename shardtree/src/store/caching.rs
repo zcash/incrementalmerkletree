@@ -9,9 +9,9 @@ use crate::{LocatedPrunableTree, PrunableTree};
 
 #[derive(Debug)]
 enum Action<C> {
-    Truncate(Address),
+    TruncateShards(u64),
     RemoveCheckpoint(C),
-    TruncateCheckpoints(C),
+    TruncateCheckpointsRetaining(C),
 }
 
 /// An implementation of [`ShardStore`] that caches all state in memory.
@@ -63,12 +63,12 @@ where
     pub fn flush(mut self) -> Result<S, S::Error> {
         for action in &self.deferred_actions {
             match action {
-                Action::Truncate(from) => self.backend.truncate(*from),
+                Action::TruncateShards(index) => self.backend.truncate_shards(*index),
                 Action::RemoveCheckpoint(checkpoint_id) => {
                     self.backend.remove_checkpoint(checkpoint_id)
                 }
-                Action::TruncateCheckpoints(checkpoint_id) => {
-                    self.backend.truncate_checkpoints(checkpoint_id)
+                Action::TruncateCheckpointsRetaining(checkpoint_id) => {
+                    self.backend.truncate_checkpoints_retaining(checkpoint_id)
                 }
             }?;
         }
@@ -131,9 +131,10 @@ where
         self.cache.get_shard_roots()
     }
 
-    fn truncate(&mut self, from: Address) -> Result<(), Self::Error> {
-        self.deferred_actions.push(Action::Truncate(from));
-        self.cache.truncate(from)
+    fn truncate_shards(&mut self, shard_index: u64) -> Result<(), Self::Error> {
+        self.deferred_actions
+            .push(Action::TruncateShards(shard_index));
+        self.cache.truncate_shards(shard_index)
     }
 
     fn get_cap(&self) -> Result<PrunableTree<Self::H>, Self::Error> {
@@ -208,13 +209,13 @@ where
         self.cache.remove_checkpoint(checkpoint_id)
     }
 
-    fn truncate_checkpoints(
+    fn truncate_checkpoints_retaining(
         &mut self,
         checkpoint_id: &Self::CheckpointId,
     ) -> Result<(), Self::Error> {
         self.deferred_actions
-            .push(Action::TruncateCheckpoints(checkpoint_id.clone()));
-        self.cache.truncate_checkpoints(checkpoint_id)
+            .push(Action::TruncateCheckpointsRetaining(checkpoint_id.clone()));
+        self.cache.truncate_checkpoints_retaining(checkpoint_id)
     }
 }
 
@@ -269,22 +270,22 @@ mod tests {
             );
 
             assert_eq!(
-                tree.root(0).unwrap(),
+                tree.root(None).unwrap(),
                 String::combine_all(tree.depth(), &[]),
             );
             assert!(tree.append(String::from_u64(0), Ephemeral));
             assert_eq!(
-                tree.root(0).unwrap(),
+                tree.root(None).unwrap(),
                 String::combine_all(tree.depth(), &[0]),
             );
             assert!(tree.append(String::from_u64(1), Ephemeral));
             assert_eq!(
-                tree.root(0).unwrap(),
+                tree.root(None).unwrap(),
                 String::combine_all(tree.depth(), &[0, 1]),
             );
             assert!(tree.append(String::from_u64(2), Ephemeral));
             assert_eq!(
-                tree.root(0).unwrap(),
+                tree.root(None).unwrap(),
                 String::combine_all(tree.depth(), &[0, 1, 2]),
             );
 
@@ -310,7 +311,7 @@ mod tests {
                 assert!(t.append(String::from_u64(0), Ephemeral));
             }
             assert_eq!(
-                t.root(0).unwrap(),
+                t.root(None).unwrap(),
                 String::combine_all(t.depth(), &[0, 0, 0, 0])
             );
 
@@ -391,7 +392,13 @@ mod tests {
                 ShardTree::<_, 4, 3>::new(&mut rhs, 100),
             );
 
-            assert!(tree.append(String::from_u64(0), Marked));
+            assert!(tree.append(
+                String::from_u64(0),
+                Checkpoint {
+                    id: 0,
+                    marking: Marking::Marked
+                }
+            ));
             assert_eq!(
                 tree.witness(Position::from(0), 0),
                 Some(vec![
@@ -402,7 +409,13 @@ mod tests {
                 ])
             );
 
-            assert!(tree.append(String::from_u64(1), Ephemeral));
+            assert!(tree.append(
+                String::from_u64(1),
+                Checkpoint {
+                    id: 1,
+                    marking: Marking::None
+                }
+            ));
             assert_eq!(
                 tree.witness(0.into(), 0),
                 Some(vec![
@@ -413,7 +426,13 @@ mod tests {
                 ])
             );
 
-            assert!(tree.append(String::from_u64(2), Marked));
+            assert!(tree.append(
+                String::from_u64(2),
+                Checkpoint {
+                    id: 2,
+                    marking: Marking::Marked
+                }
+            ));
             assert_eq!(
                 tree.witness(Position::from(2), 0),
                 Some(vec![
@@ -424,7 +443,13 @@ mod tests {
                 ])
             );
 
-            assert!(tree.append(String::from_u64(3), Ephemeral));
+            assert!(tree.append(
+                String::from_u64(3),
+                Checkpoint {
+                    id: 3,
+                    marking: Marking::None
+                }
+            ));
             assert_eq!(
                 tree.witness(Position::from(2), 0),
                 Some(vec![
@@ -435,7 +460,13 @@ mod tests {
                 ])
             );
 
-            assert!(tree.append(String::from_u64(4), Ephemeral));
+            assert!(tree.append(
+                String::from_u64(4),
+                Checkpoint {
+                    id: 4,
+                    marking: Marking::None
+                }
+            ));
             assert_eq!(
                 tree.witness(Position::from(2), 0),
                 Some(vec![
@@ -462,7 +493,13 @@ mod tests {
                 assert!(tree.append(String::from_u64(i), Ephemeral));
             }
             assert!(tree.append(String::from_u64(6), Marked));
-            assert!(tree.append(String::from_u64(7), Ephemeral));
+            assert!(tree.append(
+                String::from_u64(7),
+                Checkpoint {
+                    id: 0,
+                    marking: Marking::None
+                }
+            ));
 
             assert_eq!(
                 tree.witness(0.into(), 0),
@@ -491,7 +528,13 @@ mod tests {
             assert!(tree.append(String::from_u64(3), Marked));
             assert!(tree.append(String::from_u64(4), Marked));
             assert!(tree.append(String::from_u64(5), Marked));
-            assert!(tree.append(String::from_u64(6), Ephemeral));
+            assert!(tree.append(
+                String::from_u64(6),
+                Checkpoint {
+                    id: 0,
+                    marking: Marking::None
+                }
+            ));
 
             assert_eq!(
                 tree.witness(Position::from(5), 0),
@@ -518,7 +561,13 @@ mod tests {
                 assert!(tree.append(String::from_u64(i), Ephemeral));
             }
             assert!(tree.append(String::from_u64(10), Marked));
-            assert!(tree.append(String::from_u64(11), Ephemeral));
+            assert!(tree.append(
+                String::from_u64(11),
+                Checkpoint {
+                    id: 0,
+                    marking: Marking::None
+                }
+            ));
 
             assert_eq!(
                 tree.witness(Position::from(10), 0),
@@ -548,7 +597,7 @@ mod tests {
                     marking: Marking::Marked,
                 },
             ));
-            assert!(tree.rewind());
+            assert!(tree.rewind(0));
             for i in 1..4 {
                 assert!(tree.append(String::from_u64(i), Ephemeral));
             }
@@ -556,6 +605,7 @@ mod tests {
             for i in 5..8 {
                 assert!(tree.append(String::from_u64(i), Ephemeral));
             }
+            tree.checkpoint(2);
             assert_eq!(
                 tree.witness(0.into(), 0),
                 Some(vec![
@@ -591,7 +641,7 @@ mod tests {
                 },
             ));
             assert!(tree.append(String::from_u64(7), Ephemeral));
-            assert!(tree.rewind());
+            assert!(tree.rewind(0));
             assert_eq!(
                 tree.witness(Position::from(2), 0),
                 Some(vec![
@@ -619,7 +669,13 @@ mod tests {
             assert!(tree.append(String::from_u64(12), Marked));
             assert!(tree.append(String::from_u64(13), Marked));
             assert!(tree.append(String::from_u64(14), Ephemeral));
-            assert!(tree.append(String::from_u64(15), Ephemeral));
+            assert!(tree.append(
+                String::from_u64(15),
+                Checkpoint {
+                    id: 0,
+                    marking: Marking::None
+                }
+            ));
 
             assert_eq!(
                 tree.witness(Position::from(12), 0),
@@ -638,7 +694,13 @@ mod tests {
             let ops = (0..=11)
                 .map(|i| Append(String::from_u64(i), Marked))
                 .chain(Some(Append(String::from_u64(12), Ephemeral)))
-                .chain(Some(Append(String::from_u64(13), Ephemeral)))
+                .chain(Some(Append(
+                    String::from_u64(13),
+                    Checkpoint {
+                        id: 0,
+                        marking: Marking::None,
+                    },
+                )))
                 .chain(Some(Witness(11u64.into(), 0)))
                 .collect::<Vec<_>>();
 
@@ -700,7 +762,7 @@ mod tests {
                         marking: Marking::None,
                     },
                 ),
-                Witness(3u64.into(), 5),
+                Witness(3u64.into(), 4),
             ];
 
             let mut lhs = MemoryShardStore::empty();
@@ -750,7 +812,7 @@ mod tests {
                 ),
                 Append(String::from_u64(0), Ephemeral),
                 Append(String::from_u64(0), Ephemeral),
-                Witness(Position::from(3), 1),
+                Witness(Position::from(3), 0),
             ];
 
             let mut lhs = MemoryShardStore::empty();
@@ -796,8 +858,8 @@ mod tests {
                         marking: Marking::None,
                     },
                 ),
-                Rewind,
-                Rewind,
+                Rewind(0),
+                Rewind(1),
                 Witness(Position::from(7), 2),
             ];
 
@@ -808,6 +870,7 @@ mod tests {
                 ShardTree::<_, 4, 3>::new(&mut rhs, 100),
             );
 
+            // There is no checkpoint at depth 2, so we cannot compute a witness
             assert_eq!(Operation::apply_all(&ops, &mut tree), None);
 
             check_equal(lhs, rhs);
@@ -831,7 +894,7 @@ mod tests {
                         marking: Marking::None,
                     },
                 ),
-                Witness(Position::from(2), 2),
+                Witness(Position::from(2), 1),
             ];
 
             let mut lhs = MemoryShardStore::empty();
@@ -868,7 +931,7 @@ mod tests {
                 ShardTree::<_, 4, 3>::new(&mut rhs, 100),
             );
 
-            assert!(!t.rewind());
+            assert!(!t.rewind(0));
 
             check_equal(lhs, rhs);
         }
@@ -881,7 +944,7 @@ mod tests {
             );
 
             assert!(t.checkpoint(1));
-            assert!(t.rewind());
+            assert!(t.rewind(0));
 
             check_equal(lhs, rhs);
         }
@@ -897,7 +960,7 @@ mod tests {
             t.append("a".to_string(), Retention::Ephemeral);
             assert!(t.checkpoint(1));
             t.append("b".to_string(), Retention::Marked);
-            assert!(t.rewind());
+            assert!(t.rewind(0));
             assert_eq!(Some(Position::from(0)), t.current_position());
 
             check_equal(lhs, rhs);
@@ -913,7 +976,7 @@ mod tests {
 
             t.append("a".to_string(), Retention::Marked);
             assert!(t.checkpoint(1));
-            assert!(t.rewind());
+            assert!(t.rewind(0));
 
             check_equal(lhs, rhs);
         }
@@ -929,7 +992,7 @@ mod tests {
             t.append("a".to_string(), Retention::Marked);
             assert!(t.checkpoint(1));
             t.append("a".to_string(), Retention::Ephemeral);
-            assert!(t.rewind());
+            assert!(t.rewind(0));
             assert_eq!(Some(Position::from(0)), t.current_position());
 
             check_equal(lhs, rhs);
@@ -946,11 +1009,11 @@ mod tests {
             t.append("a".to_string(), Retention::Ephemeral);
             assert!(t.checkpoint(1));
             assert!(t.checkpoint(2));
-            assert!(t.rewind());
+            assert!(t.rewind(1));
             t.append("b".to_string(), Retention::Ephemeral);
-            assert!(t.rewind());
+            assert!(t.rewind(0));
             t.append("b".to_string(), Retention::Ephemeral);
-            assert_eq!(t.root(0).unwrap(), "ab______________");
+            assert_eq!(t.root(None).unwrap(), "ab______________");
 
             check_equal(lhs, rhs);
         }
@@ -1016,7 +1079,7 @@ mod tests {
 
             tree.append("e".to_string(), Retention::Marked);
             assert!(tree.checkpoint(1));
-            assert!(tree.rewind());
+            assert!(tree.rewind(0));
             assert!(tree.remove_mark(0u64.into()));
 
             check_equal(lhs, rhs);
@@ -1056,14 +1119,14 @@ mod tests {
             vec![
                 append_str("x", Retention::Marked),
                 Checkpoint(1),
-                Rewind,
+                Rewind(0),
                 unmark(0),
             ],
             vec![
                 append_str("d", Retention::Marked),
                 Checkpoint(1),
                 unmark(0),
-                Rewind,
+                Rewind(0),
                 unmark(0),
             ],
             vec![
@@ -1071,22 +1134,22 @@ mod tests {
                 Checkpoint(1),
                 Checkpoint(2),
                 unmark(0),
-                Rewind,
-                Rewind,
+                Rewind(0),
+                Rewind(1),
             ],
             vec![
                 append_str("s", Retention::Marked),
                 append_str("m", Retention::Ephemeral),
                 Checkpoint(1),
                 unmark(0),
-                Rewind,
+                Rewind(0),
                 unmark(0),
                 unmark(0),
             ],
             vec![
                 append_str("a", Retention::Marked),
                 Checkpoint(1),
-                Rewind,
+                Rewind(0),
                 append_str("a", Retention::Marked),
             ],
         ];
@@ -1189,7 +1252,7 @@ mod tests {
                 Checkpoint(1),
                 unmark(0),
                 Checkpoint(2),
-                Rewind,
+                Rewind(1),
                 append_str("b", Retention::Ephemeral),
                 witness(0, 0),
             ],
@@ -1197,7 +1260,7 @@ mod tests {
                 append_str("a", Retention::Marked),
                 Checkpoint(1),
                 Checkpoint(2),
-                Rewind,
+                Rewind(1),
                 append_str("a", Retention::Ephemeral),
                 unmark(0),
                 witness(0, 1),

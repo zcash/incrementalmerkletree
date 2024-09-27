@@ -13,56 +13,86 @@ pub mod complete_tree;
 // Traits used to permit comparison testing between tree implementations.
 //
 
-/// A Merkle tree that supports incremental appends, marking of
-/// leaf nodes for construction of witnesses, checkpoints and rollbacks.
+/// A Merkle tree that supports incremental appends, marking of leaf nodes for construction of
+/// witnesses, checkpoints and rollbacks.
 pub trait Tree<H, C> {
-    /// Returns the depth of the tree.
+    /// Returns the number of levels in the tree.
     fn depth(&self) -> u8;
 
     /// Appends a new value to the tree at the next available slot.
+    ///
     /// Returns true if successful and false if the tree would exceed
-    /// the maximum allowed depth.
+    /// the maximum allowed number of levels in the tree.
     fn append(&mut self, value: H, retention: Retention<C>) -> bool;
 
     /// Returns the most recently appended leaf value.
     fn current_position(&self) -> Option<Position>;
 
-    /// Returns the leaf at the specified position if the tree can produce
-    /// a witness for it.
+    /// Returns the leaf at the specified position if the tree can produce a witness for it.
     fn get_marked_leaf(&self, position: Position) -> Option<H>;
 
     /// Return a set of all the positions for which we have marked.
     fn marked_positions(&self) -> BTreeSet<Position>;
 
-    /// Obtains the root of the Merkle tree at the specified checkpoint depth
-    /// by hashing against empty nodes up to the maximum height of the tree.
-    /// Returns `None` if there are not enough checkpoints available to reach the
-    /// requested checkpoint depth.
-    fn root(&self, checkpoint_depth: usize) -> Option<H>;
+    /// Obtains the root of the Merkle tree at the specified checkpoint depth by hashing against
+    /// empty nodes up to the maximum height of the tree.
+    ///
+    /// Returns `None` if a checkpoint depth is provided but there are not enough checkpoints
+    /// available to reach the requested checkpoint depth.
+    ///
+    /// ## Parameters
+    /// - `checkpoint_depth`: A zero-based index into the checkpoints that have been added to the
+    ///   tree, in reverse checkpoint identifier order. If `checkpoint_depth` is `None`, the root
+    ///   is computed over all leaves that have been added to the tree.
+    fn root(&self, checkpoint_depth: Option<usize>) -> Option<H>;
 
     /// Obtains a witness for the value at the specified leaf position, as of the tree state at the
-    /// given checkpoint depth. Returns `None` if there is no witness information for the requested
-    /// position or if no checkpoint is available at the specified depth.
+    /// given checkpoint depth.
+    ///
+    /// Returns `None` if there is no witness information for the requested position or if no
+    /// checkpoint is available at the specified depth.
+    ///
+    /// ## Parameters
+    /// - `position`: The position of the leaf for which the witness is to be computed.
+    /// - `checkpoint_depth`: A zero-based index over the checkpoints that have been added to the
+    ///   tree, in reverse checkpoint identifier order.
     fn witness(&self, position: Position, checkpoint_depth: usize) -> Option<Vec<H>>;
 
-    /// Marks the value at the specified position as a value we're no longer
-    /// interested in maintaining a mark for. Returns true if successful and
-    /// false if we were already not maintaining a mark at this position.
+    /// Marks the value at the specified position as a value we're no longer interested in
+    /// maintaining a mark for.
+    ///
+    /// Returns true if successful and false if we were already not maintaining a mark at this
+    /// position.
+    ///
+    /// ## Parameters
+    /// - `position`: The position of the marked leaf.
     fn remove_mark(&mut self, position: Position) -> bool;
 
-    /// Creates a new checkpoint for the current tree state.
+    /// Creates a new checkpoint for the current tree state, with the given checkpoint identifier.
     ///
     /// It is valid to have multiple checkpoints for the same tree state, and each `rewind` call
     /// will remove a single checkpoint. Returns `false` if the checkpoint identifier provided is
-    /// less than or equal to the maximum checkpoint identifier observed.
+    /// less than or equal to the maximum checkpoint identifier among previously added checkpoints.
+    ///
+    /// ## Parameters
+    /// - `id`: The identifier for the checkpoint being added to the tree.
     fn checkpoint(&mut self, id: C) -> bool;
 
-    /// Rewinds the tree state to the previous checkpoint, and then removes that checkpoint record.
+    /// Returns the number of checkpoints in the tree.
+    fn checkpoint_count(&self) -> usize;
+
+    /// Rewinds the tree state to the checkpoint at the specified checkpoint depth.
     ///
-    /// If there are multiple checkpoints at a given tree state, the tree state will not be altered
-    /// until all checkpoints at that tree state have been removed using `rewind`. This function
-    /// will return false and leave the tree unmodified if no checkpoints exist.
-    fn rewind(&mut self) -> bool;
+    /// Returns `true` if the request was satisfied, or `false` if insufficient checkpoints were
+    /// available to satisfy the request.
+    ///
+    /// ## Parameters
+    /// - `checkpoint_depth`: A zero-based index over the checkpoints that have been added to the
+    ///   tree, in reverse checkpoint identifier order. A checkpoint depth value of `0` removes all
+    ///   data added to the tree after the most recently-added checkpoint. The checkpoint at the
+    ///   specified depth is retained, but all data and metadata related to operations on the tree
+    ///   that occurred after the checkpoint was created is discarded.
+    fn rewind(&mut self, checkpoint_depth: usize) -> bool;
 }
 
 //
@@ -100,7 +130,7 @@ pub enum Operation<A, C> {
     MarkedPositions,
     Unmark(Position),
     Checkpoint(C),
-    Rewind,
+    Rewind(usize),
     Witness(Position, usize),
     GarbageCollect,
 }
@@ -137,8 +167,8 @@ impl<H: Hashable + Clone, C: Clone> Operation<H, C> {
                 tree.checkpoint(id.clone());
                 None
             }
-            Rewind => {
-                assert!(tree.rewind(), "rewind failed");
+            Rewind(depth) => {
+                assert_eq!(tree.checkpoint_count() > *depth, tree.rewind(*depth));
                 None
             }
             Witness(p, d) => tree.witness(*p, *d).map(|xs| (*p, xs)),
@@ -165,7 +195,7 @@ impl<H: Hashable + Clone, C: Clone> Operation<H, C> {
             MarkedPositions => MarkedPositions,
             Unmark(p) => Unmark(*p),
             Checkpoint(id) => Checkpoint(f(id)),
-            Rewind => Rewind,
+            Rewind(depth) => Rewind(*depth),
             Witness(p, d) => Witness(*p, *d),
             GarbageCollect => GarbageCollect,
         }
@@ -209,7 +239,7 @@ where
         pos_gen.clone().prop_map(Operation::MarkedLeaf),
         pos_gen.clone().prop_map(Operation::Unmark),
         Just(Operation::Checkpoint(())),
-        Just(Operation::Rewind),
+        (0usize..10).prop_map(Operation::Rewind),
         pos_gen.prop_flat_map(|i| (0usize..10).prop_map(move |depth| Operation::Witness(i, depth))),
     ]
 }
@@ -225,8 +255,8 @@ pub fn apply_operation<H, C, T: Tree<H, C>>(tree: &mut T, op: Operation<H, C>) {
         Checkpoint(id) => {
             tree.checkpoint(id);
         }
-        Rewind => {
-            tree.rewind();
+        Rewind(depth) => {
+            tree.rewind(depth);
         }
         CurrentPosition => {}
         Witness(_, _) => {}
@@ -283,40 +313,43 @@ pub fn check_operations<H: Hashable + Ord + Clone + Debug, C: Clone, T: Tree<H, 
                 tree_checkpoints.push(tree_size);
                 tree.checkpoint(id.clone());
             }
-            Rewind => {
-                if tree.rewind() {
-                    prop_assert!(!tree_checkpoints.is_empty());
-                    let checkpointed_tree_size = tree_checkpoints.pop().unwrap();
-                    tree_values.truncate(checkpointed_tree_size);
-                    tree_size = checkpointed_tree_size;
+            Rewind(depth) => {
+                if tree.rewind(*depth) {
+                    let retained = tree_checkpoints.len() - depth;
+                    if *depth > 0 {
+                        // The last checkpoint will have been dropped, and the tree will have been
+                        // truncated to a previous checkpoint.
+                        tree_checkpoints.truncate(retained);
+                    }
+
+                    let checkpointed_tree_size = tree_checkpoints
+                        .last()
+                        .expect("at least one checkpoint must exist in order to be able to rewind");
+                    tree_values.truncate(*checkpointed_tree_size);
+                    tree_size = *checkpointed_tree_size;
                 }
             }
             Witness(position, depth) => {
                 if let Some(path) = tree.witness(*position, *depth) {
                     let value: H = tree_values[<usize>::try_from(*position).unwrap()].clone();
-                    let tree_root = tree.root(*depth);
+                    let tree_root = tree.root(Some(*depth)).expect(
+                        "we must be able to compute a root anywhere we can compute a witness.",
+                    );
+                    let mut extended_tree_values = tree_values.clone();
+                    // prune the tree back to the checkpointed size.
+                    let checkpointed_tree_size =
+                        tree_checkpoints[tree_checkpoints.len() - (depth + 1)];
+                    extended_tree_values.truncate(checkpointed_tree_size);
 
-                    if tree_checkpoints.len() >= *depth {
-                        let mut extended_tree_values = tree_values.clone();
-                        if *depth > 0 {
-                            // prune the tree back to the checkpointed size.
-                            if let Some(checkpointed_tree_size) =
-                                tree_checkpoints.get(tree_checkpoints.len() - depth)
-                            {
-                                extended_tree_values.truncate(*checkpointed_tree_size);
-                            }
-                        }
+                    // compute the root
+                    let expected_root =
+                        complete_tree::root::<H>(&extended_tree_values, tree.depth());
+                    prop_assert_eq!(&tree_root, &expected_root);
 
-                        // compute the root
-                        let expected_root =
-                            complete_tree::root::<H>(&extended_tree_values, tree.depth());
-                        prop_assert_eq!(&tree_root.unwrap(), &expected_root);
-
-                        prop_assert_eq!(
-                            &compute_root_from_witness(value, *position, &path),
-                            &expected_root
-                        );
-                    }
+                    prop_assert_eq!(
+                        &compute_root_from_witness(value, *position, &path),
+                        &expected_root
+                    );
                 }
             }
             GarbageCollect => {}
@@ -382,7 +415,7 @@ impl<H: Hashable + Ord + Clone + Debug, C: Clone, I: Tree<H, C>, E: Tree<H, C>> 
         a
     }
 
-    fn root(&self, checkpoint_depth: usize) -> Option<H> {
+    fn root(&self, checkpoint_depth: Option<usize>) -> Option<H> {
         let a = self.inefficient.root(checkpoint_depth);
         let b = self.efficient.root(checkpoint_depth);
         assert_eq!(a, b);
@@ -431,9 +464,16 @@ impl<H: Hashable + Ord + Clone + Debug, C: Clone, I: Tree<H, C>, E: Tree<H, C>> 
         a
     }
 
-    fn rewind(&mut self) -> bool {
-        let a = self.inefficient.rewind();
-        let b = self.efficient.rewind();
+    fn checkpoint_count(&self) -> usize {
+        let a = self.inefficient.checkpoint_count();
+        let b = self.efficient.checkpoint_count();
+        assert_eq!(a, b);
+        a
+    }
+
+    fn rewind(&mut self, checkpoint_depth: usize) -> bool {
+        let a = self.inefficient.rewind(checkpoint_depth);
+        let b = self.efficient.rewind(checkpoint_depth);
         assert_eq!(a, b);
         a
     }
@@ -478,7 +518,7 @@ impl TestCheckpoint for usize {
 }
 
 trait TestTree<H: TestHashable, C: TestCheckpoint> {
-    fn assert_root(&self, checkpoint_depth: usize, values: &[u64]);
+    fn assert_root(&self, checkpoint_depth: Option<usize>, values: &[u64]);
 
     fn assert_append(&mut self, value: u64, retention: Retention<u64>);
 
@@ -486,7 +526,7 @@ trait TestTree<H: TestHashable, C: TestCheckpoint> {
 }
 
 impl<H: TestHashable, C: TestCheckpoint, T: Tree<H, C>> TestTree<H, C> for T {
-    fn assert_root(&self, checkpoint_depth: usize, values: &[u64]) {
+    fn assert_root(&self, checkpoint_depth: Option<usize>, values: &[u64]) {
         assert_eq!(
             self.root(checkpoint_depth).unwrap(),
             H::combine_all(self.depth(), values)
@@ -518,13 +558,13 @@ pub fn check_root_hashes<H: TestHashable, C: TestCheckpoint, T: Tree<H, C>, F: F
 
     {
         let mut tree = new_tree(100);
-        tree.assert_root(0, &[]);
+        tree.assert_root(None, &[]);
         tree.assert_append(0, Ephemeral);
-        tree.assert_root(0, &[0]);
+        tree.assert_root(None, &[0]);
         tree.assert_append(1, Ephemeral);
-        tree.assert_root(0, &[0, 1]);
+        tree.assert_root(None, &[0, 1]);
         tree.assert_append(2, Ephemeral);
-        tree.assert_root(0, &[0, 1, 2]);
+        tree.assert_root(None, &[0, 1, 2]);
     }
 
     {
@@ -539,7 +579,7 @@ pub fn check_root_hashes<H: TestHashable, C: TestCheckpoint, T: Tree<H, C>, F: F
         for _ in 0..3 {
             t.assert_append(0, Ephemeral);
         }
-        t.assert_root(0, &[0, 0, 0, 0]);
+        t.assert_root(None, &[0, 0, 0, 0]);
     }
 }
 
@@ -584,12 +624,14 @@ pub fn check_witnesses<H: TestHashable, C: TestCheckpoint, T: Tree<H, C>, F: Fn(
         let mut tree = new_tree(100);
         tree.assert_append(0, Ephemeral);
         tree.assert_append(1, Marked);
+        tree.checkpoint(C::from_u64(0));
         assert_eq!(tree.witness(Position::from(0), 0), None);
     }
 
     {
         let mut tree = new_tree(100);
         tree.assert_append(0, Marked);
+        tree.checkpoint(C::from_u64(0));
         assert_eq!(
             tree.witness(Position::from(0), 0),
             Some(vec![
@@ -601,6 +643,7 @@ pub fn check_witnesses<H: TestHashable, C: TestCheckpoint, T: Tree<H, C>, F: Fn(
         );
 
         tree.assert_append(1, Ephemeral);
+        tree.checkpoint(C::from_u64(1));
         assert_eq!(
             tree.witness(0.into(), 0),
             Some(vec![
@@ -612,6 +655,7 @@ pub fn check_witnesses<H: TestHashable, C: TestCheckpoint, T: Tree<H, C>, F: Fn(
         );
 
         tree.assert_append(2, Marked);
+        tree.checkpoint(C::from_u64(2));
         assert_eq!(
             tree.witness(Position::from(2), 0),
             Some(vec![
@@ -623,6 +667,7 @@ pub fn check_witnesses<H: TestHashable, C: TestCheckpoint, T: Tree<H, C>, F: Fn(
         );
 
         tree.assert_append(3, Ephemeral);
+        tree.checkpoint(C::from_u64(3));
         assert_eq!(
             tree.witness(Position::from(2), 0),
             Some(vec![
@@ -634,6 +679,7 @@ pub fn check_witnesses<H: TestHashable, C: TestCheckpoint, T: Tree<H, C>, F: Fn(
         );
 
         tree.assert_append(4, Ephemeral);
+        tree.checkpoint(C::from_u64(4));
         assert_eq!(
             tree.witness(Position::from(2), 0),
             Some(vec![
@@ -653,6 +699,7 @@ pub fn check_witnesses<H: TestHashable, C: TestCheckpoint, T: Tree<H, C>, F: Fn(
         }
         tree.assert_append(6, Marked);
         tree.assert_append(7, Ephemeral);
+        tree.checkpoint(C::from_u64(0));
 
         assert_eq!(
             tree.witness(0.into(), 0),
@@ -674,6 +721,7 @@ pub fn check_witnesses<H: TestHashable, C: TestCheckpoint, T: Tree<H, C>, F: Fn(
         tree.assert_append(4, Marked);
         tree.assert_append(5, Marked);
         tree.assert_append(6, Ephemeral);
+        tree.checkpoint(C::from_u64(0));
 
         assert_eq!(
             tree.witness(Position::from(5), 0),
@@ -693,6 +741,7 @@ pub fn check_witnesses<H: TestHashable, C: TestCheckpoint, T: Tree<H, C>, F: Fn(
         }
         tree.assert_append(10, Marked);
         tree.assert_append(11, Ephemeral);
+        tree.checkpoint(C::from_u64(0));
 
         assert_eq!(
             tree.witness(Position::from(10), 0),
@@ -714,7 +763,7 @@ pub fn check_witnesses<H: TestHashable, C: TestCheckpoint, T: Tree<H, C>, F: Fn(
                 marking: Marking::Marked,
             },
         );
-        assert!(tree.rewind());
+        assert!(tree.rewind(0));
         for i in 1..4 {
             tree.assert_append(i, Ephemeral);
         }
@@ -722,6 +771,7 @@ pub fn check_witnesses<H: TestHashable, C: TestCheckpoint, T: Tree<H, C>, F: Fn(
         for i in 5..8 {
             tree.assert_append(i, Ephemeral);
         }
+        tree.checkpoint(C::from_u64(2));
         assert_eq!(
             tree.witness(0.into(), 0),
             Some(vec![
@@ -749,7 +799,7 @@ pub fn check_witnesses<H: TestHashable, C: TestCheckpoint, T: Tree<H, C>, F: Fn(
             },
         );
         tree.assert_append(7, Ephemeral);
-        assert!(tree.rewind());
+        assert!(tree.rewind(0));
         assert_eq!(
             tree.witness(Position::from(2), 0),
             Some(vec![
@@ -770,6 +820,7 @@ pub fn check_witnesses<H: TestHashable, C: TestCheckpoint, T: Tree<H, C>, F: Fn(
         tree.assert_append(13, Marked);
         tree.assert_append(14, Ephemeral);
         tree.assert_append(15, Ephemeral);
+        tree.checkpoint(C::from_u64(0));
 
         assert_eq!(
             tree.witness(Position::from(12), 0),
@@ -786,7 +837,13 @@ pub fn check_witnesses<H: TestHashable, C: TestCheckpoint, T: Tree<H, C>, F: Fn(
         let ops = (0..=11)
             .map(|i| Append(H::from_u64(i), Marked))
             .chain(Some(Append(H::from_u64(12), Ephemeral)))
-            .chain(Some(Append(H::from_u64(13), Ephemeral)))
+            .chain(Some(Append(
+                H::from_u64(13),
+                Checkpoint {
+                    id: C::from_u64(0),
+                    marking: Marking::None,
+                },
+            )))
             .chain(Some(Witness(11u64.into(), 0)))
             .collect::<Vec<_>>();
 
@@ -840,7 +897,7 @@ pub fn check_witnesses<H: TestHashable, C: TestCheckpoint, T: Tree<H, C>, F: Fn(
                     marking: Marking::None,
                 },
             ),
-            Witness(3u64.into(), 5),
+            Witness(3u64.into(), 4),
         ];
         let mut tree = new_tree(100);
         assert_eq!(
@@ -881,7 +938,7 @@ pub fn check_witnesses<H: TestHashable, C: TestCheckpoint, T: Tree<H, C>, F: Fn(
             ),
             Append(H::from_u64(0), Ephemeral),
             Append(H::from_u64(0), Ephemeral),
-            Witness(Position::from(3), 1),
+            Witness(Position::from(3), 0),
         ];
         let mut tree = new_tree(100);
         assert_eq!(
@@ -918,8 +975,7 @@ pub fn check_witnesses<H: TestHashable, C: TestCheckpoint, T: Tree<H, C>, F: Fn(
                     marking: Marking::None,
                 },
             ),
-            Rewind,
-            Rewind,
+            Rewind(2),
             Witness(Position::from(7), 2),
         ];
         let mut tree = new_tree(100);
@@ -944,7 +1000,7 @@ pub fn check_witnesses<H: TestHashable, C: TestCheckpoint, T: Tree<H, C>, F: Fn(
                     marking: Marking::None,
                 },
             ),
-            Witness(Position::from(2), 2),
+            Witness(Position::from(2), 1),
         ];
         let mut tree = new_tree(100);
         assert_eq!(
@@ -966,40 +1022,43 @@ pub fn check_checkpoint_rewind<C: TestCheckpoint, T: Tree<String, C>, F: Fn(usiz
     new_tree: F,
 ) {
     let mut t = new_tree(100);
-    assert!(!t.rewind());
+    assert!(!t.rewind(0));
 
     let mut t = new_tree(100);
     t.assert_checkpoint(1);
-    assert!(t.rewind());
+    assert!(t.rewind(0));
+    assert!(!t.rewind(1));
 
     let mut t = new_tree(100);
     t.append("a".to_string(), Retention::Ephemeral);
     t.assert_checkpoint(1);
     t.append("b".to_string(), Retention::Marked);
-    assert!(t.rewind());
+    assert_eq!(Some(Position::from(1)), t.current_position());
+    assert!(t.rewind(0));
     assert_eq!(Some(Position::from(0)), t.current_position());
 
     let mut t = new_tree(100);
     t.append("a".to_string(), Retention::Marked);
     t.assert_checkpoint(1);
-    assert!(t.rewind());
+    assert!(t.rewind(0));
+    assert_eq!(Some(Position::from(0)), t.current_position());
 
     let mut t = new_tree(100);
     t.append("a".to_string(), Retention::Marked);
     t.assert_checkpoint(1);
     t.append("a".to_string(), Retention::Ephemeral);
-    assert!(t.rewind());
+    assert!(t.rewind(0));
     assert_eq!(Some(Position::from(0)), t.current_position());
 
     let mut t = new_tree(100);
     t.append("a".to_string(), Retention::Ephemeral);
     t.assert_checkpoint(1);
     t.assert_checkpoint(2);
-    assert!(t.rewind());
+    assert!(t.rewind(1));
     t.append("b".to_string(), Retention::Ephemeral);
-    assert!(t.rewind());
+    assert!(t.rewind(0));
     t.append("b".to_string(), Retention::Ephemeral);
-    assert_eq!(t.root(0).unwrap(), "ab______________");
+    assert_eq!(t.root(None).unwrap(), "ab______________");
 }
 
 pub fn check_remove_mark<C: TestCheckpoint, T: Tree<String, C>, F: Fn(usize) -> T>(new_tree: F) {
@@ -1044,7 +1103,7 @@ pub fn check_rewind_remove_mark<C: TestCheckpoint, T: Tree<String, C>, F: Fn(usi
     let mut tree = new_tree(100);
     tree.append("e".to_string(), Retention::Marked);
     tree.assert_checkpoint(1);
-    assert!(tree.rewind());
+    assert!(tree.rewind(0));
     assert!(tree.remove_mark(0u64.into()));
 
     // use a maximum number of checkpoints of 1
@@ -1071,14 +1130,14 @@ pub fn check_rewind_remove_mark<C: TestCheckpoint, T: Tree<String, C>, F: Fn(usi
         vec![
             append_str("x", Retention::Marked),
             Checkpoint(C::from_u64(1)),
-            Rewind,
+            Rewind(0),
             unmark(0),
         ],
         vec![
             append_str("d", Retention::Marked),
             Checkpoint(C::from_u64(1)),
             unmark(0),
-            Rewind,
+            Rewind(0),
             unmark(0),
         ],
         vec![
@@ -1086,22 +1145,22 @@ pub fn check_rewind_remove_mark<C: TestCheckpoint, T: Tree<String, C>, F: Fn(usi
             Checkpoint(C::from_u64(1)),
             Checkpoint(C::from_u64(2)),
             unmark(0),
-            Rewind,
-            Rewind,
+            Rewind(0),
+            Rewind(1),
         ],
         vec![
             append_str("s", Retention::Marked),
             append_str("m", Retention::Ephemeral),
             Checkpoint(C::from_u64(1)),
             unmark(0),
-            Rewind,
+            Rewind(0),
             unmark(0),
             unmark(0),
         ],
         vec![
             append_str("a", Retention::Marked),
             Checkpoint(C::from_u64(1)),
-            Rewind,
+            Rewind(0),
             append_str("a", Retention::Marked),
         ],
     ];
@@ -1194,7 +1253,7 @@ pub fn check_witness_consistency<C: TestCheckpoint, T: Tree<String, C>, F: Fn(us
             Checkpoint(C::from_u64(1)),
             unmark(0),
             Checkpoint(C::from_u64(2)),
-            Rewind,
+            Rewind(0),
             append_str("b", Retention::Ephemeral),
             witness(0, 0),
         ],
@@ -1202,7 +1261,7 @@ pub fn check_witness_consistency<C: TestCheckpoint, T: Tree<String, C>, F: Fn(us
             append_str("a", Retention::Marked),
             Checkpoint(C::from_u64(1)),
             Checkpoint(C::from_u64(2)),
-            Rewind,
+            Rewind(1),
             append_str("a", Retention::Ephemeral),
             unmark(0),
             witness(0, 1),

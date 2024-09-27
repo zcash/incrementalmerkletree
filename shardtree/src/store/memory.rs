@@ -68,8 +68,8 @@ impl<H: Clone, C: Clone + Ord> ShardStore for MemoryShardStore<H, C> {
         Ok(self.shards.iter().map(|s| s.root_addr).collect())
     }
 
-    fn truncate(&mut self, from: Address) -> Result<(), Self::Error> {
-        let shard_idx = usize::try_from(from.index()).expect("SHARD_HEIGHT > 64 is unsupported");
+    fn truncate_shards(&mut self, shard_index: u64) -> Result<(), Self::Error> {
+        let shard_idx = usize::try_from(shard_index).expect("SHARD_HEIGHT > 64 is unsupported");
         self.shards.truncate(shard_idx);
         Ok(())
     }
@@ -107,15 +107,12 @@ impl<H: Clone, C: Clone + Ord> ShardStore for MemoryShardStore<H, C> {
         &self,
         checkpoint_depth: usize,
     ) -> Result<Option<(C, Checkpoint)>, Self::Error> {
-        Ok(if checkpoint_depth == 0 {
-            None
-        } else {
-            self.checkpoints
-                .iter()
-                .rev()
-                .nth(checkpoint_depth - 1)
-                .map(|(id, c)| (id.clone(), c.clone()))
-        })
+        Ok(self
+            .checkpoints
+            .iter()
+            .rev()
+            .nth(checkpoint_depth)
+            .map(|(id, c)| (id.clone(), c.clone())))
     }
 
     fn min_checkpoint_id(&self) -> Result<Option<C>, Self::Error> {
@@ -169,8 +166,15 @@ impl<H: Clone, C: Clone + Ord> ShardStore for MemoryShardStore<H, C> {
         Ok(())
     }
 
-    fn truncate_checkpoints(&mut self, checkpoint_id: &C) -> Result<(), Self::Error> {
-        self.checkpoints.split_off(checkpoint_id);
+    fn truncate_checkpoints_retaining(
+        &mut self,
+        checkpoint_id: &Self::CheckpointId,
+    ) -> Result<(), Self::Error> {
+        let mut rest = self.checkpoints.split_off(checkpoint_id);
+        if let Some(mut c) = rest.remove(checkpoint_id) {
+            c.marks_removed.clear();
+            self.checkpoints.insert(checkpoint_id.clone(), c);
+        }
         Ok(())
     }
 }

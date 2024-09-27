@@ -165,7 +165,7 @@ impl<
     }
 
     fn current_position(&self) -> Option<Position> {
-        match ShardTree::max_leaf_position(self, 0) {
+        match ShardTree::max_leaf_position(self, None) {
             Ok(v) => v,
             Err(err) => panic!("current position query failed: {:?}", err),
         }
@@ -185,16 +185,16 @@ impl<
         }
     }
 
-    fn root(&self, checkpoint_depth: usize) -> Option<H> {
+    fn root(&self, checkpoint_depth: Option<usize>) -> Option<H> {
         match ShardTree::root_at_checkpoint_depth(self, checkpoint_depth) {
-            Ok(v) => Some(v),
+            Ok(v) => v,
             Err(err) => panic!("root computation failed: {:?}", err),
         }
     }
 
     fn witness(&self, position: Position, checkpoint_depth: usize) -> Option<Vec<H>> {
         match ShardTree::witness_at_checkpoint_depth(self, position, checkpoint_depth) {
-            Ok(p) => Some(p.path_elems().to_vec()),
+            Ok(p) => p.map(|p| p.path_elems().to_vec()),
             Err(ShardTreeError::Query(
                 QueryError::NotContained(_)
                 | QueryError::TreeIncomplete(_)
@@ -220,8 +220,12 @@ impl<
         ShardTree::checkpoint(self, checkpoint_id).unwrap()
     }
 
-    fn rewind(&mut self) -> bool {
-        ShardTree::truncate_to_depth(self, 1).unwrap()
+    fn checkpoint_count(&self) -> usize {
+        ShardStore::checkpoint_count(self.store()).unwrap()
+    }
+
+    fn rewind(&mut self, checkpoint_depth: usize) -> bool {
+        ShardTree::truncate_to_checkpoint_depth(self, checkpoint_depth).unwrap()
     }
 }
 
@@ -255,7 +259,7 @@ pub fn check_shardtree_insertion<
     );
 
     assert_matches!(
-        tree.root_at_checkpoint_depth(1),
+        tree.root_at_checkpoint_depth(Some(0)),
         Err(ShardTreeError::Query(QueryError::TreeIncomplete(v))) if v == vec![Address::from_parts(Level::from(0), 0)]
     );
 
@@ -272,13 +276,13 @@ pub fn check_shardtree_insertion<
     );
 
     assert_matches!(
-        tree.root_at_checkpoint_depth(0),
-        Ok(h) if h == *"abcd____________"
+        tree.root_at_checkpoint_depth(None),
+        Ok(Some(h)) if h == *"abcd____________"
     );
 
     assert_matches!(
-        tree.root_at_checkpoint_depth(1),
-        Ok(h) if h == *"ab______________"
+        tree.root_at_checkpoint_depth(Some(0)),
+        Ok(Some(h)) if h == *"ab______________"
     );
 
     assert_matches!(
@@ -309,7 +313,7 @@ pub fn check_shardtree_insertion<
     );
 
     assert_matches!(
-        tree.root_at_checkpoint_depth(0),
+        tree.root_at_checkpoint_depth(None),
         // The (0, 13) and (1, 7) incomplete subtrees are
         // not considered incomplete here because they appear
         // at the tip of the tree.
@@ -319,7 +323,7 @@ pub fn check_shardtree_insertion<
         ]
     );
 
-    assert_matches!(tree.truncate_to_depth(1), Ok(true));
+    assert_matches!(tree.truncate_to_checkpoint_depth(0), Ok(true));
 
     assert_matches!(
         tree.batch_insert(
@@ -330,13 +334,13 @@ pub fn check_shardtree_insertion<
     );
 
     assert_matches!(
-        tree.root_at_checkpoint_depth(0),
-        Ok(h) if h == *"abcdefghijkl____"
+        tree.root_at_checkpoint_depth(None),
+        Ok(Some(h)) if h == *"abcdefghijkl____"
     );
 
     assert_matches!(
-        tree.root_at_checkpoint_depth(1),
-        Ok(h) if h == *"ab______________"
+        tree.root_at_checkpoint_depth(Some(1)),
+        Ok(Some(h)) if h == *"ab______________"
     );
 }
 
@@ -399,7 +403,7 @@ pub fn check_witness_with_pruned_subtrees<
         .witness_at_checkpoint_depth(Position::from(26), 0)
         .unwrap();
     assert_eq!(
-        witness.path_elems(),
+        witness.expect("can produce a witness").path_elems(),
         &[
             "d",
             "ab",
