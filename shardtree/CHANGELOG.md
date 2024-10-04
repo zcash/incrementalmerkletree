@@ -7,6 +7,8 @@ and this project adheres to Rust's notion of
 
 ## Unreleased
 
+## [0.5.0] - 2024-10-04
+
 This release includes a significant refactoring and rework of several methods
 of the `shardtree::ShardTree` type and the `shardtree::store::ShardStore`
 trait. Please read the notes for this release carefully as the semantics of
