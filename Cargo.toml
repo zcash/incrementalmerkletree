@@ -19,7 +19,7 @@ categories = ["algorithms", "data-structures"]
 [workspace.dependencies]
 # Intra-workspace dependencies
 incrementalmerkletree = { version = "0.7", path = "incrementalmerkletree" }
-incrementalmerkletree-testing = { version = "0.1", path = "incrementalmerkletree-testing" }
+incrementalmerkletree-testing = { version = "0.2", path = "incrementalmerkletree-testing" }
 
 # Testing
 proptest = "1"
