@@ -7,6 +7,11 @@ and this project adheres to Rust's notion of
 
 ## Unreleased
 
+### Changed
+- `incrementalmerkletree::witness`:
+  - `IncrementalWitness::{from_tree, from_parts}` now return `Option<Self>`
+    (returning `None` if a witness cannot be constructed).
+
 ## [0.7.0] - 2024-09-25
 
 ### Changed
