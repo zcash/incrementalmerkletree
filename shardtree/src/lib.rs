@@ -1162,7 +1162,8 @@ impl<
             cur_addr = cur_addr.parent();
         }
 
-        Ok(MerklePath::from_parts(witness, position).unwrap())
+        Ok(MerklePath::from_parts(witness, position)
+            .expect("witness has length DEPTH because we extended it to the root"))
     }
 
     fn witness_internal(
