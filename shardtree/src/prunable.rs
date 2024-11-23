@@ -787,7 +787,7 @@ impl<H: Hashable + Clone + PartialEq> LocatedPrunableTree<H> {
                 if r.remainder.next().is_some() {
                     Err(InsertionError::TreeFull)
                 } else {
-                    Ok((r.subtree, r.max_insert_position.unwrap(), checkpoint_id))
+                    Ok((r.subtree, r.max_insert_position, checkpoint_id))
                 }
             })
     }

@@ -71,8 +71,8 @@ impl<
 
                 values = res.remainder;
                 subtree_root_addr = subtree_root_addr.next_at_level();
-                max_insert_position = res.max_insert_position;
-                start = max_insert_position.unwrap() + 1;
+                max_insert_position = Some(res.max_insert_position);
+                start = res.max_insert_position + 1;
                 all_incomplete.append(&mut res.incomplete);
             } else {
                 break;
@@ -102,7 +102,7 @@ pub struct BatchInsertionResult<H, C: Ord, I: Iterator<Item = (H, Retention<C>)>
     /// [`Node::Nil`]: crate::tree::Node::Nil
     pub incomplete: Vec<IncompleteAt>,
     /// The maximum position at which a leaf was inserted.
-    pub max_insert_position: Option<Position>,
+    pub max_insert_position: Position,
     /// The positions of all leaves with [`Retention::Checkpoint`] retention that were inserted.
     pub checkpoints: BTreeMap<C, Position>,
     /// The unconsumed remainder of the iterator from which leaves were inserted, if the tree
@@ -243,7 +243,7 @@ impl<H: Hashable + Clone + PartialEq> LocatedPrunableTree<H> {
                     subtree: to_insert,
                     contains_marked,
                     incomplete,
-                    max_insert_position: Some(last_position),
+                    max_insert_position: last_position,
                     checkpoints,
                     remainder: values,
                 },
