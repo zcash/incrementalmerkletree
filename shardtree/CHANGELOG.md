@@ -7,6 +7,10 @@ and this project adheres to Rust's notion of
 
 ## Unreleased
 
+### Changed
+- `shardtree::LocatedTree::from_parts` now returns `Option<Self>` (returning
+  `None` if the provided `Address` and `Tree` are inconsistent).
+
 ## [0.5.0] - 2024-10-04
 
 This release includes a significant refactoring and rework of several methods
