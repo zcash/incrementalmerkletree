@@ -7,6 +7,13 @@ and this project adheres to Rust's notion of
 
 ## Unreleased
 
+### Changed
+- `shardtree::BatchInsertionResult.max_insert_position` now has type `Position`
+  instead of `Option<Position>` (all APIs return `Option<BatchInsertionResult>`
+  and use `None` at that level to represent "no leaves inserted").
+- `shardtree::LocatedTree::from_parts` now returns `Option<Self>` (returning
+  `None` if the provided `Address` and `Tree` are inconsistent).
+
 ## [0.5.0] - 2024-10-04
 
 This release includes a significant refactoring and rework of several methods

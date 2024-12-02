@@ -197,9 +197,35 @@ pub struct LocatedTree<A, V> {
 }
 
 impl<A, V> LocatedTree<A, V> {
-    /// Constructs a new LocatedTree from its constituent parts
-    pub fn from_parts(root_addr: Address, root: Tree<A, V>) -> Self {
-        LocatedTree { root_addr, root }
+    /// Constructs a new LocatedTree from its constituent parts.
+    ///
+    /// Returns `None` if `root_addr` is inconsistent with `root` (in particular, if the
+    /// level of `root_addr` is too small to contain `tree`).
+    pub fn from_parts(root_addr: Address, root: Tree<A, V>) -> Option<Self> {
+        // In order to meet various pre-conditions throughout the crate, we require that
+        // no `Node::Parent` in `root` has a level of 0 relative to `root_addr`.
+        fn is_consistent<A, V>(addr: Address, root: &Tree<A, V>) -> bool {
+            match (&root.0, addr.children()) {
+                // Found an inconsistency!
+                (Node::Parent { .. }, None) => false,
+                // Check consistency of children recursively.
+                (Node::Parent { left, right, .. }, Some((l_addr, r_addr))) => {
+                    is_consistent(l_addr, left) && is_consistent(r_addr, right)
+                }
+
+                // Leaves are technically allowed to occur at any level, so we do not
+                // require `addr` to have no children.
+                (Node::Leaf { .. }, _) => true,
+
+                // Nil nodes have no information, so we cannot verify that the data it
+                // represents is consistent with `root_addr`. Instead we rely on methods
+                // that mutate `LocatedTree` to verify that the insertion address is not
+                // inconsistent with `root_addr`.
+                (Node::Nil, _) => true,
+            }
+        }
+
+        is_consistent(root_addr, &root).then_some(LocatedTree { root_addr, root })
     }
 
     /// Returns the root address of this tree.
@@ -234,10 +260,13 @@ impl<A, V> LocatedTree<A, V> {
 
     /// Returns the value at the specified position, if any.
     pub fn value_at_position(&self, position: Position) -> Option<&V> {
+        /// Pre-condition: `addr` must be the address of `root`.
         fn go<A, V>(pos: Position, addr: Address, root: &Tree<A, V>) -> Option<&V> {
             match &root.0 {
                 Node::Parent { left, right, .. } => {
-                    let (l_addr, r_addr) = addr.children().unwrap();
+                    let (l_addr, r_addr) = addr
+                        .children()
+                        .expect("has children because we checked `root` is a parent");
                     if l_addr.position_range().contains(&pos) {
                         go(pos, l_addr, left)
                     } else {
@@ -306,6 +335,7 @@ impl<A: Default + Clone, V: Clone> LocatedTree<A, V> {
     /// if the tree is terminated by a [`Node::Nil`] or leaf node before the specified address can
     /// be reached.
     pub fn subtree(&self, addr: Address) -> Option<Self> {
+        /// Pre-condition: `root_addr` must be the address of `root`.
         fn go<A: Clone, V: Clone>(
             root_addr: Address,
             root: &Tree<A, V>,
@@ -319,7 +349,9 @@ impl<A: Default + Clone, V: Clone> LocatedTree<A, V> {
             } else {
                 match &root.0 {
                     Node::Parent { left, right, .. } => {
-                        let (l_addr, r_addr) = root_addr.children().unwrap();
+                        let (l_addr, r_addr) = root_addr
+                            .children()
+                            .expect("has children because we checked `root` is a parent");
                         if l_addr.contains(&addr) {
                             go(l_addr, left.as_ref(), addr)
                         } else {
@@ -343,6 +375,7 @@ impl<A: Default + Clone, V: Clone> LocatedTree<A, V> {
     /// If this root address of this tree is lower down in the tree than the level specified,
     /// the entire tree is returned as the sole element of the result vector.
     pub fn decompose_to_level(self, level: Level) -> Vec<Self> {
+        /// Pre-condition: `root_addr` must be the address of `root`.
         fn go<A: Clone, V: Clone>(
             level: Level,
             root_addr: Address,
@@ -353,7 +386,9 @@ impl<A: Default + Clone, V: Clone> LocatedTree<A, V> {
             } else {
                 match root.0 {
                     Node::Parent { left, right, .. } => {
-                        let (l_addr, r_addr) = root_addr.children().unwrap();
+                        let (l_addr, r_addr) = root_addr
+                            .children()
+                            .expect("has children because we checked `root` is a parent");
                         let mut l_decomposed = go(
                             level,
                             l_addr,
