@@ -391,6 +391,10 @@ impl<
     }
 
     /// Adds a checkpoint at the rightmost leaf state of the tree.
+    ///
+    /// # Panics
+    ///
+    /// Panics if `root` represents a parent node but `root_addr` is a depth-0 leaf address.
     pub fn checkpoint(&mut self, checkpoint_id: C) -> Result<bool, ShardTreeError<S::Error>> {
         /// Pre-condition: `root_addr` must be the address of `root`.
         fn go<H: Hashable + Clone + PartialEq>(
