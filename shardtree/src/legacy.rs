@@ -177,7 +177,11 @@ impl<H: Hashable + Clone + PartialEq> LocatedPrunableTree<H> {
             // construct the subtree and cap based on the frontier containing the
             // witnessed position
             let (past_subtree, past_supertree) = self.insert_frontier_nodes::<C>(
-                witness.tree().to_frontier().take().unwrap(),
+                witness
+                    .tree()
+                    .to_frontier()
+                    .take()
+                    .expect("IncrementalWitness must not be created from the empty tree."),
                 &Retention::Marked,
             )?;
 
