@@ -153,7 +153,9 @@ impl<H: Hashable + Clone + PartialEq> PrunableTree<H> {
                         || {
                             // Compute the roots of the left and right children and hash them
                             // together.
-                            let (l_addr, r_addr) = root_addr.children().unwrap();
+                            let (l_addr, r_addr) = root_addr
+                                .children()
+                                .expect("The root address of a parent node must have children.");
                             accumulate_result_with(
                                 left.root_hash(l_addr, truncate_at),
                                 right.root_hash(r_addr, truncate_at),
@@ -241,6 +243,7 @@ impl<H: Hashable + Clone + PartialEq> PrunableTree<H> {
     /// returned error contains the address of the node where such a conflict occurred.
     #[tracing::instrument()]
     pub fn merge_checked(self, root_addr: Address, other: Self) -> Result<Self, Address> {
+        /// Pre-condition: `root_addr` must be the address of `t0` and `t1`.
         #[allow(clippy::type_complexity)]
         fn go<H: Hashable + Clone + PartialEq>(
             addr: Address,
@@ -293,7 +296,9 @@ impl<H: Hashable + Clone + PartialEq> PrunableTree<H> {
                             }),
                         ) = (lparent, rparent)
                         {
-                            let (l_addr, r_addr) = addr.children().unwrap();
+                            let (l_addr, r_addr) = addr
+                                .children()
+                                .expect("The root address of a parent node must have children.");
                             Ok(Tree::unite(
                                 addr.level() - 1,
                                 lann.or(rann),
