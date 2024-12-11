@@ -7,6 +7,8 @@ and this project adheres to Rust's notion of
 
 ## Unreleased
 
+## [0.8.0] - 2024-12-11
+
 ### Changed
 - `incrementalmerkletree::witness`:
   - `IncrementalWitness::{from_tree, from_parts}` now return `Option<Self>`
