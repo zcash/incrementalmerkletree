@@ -104,17 +104,6 @@ checksum = "d77f7ec81a6d05a3abb01ab6eb7590f6083d08449fe5a1c8b1e620283546ccb7"
 [[package]]
 name = "incrementalmerkletree"
 version = "0.7.0"
-dependencies = [
- "either",
- "proptest",
- "rand",
- "rand_chacha",
- "rand_core",
-]
-
-[[package]]
-name = "incrementalmerkletree"
-version = "0.7.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d45063fbc4b0a37837f6bfe0445f269d13d730ad0aa3b5a7f74aa7bf27a0f4df"
 dependencies = [
@@ -125,10 +114,21 @@ dependencies = [
 ]
 
 [[package]]
+name = "incrementalmerkletree"
+version = "0.8.0"
+dependencies = [
+ "either",
+ "proptest",
+ "rand",
+ "rand_chacha",
+ "rand_core",
+]
+
+[[package]]
 name = "incrementalmerkletree-testing"
 version = "0.2.0"
 dependencies = [
- "incrementalmerkletree 0.7.0 (registry+https://github.com/rust-lang/crates.io-index)",
+ "incrementalmerkletree 0.7.0",
  "proptest",
 ]
 
@@ -335,7 +335,7 @@ dependencies = [
  "assert_matches",
  "bitflags 2.4.1",
  "either",
- "incrementalmerkletree 0.7.0 (registry+https://github.com/rust-lang/crates.io-index)",
+ "incrementalmerkletree 0.7.0",
  "incrementalmerkletree-testing",
  "proptest",
  "tempfile",
