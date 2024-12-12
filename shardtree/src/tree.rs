@@ -199,33 +199,35 @@ pub struct LocatedTree<A, V> {
 impl<A, V> LocatedTree<A, V> {
     /// Constructs a new LocatedTree from its constituent parts.
     ///
-    /// Returns `None` if `root_addr` is inconsistent with `root` (in particular, if the
-    /// level of `root_addr` is too small to contain `tree`).
-    pub fn from_parts(root_addr: Address, root: Tree<A, V>) -> Option<Self> {
+    /// Returns the newly constructed error, or the address at which the provided tree extends
+    /// beyond the position range of the provided root address.
+    pub fn from_parts(root_addr: Address, root: Tree<A, V>) -> Result<Self, Address> {
         // In order to meet various pre-conditions throughout the crate, we require that
         // no `Node::Parent` in `root` has a level of 0 relative to `root_addr`.
-        fn is_consistent<A, V>(addr: Address, root: &Tree<A, V>) -> bool {
+        fn check<A, V>(addr: Address, root: &Tree<A, V>) -> Result<(), Address> {
             match (&root.0, addr.children()) {
                 // Found an inconsistency!
-                (Node::Parent { .. }, None) => false,
+                (Node::Parent { .. }, None) => Err(addr),
                 // Check consistency of children recursively.
                 (Node::Parent { left, right, .. }, Some((l_addr, r_addr))) => {
-                    is_consistent(l_addr, left) && is_consistent(r_addr, right)
+                    check(l_addr, left)?;
+                    check(r_addr, right)?;
+                    Ok(())
                 }
 
                 // Leaves are technically allowed to occur at any level, so we do not
                 // require `addr` to have no children.
-                (Node::Leaf { .. }, _) => true,
+                (Node::Leaf { .. }, _) => Ok(()),
 
                 // Nil nodes have no information, so we cannot verify that the data it
                 // represents is consistent with `root_addr`. Instead we rely on methods
                 // that mutate `LocatedTree` to verify that the insertion address is not
                 // inconsistent with `root_addr`.
-                (Node::Nil, _) => true,
+                (Node::Nil, _) => Ok(()),
             }
         }
 
-        is_consistent(root_addr, &root).then_some(LocatedTree { root_addr, root })
+        check(root_addr, &root).map(|_| LocatedTree { root_addr, root })
     }
 
     /// Returns the root address of this tree.
