@@ -1,6 +1,7 @@
 //! Helpers for working with trees that support pruning unneeded leaves and branches.
 
 use std::collections::{BTreeMap, BTreeSet};
+use std::fmt;
 use std::sync::Arc;
 
 use bitflags::bitflags;
@@ -78,6 +79,37 @@ impl<C> From<Retention<C>> for RetentionFlags {
 /// A [`Tree`] annotated with Merkle hashes.
 pub type PrunableTree<H> = Tree<Option<Arc<H>>, (H, RetentionFlags)>;
 
+/// Errors that can occur when merging trees.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum MergeError {
+    Conflict(Address),
+    TreeMalformed(Address),
+}
+
+impl From<MergeError> for InsertionError {
+    fn from(value: MergeError) -> Self {
+        match value {
+            MergeError::Conflict(addr) => InsertionError::Conflict(addr),
+            MergeError::TreeMalformed(addr) => InsertionError::InputMalformed(addr),
+        }
+    }
+}
+
+impl fmt::Display for MergeError {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        match &self {
+            MergeError::Conflict(addr) => write!(
+                f,
+                "Inserted root conflicts with existing root at address {:?}",
+                addr
+            ),
+            MergeError::TreeMalformed(addr) => {
+                write!(f, "Merge input malformed at address {:?}", addr)
+            }
+        }
+    }
+}
+
 impl<H: Hashable + Clone + PartialEq> PrunableTree<H> {
     /// Returns the the value if this is a leaf.
     pub fn leaf_value(&self) -> Option<&H> {
@@ -153,7 +185,9 @@ impl<H: Hashable + Clone + PartialEq> PrunableTree<H> {
                         || {
                             // Compute the roots of the left and right children and hash them
                             // together.
-                            let (l_addr, r_addr) = root_addr.children().unwrap();
+                            let (l_addr, r_addr) = root_addr
+                                .children()
+                                .expect("The root address of a parent node must have children.");
                             accumulate_result_with(
                                 left.root_hash(l_addr, truncate_at),
                                 right.root_hash(r_addr, truncate_at),
@@ -240,13 +274,14 @@ impl<H: Hashable + Clone + PartialEq> PrunableTree<H> {
     /// would cause information loss or if a conflict between root hashes occurs at a node. The
     /// returned error contains the address of the node where such a conflict occurred.
     #[tracing::instrument()]
-    pub fn merge_checked(self, root_addr: Address, other: Self) -> Result<Self, Address> {
+    pub fn merge_checked(self, root_addr: Address, other: Self) -> Result<Self, MergeError> {
+        /// Pre-condition: `root_addr` must be the address of `t0` and `t1`.
         #[allow(clippy::type_complexity)]
         fn go<H: Hashable + Clone + PartialEq>(
             addr: Address,
             t0: PrunableTree<H>,
             t1: PrunableTree<H>,
-        ) -> Result<PrunableTree<H>, Address> {
+        ) -> Result<PrunableTree<H>, MergeError> {
             // Require that any roots the we compute will not be default-filled by picking
             // a starting valid fill point that is outside the range of leaf positions.
             let no_default_fill = addr.position_range_end();
@@ -258,7 +293,7 @@ impl<H: Hashable + Clone + PartialEq> PrunableTree<H> {
                         Ok(Tree::leaf((vl.0, vl.1 | vr.1)))
                     } else {
                         trace!(left = ?vl.0, right = ?vr.0, "Merge conflict for leaves");
-                        Err(addr)
+                        Err(MergeError::Conflict(addr))
                     }
                 }
                 (Tree(Node::Leaf { value }), parent @ Tree(Node::Parent { .. }))
@@ -268,7 +303,7 @@ impl<H: Hashable + Clone + PartialEq> PrunableTree<H> {
                         Ok(parent.reannotate_root(Some(Arc::new(value.0))))
                     } else {
                         trace!(leaf = ?value, node = ?parent_hash, "Merge conflict for leaf into node");
-                        Err(addr)
+                        Err(MergeError::Conflict(addr))
                     }
                 }
                 (lparent, rparent) => {
@@ -293,7 +328,8 @@ impl<H: Hashable + Clone + PartialEq> PrunableTree<H> {
                             }),
                         ) = (lparent, rparent)
                         {
-                            let (l_addr, r_addr) = addr.children().unwrap();
+                            let (l_addr, r_addr) =
+                                addr.children().ok_or(MergeError::TreeMalformed(addr))?;
                             Ok(Tree::unite(
                                 addr.level() - 1,
                                 lann.or(rann),
@@ -305,7 +341,7 @@ impl<H: Hashable + Clone + PartialEq> PrunableTree<H> {
                         }
                     } else {
                         trace!(left = ?lroot, right = ?rroot, "Merge conflict for nodes");
-                        Err(addr)
+                        Err(MergeError::Conflict(addr))
                     }
                 }
             }
@@ -703,7 +739,7 @@ impl<H: Hashable + Clone + PartialEq> LocatedPrunableTree<H> {
                         parent
                             .clone()
                             .merge_checked(root_addr, subtree.root)
-                            .map_err(InsertionError::Conflict)
+                            .map_err(InsertionError::from)
                             .map(|tree| (tree, vec![]))
                     }
                     Tree(Node::Parent { ann, left, right }) => {
@@ -1021,6 +1057,7 @@ mod tests {
     use super::{LocatedPrunableTree, PrunableTree, RetentionFlags};
     use crate::{
         error::{InsertionError, QueryError},
+        prunable::MergeError,
         testing::{arb_char_str, arb_prunable_tree},
         tree::{
             tests::{leaf, nil, parent},
@@ -1117,7 +1154,7 @@ mod tests {
         assert_eq!(
             t0.clone()
                 .merge_checked(Address::from_parts(1.into(), 0), t2.clone()),
-            Err(Address::from_parts(0.into(), 0))
+            Err(MergeError::Conflict(Address::from_parts(0.into(), 0)))
         );
 
         let t3: PrunableTree<String> = parent(t0, t2);

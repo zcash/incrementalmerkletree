@@ -132,6 +132,9 @@ pruning in the presence of inserted `Frontier` nodes. See the `Removed` and
   annotation data being discarded when pruning a `Parent` node having
   `Nil` nodes for both its left and right children.
 
+## [0.3.2] - 2024-12-09
+- Replaces `unwrap` calls with `expect` calls & documents panics.
+
 ## [0.3.1] - 2024-04-03
 
 ### Fixed
