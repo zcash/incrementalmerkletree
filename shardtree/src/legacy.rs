@@ -187,7 +187,7 @@ impl<H: Hashable + Clone + PartialEq> LocatedPrunableTree<H> {
                     .tree()
                     .to_frontier()
                     .take()
-                    .expect("IncrementalWitness must not be created from the empty tree."),
+                    .expect("IncrementalWitness cannot be constructed for the empty tree."),
                 &Retention::Marked,
             )?;
 
@@ -261,7 +261,7 @@ mod tests {
         for c in 'a'..'h' {
             base_tree.append(c.to_string()).unwrap();
         }
-        let mut witness = IncrementalWitness::from_tree(base_tree);
+        let mut witness = IncrementalWitness::from_tree(base_tree).unwrap();
         for c in 'h'..'z' {
             witness.append(c.to_string()).unwrap();
         }
@@ -309,7 +309,7 @@ mod tests {
         for c in 'a'..='c' {
             base_tree.append(c.to_string()).unwrap();
         }
-        let mut witness = IncrementalWitness::from_tree(base_tree);
+        let mut witness = IncrementalWitness::from_tree(base_tree).unwrap();
         witness.append("d".to_string()).unwrap();
 
         let root_addr = Address::from_parts(Level::from(3), 0);
