@@ -7,6 +7,11 @@ and this project adheres to Rust's notion of
 
 ## Unreleased
 
+## [0.7.1] - 2024-12-16
+
+### Added
+- `no-std` support, via a default-enabled `std` feature flag.
+
 ## [0.7.0] - 2024-09-25
 
 ### Changed

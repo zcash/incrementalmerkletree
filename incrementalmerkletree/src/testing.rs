@@ -1,4 +1,5 @@
 use crate::{Hashable, Level};
+use alloc::string::{String, ToString};
 
 /// A possibly-empty incremental Merkle frontier.
 pub trait Frontier<H> {
