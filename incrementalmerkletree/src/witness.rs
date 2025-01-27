@@ -1,5 +1,6 @@
-use std::convert::TryInto;
-use std::iter::repeat;
+use alloc::vec::Vec;
+use core::convert::TryInto;
+use core::iter::repeat;
 
 use crate::{
     frontier::{CommitmentTree, PathFiller},
@@ -249,7 +250,10 @@ impl<H: Hashable + Clone, const DEPTH: u8> IncrementalWitness<H, DEPTH> {
 
 #[cfg(test)]
 mod tests {
+    use alloc::string::{String, ToString};
+
     use crate::{frontier::CommitmentTree, witness::IncrementalWitness, Position};
+
     #[test]
     fn witness_tip_position() {
         let mut base_tree = CommitmentTree::<String, 6>::empty();
