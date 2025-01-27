@@ -681,8 +681,8 @@ pub mod testing {
     use proptest::prelude::*;
     use rand::{distributions::Standard, prelude::Distribution};
 
-    use std::collections::hash_map::DefaultHasher;
-    use std::hash::Hasher;
+    #[cfg(feature = "std")]
+    use {core::hash::Hasher, std::collections::hash_map::DefaultHasher};
 
     use crate::{frontier::Frontier, Hashable, Level};
 
@@ -701,6 +701,7 @@ pub mod testing {
     #[derive(Copy, Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
     pub struct TestNode(pub u64);
 
+    #[cfg(feature = "std")]
     impl Hashable for TestNode {
         fn empty_leaf() -> Self {
             Self(0)

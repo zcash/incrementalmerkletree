@@ -30,7 +30,9 @@ rand_core = "0.6"
 rand_chacha = "0.3"
 
 [features]
-default = ["std"]
+# The `std` feature is no longer enabled by default because it is not needed
+# for backwards compatibility; it is only enabled by the `test-dependencies`
+# feature.
 std = []
 # The legacy-api feature guards types and functions that were previously
 # part of the `zcash_primitives` crate. Those types were removed in the
