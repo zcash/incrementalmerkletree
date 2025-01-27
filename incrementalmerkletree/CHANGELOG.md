@@ -7,6 +7,11 @@ and this project adheres to Rust's notion of
 
 ## Unreleased
 
+## [0.8.1] - 2024-12-11
+
+### Changed
+- Enables use in `no_std` environments.
+
 ## [0.8.0] - 2024-12-11
 
 ### Changed
