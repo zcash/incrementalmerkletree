@@ -44,13 +44,21 @@
 //! context `ommers` refers to the node's ommer, plus each ancestor's ommer.
 
 #![cfg_attr(docsrs, feature(doc_cfg))]
+#![no_std]
 
+#[cfg(feature = "std")]
+extern crate std;
+
+#[macro_use]
+extern crate alloc;
+use alloc::vec::Vec;
+
+use core::cmp::Ordering;
+use core::convert::{TryFrom, TryInto};
+use core::fmt;
+use core::num::TryFromIntError;
+use core::ops::{Add, AddAssign, Range, Sub};
 use either::Either;
-use std::cmp::Ordering;
-use std::convert::{TryFrom, TryInto};
-use std::fmt;
-use std::num::TryFromIntError;
-use std::ops::{Add, AddAssign, Range, Sub};
 
 pub mod frontier;
 
@@ -445,7 +453,7 @@ impl Address {
         let level_delta = (u64::BITS - index_delta.leading_zeros()) as u8;
         Address {
             level: higher.level + level_delta,
-            index: std::cmp::max(higher.index, lower_ancestor_idx) >> level_delta,
+            index: core::cmp::max(higher.index, lower_ancestor_idx) >> level_delta,
         }
     }
 
@@ -672,11 +680,13 @@ pub trait Hashable: fmt::Debug {
 
 #[cfg(test)]
 pub(crate) mod tests {
-    use crate::MerklePath;
-
-    use super::{Address, Level, Position, Source};
+    use alloc::string::{String, ToString};
+    use alloc::vec::Vec;
     use core::ops::Range;
     use either::Either;
+
+    use super::{Address, Level, Position, Source};
+    use crate::MerklePath;
 
     #[test]
     fn position_is_complete_subtree() {
