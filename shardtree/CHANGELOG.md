@@ -7,7 +7,10 @@ and this project adheres to Rust's notion of
 
 ## Unreleased
 
+## [0.6.0] - 2025-01-28
+
 ### Changed
+- Update to `incrementalmerkletree 0.8.1`
 - `shardtree::BatchInsertionResult.max_insert_position` now has type `Position`
   instead of `Option<Position>` (all APIs return `Option<BatchInsertionResult>`
   and use `None` at that level to represent "no leaves inserted").
