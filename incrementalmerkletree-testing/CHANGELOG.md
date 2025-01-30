@@ -7,6 +7,11 @@ and this project adheres to Rust's notion of
 
 ## Unreleased
 
+## [0.3.0] - 2025-01-30
+
+### Changed
+- Updated to `incrementalmerkletree 0.8`
+
 ## [0.2.0] - 2024-10-04
 
 This release includes a significant refactoring and rework of several methods
