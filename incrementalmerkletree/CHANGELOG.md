@@ -7,6 +7,12 @@ and this project adheres to Rust's notion of
 
 ## Unreleased
 
+### Added
+- `incrementalmerkletree::witness::IncrementalWitness::invalid_empty_witness`
+  has been under the `test-dependencies` feature flag to permit use testing
+  against `zcashd` test vectors that depend upon appending nodes to the
+  (invalid) empty witness.
+
 ## [0.8.1] - 2024-12-11
 
 ### Changed
