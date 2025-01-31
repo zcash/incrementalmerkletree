@@ -466,13 +466,13 @@ impl Address {
     /// Returns the minimum value among the range of leaf positions that are contained within the
     /// tree with its root at this address.
     pub fn position_range_start(&self) -> Position {
-        (self.index << self.level.0).try_into().unwrap()
+        (self.index << self.level.0).into()
     }
 
     /// Returns the (exclusive) end of the range of leaf positions that are contained within the
     /// tree with its root at this address.
     pub fn position_range_end(&self) -> Position {
-        ((self.index + 1) << self.level.0).try_into().unwrap()
+        ((self.index + 1) << self.level.0).into()
     }
 
     /// Returns the maximum value among the range of leaf positions that are contained within the

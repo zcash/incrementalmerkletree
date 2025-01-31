@@ -1034,7 +1034,7 @@ mod tests {
 
     #[test]
     fn check_remove_mark() {
-        let samples = vec![
+        let samples = [
             vec![
                 append_str("a", Retention::Ephemeral),
                 append_str(
@@ -1128,7 +1128,7 @@ mod tests {
         // test framework itself previously did not correctly handle
         // chain state restoration.
 
-        let samples = vec![
+        let samples = [
             vec![
                 append_str("x", Retention::Marked),
                 Checkpoint(1),
