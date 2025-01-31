@@ -7,6 +7,8 @@ and this project adheres to Rust's notion of
 
 ## Unreleased
 
+## [0.8.2] - 2025-01-31
+
 ### Added
 - `incrementalmerkletree::witness::IncrementalWitness::invalid_empty_witness`
   has been under the `test-dependencies` feature flag to permit use testing
