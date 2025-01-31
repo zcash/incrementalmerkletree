@@ -7,15 +7,19 @@ and this project adheres to Rust's notion of
 
 ## Unreleased
 
-## [0.6.0] - 2025-01-28
+## [0.6.1] - 2025-01-30
 
 ### Changed
-- Update to `incrementalmerkletree 0.8.1`
+- Update to `incrementalmerkletree 0.8.1`, `incrementalmerkletree-testing 0.3.0`.
 - `shardtree::BatchInsertionResult.max_insert_position` now has type `Position`
   instead of `Option<Position>` (all APIs return `Option<BatchInsertionResult>`
   and use `None` at that level to represent "no leaves inserted").
 - `shardtree::LocatedTree::from_parts` now returns `Option<Self>` (returning
   `None` if the provided `Address` and `Tree` are inconsistent).
+
+## [0.6.0] - 2025-01-28
+
+YANKED due to dependency incompatibilities, please use `shardtree 0.6.1` instead.
 
 ## [0.5.0] - 2024-10-04
 

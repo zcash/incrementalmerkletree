@@ -1,7 +1,7 @@
 [package]
 name = "shardtree"
 description = "A space-efficient Merkle tree with witnessing of marked leaves, checkpointing & state restoration."
-version = "0.6.0"
+version = "0.6.1"
 authors = [
     "Kris Nuttycombe <kris@nutty.land>",
 ]
