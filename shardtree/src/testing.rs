@@ -1,5 +1,3 @@
-use std::convert::TryFrom;
-
 use assert_matches::assert_matches;
 use proptest::bool::weighted;
 use proptest::collection::vec;
@@ -96,17 +94,19 @@ where
     })
 }
 
+/// A random shardtree of size up to 2^6 with shards of size 2^3, along with vectors of the
+/// checkpointed and marked positions within the tree.
+type ArbShardtreeParts<H> = (
+    ShardTree<MemoryShardStore<<H as Strategy>::Value, usize>, 6, 3>,
+    Vec<Position>,
+    Vec<Position>,
+);
+
 /// Constructs a random shardtree of size up to 2^6 with shards of size 2^3. Returns the tree,
-/// along with vectors of the checkpoint and mark positions.
+/// along with vectors of the checkpointed and marked positions.
 pub fn arb_shardtree<H: Strategy + Clone>(
     arb_leaf: H,
-) -> impl Strategy<
-    Value = (
-        ShardTree<MemoryShardStore<H::Value, usize>, 6, 3>,
-        Vec<Position>,
-        Vec<Position>,
-    ),
->
+) -> impl Strategy<Value = ArbShardtreeParts<H>>
 where
     H::Value: Hashable + Clone + PartialEq,
 {
