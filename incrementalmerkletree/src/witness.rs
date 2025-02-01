@@ -57,16 +57,32 @@ impl<H, const DEPTH: u8> IncrementalWitness<H, DEPTH> {
         })
     }
 
+    /// Creates an invalid empty `IncrementalWitness`. This constructor is provided for backwards
+    /// compatibility with the encodings of `zcashd` `IncrementalWitness` values; that type permits
+    /// multiple distinct encodings of the same witness state, and in some cases it is necessary to
+    /// create an empty witness and then append leaves in order to obtain the encoded forms
+    /// produced by `zcashd` (and which we must reproduce in order to demonstrate interoperability
+    /// with `zcashd` test vectors.) This should not be used except in a testing context.
+    #[cfg(feature = "test-dependencies")]
+    pub fn invalid_empty_witness() -> Self {
+        Self {
+            tree: CommitmentTree::empty(),
+            filled: vec![],
+            cursor_depth: 0,
+            cursor: None,
+        }
+    }
+
     /// Constructs an `IncrementalWitness` from its parts.
     ///
-    /// Returns `None` if the parts do not form a valid witness, for example if `tree` is
-    /// empty (and thus there is no position to witness).
+    /// Returns `None` if the parts do not form a valid witness, for example if all of the parts
+    /// are empty (and thus there is no position to witness).
     pub fn from_parts(
         tree: CommitmentTree<H, DEPTH>,
         filled: Vec<H>,
         cursor: Option<CommitmentTree<H, DEPTH>>,
     ) -> Option<Self> {
-        (!tree.is_empty()).then(|| {
+        (!(tree.is_empty() && filled.is_empty() && cursor.is_none())).then(|| {
             let mut witness = IncrementalWitness {
                 tree,
                 filled,

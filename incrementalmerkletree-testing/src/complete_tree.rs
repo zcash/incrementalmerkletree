@@ -106,7 +106,7 @@ impl<H: Hashable, C: Clone + Ord + core::fmt::Debug, const DEPTH: u8> CompleteTr
                 self.mark();
             }
             Retention::Checkpoint { id, marking } => {
-                let latest_checkpoint = self.checkpoints.keys().rev().next();
+                let latest_checkpoint = self.checkpoints.keys().next_back();
                 if Some(&id) > latest_checkpoint {
                     append(&mut self.leaves, value, DEPTH)?;
                     if marking == Marking::Marked {
@@ -145,7 +145,7 @@ impl<H: Hashable, C: Clone + Ord + core::fmt::Debug, const DEPTH: u8> CompleteTr
             if !self.marks.contains(&pos) {
                 self.marks.insert(pos);
 
-                if let Some(checkpoint) = self.checkpoints.values_mut().rev().next() {
+                if let Some(checkpoint) = self.checkpoints.values_mut().next_back() {
                     checkpoint.marked.insert(pos);
                 }
             }
@@ -277,7 +277,7 @@ impl<H: Hashable + PartialEq + Clone, C: Ord + Clone + core::fmt::Debug, const D
 
     fn remove_mark(&mut self, position: Position) -> bool {
         if self.marks.contains(&position) {
-            if let Some(c) = self.checkpoints.values_mut().rev().next() {
+            if let Some(c) = self.checkpoints.values_mut().next_back() {
                 c.forgotten.insert(position);
             } else {
                 self.marks.remove(&position);
@@ -289,7 +289,7 @@ impl<H: Hashable + PartialEq + Clone, C: Ord + Clone + core::fmt::Debug, const D
     }
 
     fn checkpoint(&mut self, id: C) -> bool {
-        if Some(&id) > self.checkpoints.keys().rev().next() {
+        if Some(&id) > self.checkpoints.keys().next_back() {
             Self::checkpoint(self, id, self.current_position());
             true
         } else {
@@ -335,8 +335,6 @@ impl<H: Hashable + PartialEq + Clone, C: Ord + Clone + core::fmt::Debug, const D
 
 #[cfg(test)]
 mod tests {
-    use std::convert::TryFrom;
-
     use super::CompleteTree;
     use crate::{
         check_append, check_checkpoint_rewind, check_rewind_remove_mark, check_root_hashes,
@@ -432,7 +430,7 @@ mod tests {
         assert_eq!(tree.root(Some(0)), Some(expected.clone()));
 
         for i in 0u64..(1 << DEPTH) {
-            let position = Position::try_from(i).unwrap();
+            let position = Position::from(i);
             let path = tree.witness(position, 0).unwrap();
             assert_eq!(
                 compute_root_from_witness(SipHashable(i), position, &path),

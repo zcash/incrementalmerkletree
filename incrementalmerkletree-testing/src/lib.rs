@@ -1062,7 +1062,7 @@ pub fn check_checkpoint_rewind<C: TestCheckpoint, T: Tree<String, C>, F: Fn(usiz
 }
 
 pub fn check_remove_mark<C: TestCheckpoint, T: Tree<String, C>, F: Fn(usize) -> T>(new_tree: F) {
-    let samples = vec![
+    let samples = [
         vec![
             append_str("a", Retention::Ephemeral),
             append_str(
@@ -1126,7 +1126,7 @@ pub fn check_rewind_remove_mark<C: TestCheckpoint, T: Tree<String, C>, F: Fn(usi
     // test framework itself previously did not correctly handle
     // chain state restoration.
 
-    let samples = vec![
+    let samples = [
         vec![
             append_str("x", Retention::Marked),
             Checkpoint(C::from_u64(1)),
