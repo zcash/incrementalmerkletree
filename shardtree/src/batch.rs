@@ -8,7 +8,7 @@ use tracing::trace;
 use crate::{
     error::{InsertionError, ShardTreeError},
     store::{Checkpoint, ShardStore},
-    IncompleteAt, LocatedPrunableTree, LocatedTree, RetentionFlags, ShardTree, Tree,
+    IncompleteAt, LocatedPrunableTree, LocatedTree, PrunableTree, RetentionFlags, ShardTree, Tree,
 };
 
 impl<
@@ -215,7 +215,8 @@ impl<H: Hashable + Clone + PartialEq> LocatedPrunableTree<H> {
                     // fragments up the stack until we get the largest possible subtree
                     while let Some((potential_sibling, marked)) = fragments.pop() {
                         if potential_sibling.root_addr.parent() == subtree.root_addr.parent() {
-                            subtree = unite(potential_sibling, subtree, prune_below);
+                            subtree = unite(potential_sibling, subtree, prune_below)
+                                .expect("subtree is non-Nil");
                         } else {
                             // this is not a sibling node, so we push it back on to the stack
                             // and are done
@@ -238,7 +239,9 @@ impl<H: Hashable + Clone + PartialEq> LocatedPrunableTree<H> {
             let minimal_tree_addr =
                 Address::from(position_range.start).common_ancestor(&last_position.into());
             trace!("Building minimal tree at {:?}", minimal_tree_addr);
-            build_minimal_tree(fragments, minimal_tree_addr, prune_below).map(
+            build_minimal_tree(fragments, minimal_tree_addr, prune_below)
+                .expect("construction of minimal tree does not result in creation of invalid parent nodes")
+                .map(
                 |(to_insert, contains_marked, incomplete)| BatchInsertionResult {
                     subtree: to_insert,
                     contains_marked,
@@ -263,16 +266,18 @@ fn unite<H: Hashable + Clone + PartialEq>(
     lroot: LocatedPrunableTree<H>,
     rroot: LocatedPrunableTree<H>,
     prune_below: Level,
-) -> LocatedPrunableTree<H> {
+) -> Result<LocatedPrunableTree<H>, Address> {
     assert_eq!(lroot.root_addr.parent(), rroot.root_addr.parent());
-    LocatedTree {
+    Ok(LocatedTree {
         root_addr: lroot.root_addr.parent(),
         root: if lroot.root_addr.level() < prune_below {
-            Tree::unite(lroot.root_addr.level(), None, lroot.root, rroot.root)
+            PrunableTree::unite(lroot.root_addr.level(), None, lroot.root, rroot.root)
+                .map_err(|_| lroot.root_addr)?
         } else {
-            Tree::parent(None, lroot.root, rroot.root)
+            PrunableTree::parent_checked(None, lroot.root, rroot.root)
+                .map_err(|_| lroot.root_addr)?
         },
-    }
+    })
 }
 
 /// Combines the given subtree with an empty sibling node to obtain the next level
@@ -286,7 +291,7 @@ fn combine_with_empty<H: Hashable + Clone + PartialEq>(
     incomplete: &mut Vec<IncompleteAt>,
     contains_marked: bool,
     prune_below: Level,
-) -> LocatedPrunableTree<H> {
+) -> Result<LocatedPrunableTree<H>, Address> {
     assert_eq!(expect_left_child, root.root_addr.is_left_child());
     let sibling_addr = root.root_addr.sibling();
     incomplete.push(IncompleteAt {
@@ -313,27 +318,27 @@ fn build_minimal_tree<H: Hashable + Clone + PartialEq>(
     mut xs: Vec<(LocatedPrunableTree<H>, bool)>,
     root_addr: Address,
     prune_below: Level,
-) -> Option<(LocatedPrunableTree<H>, bool, Vec<IncompleteAt>)> {
+) -> Result<Option<(LocatedPrunableTree<H>, bool, Vec<IncompleteAt>)>, Address> {
     // First, consume the stack from the right, building up a single tree
     // until we can't combine any more.
     if let Some((mut cur, mut contains_marked)) = xs.pop() {
         let mut incomplete = vec![];
         while let Some((top, top_marked)) = xs.pop() {
             while cur.root_addr.level() < top.root_addr.level() {
-                cur = combine_with_empty(cur, true, &mut incomplete, top_marked, prune_below);
+                cur = combine_with_empty(cur, true, &mut incomplete, top_marked, prune_below)?;
             }
 
             if cur.root_addr.level() == top.root_addr.level() {
                 contains_marked = contains_marked || top_marked;
                 if cur.root_addr.is_right_child() {
                     // We have a left child and a right child, so unite them.
-                    cur = unite(top, cur, prune_below);
+                    cur = unite(top, cur, prune_below)?;
                 } else {
                     // This is a left child, so we build it up one more level and then
                     // we've merged as much as we can from the right and need to work from
                     // the left
                     xs.push((top, top_marked));
-                    cur = combine_with_empty(cur, true, &mut incomplete, top_marked, prune_below);
+                    cur = combine_with_empty(cur, true, &mut incomplete, top_marked, prune_below)?;
                     break;
                 }
             } else {
@@ -346,7 +351,7 @@ fn build_minimal_tree<H: Hashable + Clone + PartialEq>(
 
         // Ensure we can work from the left in a single pass by making this right-most subtree
         while cur.root_addr.level() + 1 < root_addr.level() {
-            cur = combine_with_empty(cur, true, &mut incomplete, contains_marked, prune_below);
+            cur = combine_with_empty(cur, true, &mut incomplete, contains_marked, prune_below)?;
         }
 
         // push our accumulated max-height right hand node back on to the stack.
@@ -354,7 +359,7 @@ fn build_minimal_tree<H: Hashable + Clone + PartialEq>(
 
         // From the stack of subtrees, construct a single sparse tree that can be
         // inserted/merged into the existing tree
-        let res_tree = xs.into_iter().fold(
+        let res_tree = xs.into_iter().try_fold(
             None,
             |acc: Option<LocatedPrunableTree<H>>, (next_tree, next_marked)| {
                 if let Some(mut prev_tree) = acc {
@@ -368,19 +373,19 @@ fn build_minimal_tree<H: Hashable + Clone + PartialEq>(
                             &mut incomplete,
                             next_marked,
                             prune_below,
-                        );
+                        )?;
                     }
 
-                    Some(unite(prev_tree, next_tree, prune_below))
+                    Ok::<_, Address>(Some(unite(prev_tree, next_tree, prune_below)?))
                 } else {
-                    Some(next_tree)
+                    Ok::<_, Address>(Some(next_tree))
                 }
             },
-        );
+        )?;
 
-        res_tree.map(|t| (t, contains_marked, incomplete))
+        Ok(res_tree.map(|t| (t, contains_marked, incomplete)))
     } else {
-        None
+        Ok(None)
     }
 }
 

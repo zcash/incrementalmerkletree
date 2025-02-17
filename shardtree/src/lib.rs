@@ -414,44 +414,44 @@ impl<
         fn go<H: Hashable + Clone + PartialEq>(
             root_addr: Address,
             root: &PrunableTree<H>,
-        ) -> Option<(PrunableTree<H>, Position)> {
+        ) -> Result<Option<(PrunableTree<H>, Position)>, Address> {
             match &root.0 {
                 Node::Parent { ann, left, right } => {
                     let (l_addr, r_addr) = root_addr
                         .children()
                         .expect("has children because we checked `root` is a parent");
-                    go(r_addr, right).map_or_else(
+                    go(r_addr, right)?.map_or_else(
                         || {
-                            go(l_addr, left).map(|(new_left, pos)| {
-                                (
-                                    Tree::unite(
+                            go(l_addr, left)?
+                                .map(|(new_left, pos)| {
+                                    PrunableTree::unite(
                                         l_addr.level(),
                                         ann.clone(),
                                         new_left,
                                         Tree::empty(),
-                                    ),
-                                    pos,
-                                )
-                            })
+                                    )
+                                    .map_err(|_| l_addr)
+                                    .map(|t| (t, pos))
+                                })
+                                .transpose()
                         },
                         |(new_right, pos)| {
-                            Some((
-                                Tree::unite(
-                                    l_addr.level(),
-                                    ann.clone(),
-                                    left.as_ref().clone(),
-                                    new_right,
-                                ),
-                                pos,
-                            ))
+                            Tree::unite(
+                                l_addr.level(),
+                                ann.clone(),
+                                left.as_ref().clone(),
+                                new_right,
+                            )
+                            .map_err(|_| l_addr)
+                            .map(|t| Some((t, pos)))
                         },
                     )
                 }
-                Node::Leaf { value: (h, r) } => Some((
+                Node::Leaf { value: (h, r) } => Ok(Some((
                     Tree::leaf((h.clone(), *r | RetentionFlags::CHECKPOINT)),
                     root_addr.max_position(),
-                )),
-                Node::Nil => None,
+                ))),
+                Node::Nil => Ok(None),
             }
         }
 
@@ -469,7 +469,9 @@ impl<
         // Update the rightmost subtree to add the `CHECKPOINT` flag to the right-most leaf (which
         // need not be a level-0 leaf; it's fine to rewind to a pruned state).
         if let Some(subtree) = self.store.last_shard().map_err(ShardTreeError::Storage)? {
-            if let Some((replacement, pos)) = go(subtree.root_addr, &subtree.root) {
+            if let Some((replacement, pos)) = go(subtree.root_addr, &subtree.root)
+                .map_err(|addr| ShardTreeError::Insert(InsertionError::InputMalformed(addr)))?
+            {
                 self.store
                     .put_shard(LocatedTree {
                         root_addr: subtree.root_addr,
