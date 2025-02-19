@@ -314,6 +314,7 @@ fn combine_with_empty<H: Hashable + Clone + PartialEq>(
 // and in position order. Returns the resulting tree, a flag indicating whether the
 // resulting tree contains a `MARKED` node, and the vector of [`IncompleteAt`] values for
 // [`Node::Nil`] nodes that were introduced in the process of constructing the tree.
+#[allow(clippy::type_complexity)]
 fn build_minimal_tree<H: Hashable + Clone + PartialEq>(
     mut xs: Vec<(LocatedPrunableTree<H>, bool)>,
     root_addr: Address,
