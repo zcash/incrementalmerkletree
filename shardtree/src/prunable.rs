@@ -651,9 +651,13 @@ impl<H: Hashable + Clone + PartialEq> LocatedPrunableTree<H> {
         }
     }
 
-    // In the case that we are replacing a node entirely, we need to extend the
-    // subtree up to the level of the node being replaced, adding Nil siblings
-    // and recording the presence of those incomplete nodes when necessary
+    // In the case that we are replacing a node entirely, we need to extend the subtree up to the
+    // level of the node being replaced, adding Nil siblings and recording the presence of those
+    // incomplete nodes when necessary. The newly created root node will be annotated with the
+    // provided value.
+    //
+    // If the root level of `self` is greater than or equal to the requested level, no extension
+    // will be performed, but the root node will still be reannotated.
     fn extend_to_level(
         self,
         level: Level,
