@@ -17,16 +17,16 @@ all-features = true
 rustdoc-args = ["--cfg", "docsrs"]
 
 [dependencies]
-assert_matches = { version = "1.5", optional = true }
-bitflags = "2"
-either = "1.8"
+assert_matches = { workspace = true, optional = true }
+bitflags = { workspace = true }
+either = { workspace = true }
 incrementalmerkletree.workspace = true
 proptest = { workspace = true, optional = true }
 incrementalmerkletree-testing = { workspace = true, optional = true }
-tracing = "0.1"
+tracing = { workspace = true }
 
 [dev-dependencies]
-assert_matches = "1.5"
+assert_matches = { workspace = true }
 incrementalmerkletree = { workspace = true, features = ["test-dependencies"] }
 incrementalmerkletree-testing.workspace = true
 proptest.workspace = true

@@ -23,3 +23,10 @@ incrementalmerkletree-testing = { version = "0.3", path = "incrementalmerkletree
 
 # Testing
 proptest = "1"
+assert_matches = "1.5"
+bitflags = "2"
+either = { version = "1.8", default-features = false }
+rand = "0.8"
+rand_chacha = "0.3"
+rand_core = "0.6"
+tracing = "0.1"
