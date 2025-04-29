@@ -199,7 +199,7 @@ pub struct LocatedTree<A, V> {
 impl<A, V> LocatedTree<A, V> {
     /// Constructs a new LocatedTree from its constituent parts.
     ///
-    /// Returns the newly constructed error, or the address at which the provided tree extends
+    /// Returns the newly constructed LocatedTree, or the address at which the provided tree extends
     /// beyond the position range of the provided root address.
     pub fn from_parts(root_addr: Address, root: Tree<A, V>) -> Result<Self, Address> {
         // In order to meet various pre-conditions throughout the crate, we require that
