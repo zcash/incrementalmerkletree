@@ -6,17 +6,22 @@ on: pull_request
 jobs:
   clippy-beta:
     name: Clippy (beta)
-    timeout-minutes: 30
     runs-on: ubuntu-latest
     continue-on-error: true
     steps:
-      - uses: actions/checkout@v3
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
       - uses: dtolnay/rust-toolchain@beta
         id: toolchain
-      - run: rustup override set ${{steps.toolchain.outputs.name}}
+        with:
+          components: clippy
+      - run: rustup override set "${TOOLCHAIN}"
+        shell: sh
+        env:
+          TOOLCHAIN: ${{steps.toolchain.outputs.name}}
       - name: Run Clippy (beta)
         uses: actions-rs/clippy-check@v1
-        continue-on-error: true
         with:
           name: Clippy (beta)
           token: ${{ secrets.GITHUB_TOKEN }}

@@ -170,7 +170,7 @@ impl<H: Hashable + Clone + PartialEq> PrunableTree<H> {
     ///
     /// # Parameters:
     /// * `truncate_at` An inclusive lower bound on positions in the tree beyond which all leaf
-    ///    values will be treated as `Nil`.
+    ///   values will be treated as `Nil`.
     pub fn root_hash(&self, root_addr: Address, truncate_at: Position) -> Result<H, Vec<Address>> {
         if truncate_at <= root_addr.position_range_start() {
             // we are in the part of the tree where we're generating empty roots,

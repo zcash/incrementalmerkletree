@@ -32,7 +32,7 @@
 //!
 //! - `parent` - the node directly above at one higher [Level].
 //! - `child` - the complementary relationship to parent; a parent may have up to two children
-//!    because only binary trees are supported.
+//!   because only binary trees are supported.
 //! - `sibling` - the other node with the same parent.
 //! - `cousin` - a node at the same [Level] excluding the sibling.
 //! - `ommer` - the parent's sibling.
