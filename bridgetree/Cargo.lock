@@ -31,7 +31,7 @@ checksum = "bef38d45163c2f1dde094a7dfd33ccf595c92905c8f8f4fdc18d06fb1037718a"
 
 [[package]]
 name = "bridgetree"
-version = "0.6.0"
+version = "0.7.0"
 dependencies = [
  "incrementalmerkletree",
  "incrementalmerkletree-testing",
@@ -100,9 +100,9 @@ checksum = "d77f7ec81a6d05a3abb01ab6eb7590f6083d08449fe5a1c8b1e620283546ccb7"
 
 [[package]]
 name = "incrementalmerkletree"
-version = "0.7.0"
+version = "0.8.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d45063fbc4b0a37837f6bfe0445f269d13d730ad0aa3b5a7f74aa7bf27a0f4df"
+checksum = "30821f91f0fa8660edca547918dc59812893b497d07c1144f326f07fdd94aba9"
 dependencies = [
  "either",
  "proptest",
@@ -112,9 +112,9 @@ dependencies = [
 
 [[package]]
 name = "incrementalmerkletree-testing"
-version = "0.1.0"
+version = "0.2.0-backcompat.0.8"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "6959842a2ad15e423a7c39b77555039efdccf50a1a43cce43827fc2f881c27d2"
+checksum = "15cf083f22d2db3f08175ea6004dd1efa0b7900674b8279f4d565db95a9e0f54"
 dependencies = [
  "incrementalmerkletree",
  "proptest",
