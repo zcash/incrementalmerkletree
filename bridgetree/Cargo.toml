@@ -19,7 +19,7 @@ proptest = { version = "1", optional = true }
 
 [dev-dependencies]
 incrementalmerkletree = { version = "0.8", features = ["test-dependencies"] }
-incrementalmerkletree-testing = "=0.2.0-backcompat.0.8"
+incrementalmerkletree-testing = { git = "https://github.com/zcash/incrementalmerkletree.git", rev = "c435da718fc48ad1291d317dab9d4bf96875e3d3" }
 proptest = "1"
 
 [features]

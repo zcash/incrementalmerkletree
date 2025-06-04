@@ -113,6 +113,7 @@ dependencies = [
 [[package]]
 name = "incrementalmerkletree-testing"
 version = "0.2.0-backcompat.0.8"
+source = "git+https://github.com/zcash/incrementalmerkletree.git?rev=c435da718fc48ad1291d317dab9d4bf96875e3d3#c435da718fc48ad1291d317dab9d4bf96875e3d3"
 dependencies = [
  "incrementalmerkletree",
  "proptest",
