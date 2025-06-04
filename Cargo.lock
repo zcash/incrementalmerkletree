@@ -139,18 +139,18 @@ dependencies = [
 [[package]]
 name = "incrementalmerkletree-testing"
 version = "0.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "6959842a2ad15e423a7c39b77555039efdccf50a1a43cce43827fc2f881c27d2"
 dependencies = [
- "incrementalmerkletree 0.8.2",
+ "incrementalmerkletree 0.7.1",
  "proptest",
 ]
 
 [[package]]
 name = "incrementalmerkletree-testing"
-version = "0.1.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "6959842a2ad15e423a7c39b77555039efdccf50a1a43cce43827fc2f881c27d2"
+version = "0.2.0-backcompat.0.8"
 dependencies = [
- "incrementalmerkletree 0.7.1",
+ "incrementalmerkletree 0.8.2",
  "proptest",
 ]
 
@@ -358,7 +358,7 @@ dependencies = [
  "bitflags 2.4.1",
  "either",
  "incrementalmerkletree 0.7.0",
- "incrementalmerkletree-testing 0.1.0 (registry+https://github.com/rust-lang/crates.io-index)",
+ "incrementalmerkletree-testing 0.1.0",
  "proptest",
  "tempfile",
  "tracing",
