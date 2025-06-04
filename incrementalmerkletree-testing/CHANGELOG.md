@@ -7,5 +7,8 @@ and this project adheres to Rust's notion of
 
 ## Unreleased
 
+### Changed
+- Updated to `incrementalmerkletree 0.8`
+
 ## [0.1.0] - 2024-09-25
 Initial release.

@@ -18,6 +18,6 @@ all-features = true
 rustdoc-args = ["--cfg", "docsrs"]
 
 [dependencies]
-incrementalmerkletree = { workspace = true, features = ["test-dependencies"] }
+incrementalmerkletree = { version = "0.8", features = ["test-dependencies"] }
 
 proptest.workspace = true
