@@ -1,7 +1,7 @@
 [package]
 name = "bridgetree"
 description = "A space-efficient Merkle tree designed for linear appends with witnessing of marked leaves, checkpointing & state restoration."
-version = "0.6.0"
+version = "0.7.0"
 authors = [
     "Kris Nuttycombe <kris@nutty.land>",
     "Sean Bowe <ewillbefull@gmail.com>",
@@ -14,12 +14,12 @@ license = "MIT OR Apache-2.0"
 categories = ["algorithms", "data-structures"]
 
 [dependencies]
-incrementalmerkletree = "0.7"
+incrementalmerkletree = "0.8"
 proptest = { version = "1", optional = true }
 
 [dev-dependencies]
-incrementalmerkletree = { version = "0.7", features = ["test-dependencies"] }
-incrementalmerkletree-testing = "0.1"
+incrementalmerkletree = { version = "0.8", features = ["test-dependencies"] }
+incrementalmerkletree-testing = "=0.2.0-backcompat.0.8"
 proptest = "1"
 
 [features]

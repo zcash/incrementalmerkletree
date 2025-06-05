@@ -7,6 +7,11 @@ and this project adheres to Rust's notion of
 
 ## [Unreleased]
 
+## [0.7.0] - 2025-06-04
+
+### Changed
+- Migrated to `incrementalmerkletree 0.8`.
+
 ## [0.6.0] - 2024-09-25
 
 ### Changed
