@@ -1,7 +1,7 @@
 [package]
 name = "shardtree"
 description = "A space-efficient Merkle tree with witnessing of marked leaves, checkpointing & state restoration."
-version = "0.4.0"
+version = "0.6.1"
 authors = [
     "Kris Nuttycombe <kris@nutty.land>",
 ]
@@ -38,7 +38,12 @@ proptest.workspace = true
 legacy-api = ["incrementalmerkletree/legacy-api"]
 # The test-depenencies feature can be enabled to expose types and functions
 # that are useful for testing `shardtree` functionality.
-test-dependencies = ["proptest", "assert_matches", "incrementalmerkletree/test-dependencies"]
+test-dependencies = [
+  "dep:proptest", 
+  "dep:assert_matches", 
+  "dep:incrementalmerkletree-testing", 
+  "incrementalmerkletree/test-dependencies"
+]
 
 [target.'cfg(unix)'.dev-dependencies]
 tempfile = ">=3, <3.7.0" # 3.7 has MSRV 1.63

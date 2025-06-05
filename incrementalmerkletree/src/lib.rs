@@ -32,7 +32,7 @@
 //!
 //! - `parent` - the node directly above at one higher [Level].
 //! - `child` - the complementary relationship to parent; a parent may have up to two children
-//!    because only binary trees are supported.
+//!   because only binary trees are supported.
 //! - `sibling` - the other node with the same parent.
 //! - `cousin` - a node at the same [Level] excluding the sibling.
 //! - `ommer` - the parent's sibling.
@@ -44,13 +44,21 @@
 //! context `ommers` refers to the node's ommer, plus each ancestor's ommer.
 
 #![cfg_attr(docsrs, feature(doc_cfg))]
+#![no_std]
 
+#[cfg(feature = "std")]
+extern crate std;
+
+#[macro_use]
+extern crate alloc;
+use alloc::vec::Vec;
+
+use core::cmp::Ordering;
+use core::convert::{TryFrom, TryInto};
+use core::fmt;
+use core::num::TryFromIntError;
+use core::ops::{Add, AddAssign, Range, Sub};
 use either::Either;
-use std::cmp::Ordering;
-use std::convert::{TryFrom, TryInto};
-use std::fmt;
-use std::num::TryFromIntError;
-use std::ops::{Add, AddAssign, Range, Sub};
 
 pub mod frontier;
 
@@ -445,7 +453,7 @@ impl Address {
         let level_delta = (u64::BITS - index_delta.leading_zeros()) as u8;
         Address {
             level: higher.level + level_delta,
-            index: std::cmp::max(higher.index, lower_ancestor_idx) >> level_delta,
+            index: core::cmp::max(higher.index, lower_ancestor_idx) >> level_delta,
         }
     }
 
@@ -458,13 +466,13 @@ impl Address {
     /// Returns the minimum value among the range of leaf positions that are contained within the
     /// tree with its root at this address.
     pub fn position_range_start(&self) -> Position {
-        (self.index << self.level.0).try_into().unwrap()
+        (self.index << self.level.0).into()
     }
 
     /// Returns the (exclusive) end of the range of leaf positions that are contained within the
     /// tree with its root at this address.
     pub fn position_range_end(&self) -> Position {
-        ((self.index + 1) << self.level.0).try_into().unwrap()
+        ((self.index + 1) << self.level.0).into()
     }
 
     /// Returns the maximum value among the range of leaf positions that are contained within the
@@ -672,11 +680,13 @@ pub trait Hashable: fmt::Debug {
 
 #[cfg(test)]
 pub(crate) mod tests {
-    use crate::MerklePath;
-
-    use super::{Address, Level, Position, Source};
+    use alloc::string::{String, ToString};
+    use alloc::vec::Vec;
     use core::ops::Range;
     use either::Either;
+
+    use super::{Address, Level, Position, Source};
+    use crate::MerklePath;
 
     #[test]
     fn position_is_complete_subtree() {

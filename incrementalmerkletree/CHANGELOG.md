@@ -7,6 +7,31 @@ and this project adheres to Rust's notion of
 
 ## Unreleased
 
+## [0.8.2] - 2025-01-31
+
+### Added
+- `incrementalmerkletree::witness::IncrementalWitness::invalid_empty_witness`
+  has been under the `test-dependencies` feature flag to permit use testing
+  against `zcashd` test vectors that depend upon appending nodes to the
+  (invalid) empty witness.
+
+## [0.8.1] - 2024-12-11
+
+### Changed
+- Enables use in `no_std` environments.
+
+## [0.8.0] - 2024-12-11
+
+### Changed
+- `incrementalmerkletree::witness`:
+  - `IncrementalWitness::{from_tree, from_parts}` now return `Option<Self>`
+    (returning `None` if a witness cannot be constructed).
+
+## [0.7.1] - 2024-12-16
+
+### Added
+- `no-std` support, via a default-enabled `std` feature flag.
+
 ## [0.7.0] - 2024-09-25
 
 ### Changed

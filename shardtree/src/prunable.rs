@@ -1,6 +1,7 @@
 //! Helpers for working with trees that support pruning unneeded leaves and branches.
 
 use std::collections::{BTreeMap, BTreeSet};
+use std::fmt;
 use std::sync::Arc;
 
 use bitflags::bitflags;
@@ -78,6 +79,37 @@ impl<C> From<Retention<C>> for RetentionFlags {
 /// A [`Tree`] annotated with Merkle hashes.
 pub type PrunableTree<H> = Tree<Option<Arc<H>>, (H, RetentionFlags)>;
 
+/// Errors that can occur when merging trees.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum MergeError {
+    Conflict(Address),
+    TreeMalformed(Address),
+}
+
+impl From<MergeError> for InsertionError {
+    fn from(value: MergeError) -> Self {
+        match value {
+            MergeError::Conflict(addr) => InsertionError::Conflict(addr),
+            MergeError::TreeMalformed(addr) => InsertionError::InputMalformed(addr),
+        }
+    }
+}
+
+impl fmt::Display for MergeError {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        match &self {
+            MergeError::Conflict(addr) => write!(
+                f,
+                "Inserted root conflicts with existing root at address {:?}",
+                addr
+            ),
+            MergeError::TreeMalformed(addr) => {
+                write!(f, "Merge input malformed at address {:?}", addr)
+            }
+        }
+    }
+}
+
 impl<H: Hashable + Clone + PartialEq> PrunableTree<H> {
     /// Returns the the value if this is a leaf.
     pub fn leaf_value(&self) -> Option<&H> {
@@ -138,7 +170,7 @@ impl<H: Hashable + Clone + PartialEq> PrunableTree<H> {
     ///
     /// # Parameters:
     /// * `truncate_at` An inclusive lower bound on positions in the tree beyond which all leaf
-    ///    values will be treated as `Nil`.
+    ///   values will be treated as `Nil`.
     pub fn root_hash(&self, root_addr: Address, truncate_at: Position) -> Result<H, Vec<Address>> {
         if truncate_at <= root_addr.position_range_start() {
             // we are in the part of the tree where we're generating empty roots,
@@ -153,7 +185,9 @@ impl<H: Hashable + Clone + PartialEq> PrunableTree<H> {
                         || {
                             // Compute the roots of the left and right children and hash them
                             // together.
-                            let (l_addr, r_addr) = root_addr.children().unwrap();
+                            let (l_addr, r_addr) = root_addr
+                                .children()
+                                .expect("The root address of a parent node must have children.");
                             accumulate_result_with(
                                 left.root_hash(l_addr, truncate_at),
                                 right.root_hash(r_addr, truncate_at),
@@ -240,13 +274,14 @@ impl<H: Hashable + Clone + PartialEq> PrunableTree<H> {
     /// would cause information loss or if a conflict between root hashes occurs at a node. The
     /// returned error contains the address of the node where such a conflict occurred.
     #[tracing::instrument()]
-    pub fn merge_checked(self, root_addr: Address, other: Self) -> Result<Self, Address> {
+    pub fn merge_checked(self, root_addr: Address, other: Self) -> Result<Self, MergeError> {
+        /// Pre-condition: `root_addr` must be the address of `t0` and `t1`.
         #[allow(clippy::type_complexity)]
         fn go<H: Hashable + Clone + PartialEq>(
             addr: Address,
             t0: PrunableTree<H>,
             t1: PrunableTree<H>,
-        ) -> Result<PrunableTree<H>, Address> {
+        ) -> Result<PrunableTree<H>, MergeError> {
             // Require that any roots the we compute will not be default-filled by picking
             // a starting valid fill point that is outside the range of leaf positions.
             let no_default_fill = addr.position_range_end();
@@ -258,7 +293,7 @@ impl<H: Hashable + Clone + PartialEq> PrunableTree<H> {
                         Ok(Tree::leaf((vl.0, vl.1 | vr.1)))
                     } else {
                         trace!(left = ?vl.0, right = ?vr.0, "Merge conflict for leaves");
-                        Err(addr)
+                        Err(MergeError::Conflict(addr))
                     }
                 }
                 (Tree(Node::Leaf { value }), parent @ Tree(Node::Parent { .. }))
@@ -268,7 +303,7 @@ impl<H: Hashable + Clone + PartialEq> PrunableTree<H> {
                         Ok(parent.reannotate_root(Some(Arc::new(value.0))))
                     } else {
                         trace!(leaf = ?value, node = ?parent_hash, "Merge conflict for leaf into node");
-                        Err(addr)
+                        Err(MergeError::Conflict(addr))
                     }
                 }
                 (lparent, rparent) => {
@@ -293,7 +328,8 @@ impl<H: Hashable + Clone + PartialEq> PrunableTree<H> {
                             }),
                         ) = (lparent, rparent)
                         {
-                            let (l_addr, r_addr) = addr.children().unwrap();
+                            let (l_addr, r_addr) =
+                                addr.children().ok_or(MergeError::TreeMalformed(addr))?;
                             Ok(Tree::unite(
                                 addr.level() - 1,
                                 lann.or(rann),
@@ -305,7 +341,7 @@ impl<H: Hashable + Clone + PartialEq> PrunableTree<H> {
                         }
                     } else {
                         trace!(left = ?lroot, right = ?rroot, "Merge conflict for nodes");
-                        Err(addr)
+                        Err(MergeError::Conflict(addr))
                     }
                 }
             }
@@ -358,6 +394,7 @@ impl<H: Hashable + Clone + PartialEq> LocatedPrunableTree<H> {
     /// Note that no actual leaf value may exist at this position, as it may have previously been
     /// pruned.
     pub fn max_position(&self) -> Option<Position> {
+        /// Pre-condition: `addr` must be the address of `root`.
         fn go<H>(
             addr: Address,
             root: &Tree<Option<Arc<H>>, (H, RetentionFlags)>,
@@ -369,7 +406,9 @@ impl<H: Hashable + Clone + PartialEq> LocatedPrunableTree<H> {
                     if ann.is_some() {
                         Some(addr.max_position())
                     } else {
-                        let (l_addr, r_addr) = addr.children().unwrap();
+                        let (l_addr, r_addr) = addr
+                            .children()
+                            .expect("has children because we checked `root` is a parent");
                         go(r_addr, right.as_ref()).or_else(|| go(l_addr, left.as_ref()))
                     }
                 }
@@ -406,6 +445,7 @@ impl<H: Hashable + Clone + PartialEq> LocatedPrunableTree<H> {
 
     /// Returns the positions of marked leaves in the tree.
     pub fn marked_positions(&self) -> BTreeSet<Position> {
+        /// Pre-condition: `root_addr` must be the address of `root`.
         fn go<H: Hashable + Clone + PartialEq>(
             root_addr: Address,
             root: &PrunableTree<H>,
@@ -413,7 +453,9 @@ impl<H: Hashable + Clone + PartialEq> LocatedPrunableTree<H> {
         ) {
             match &root.0 {
                 Node::Parent { left, right, .. } => {
-                    let (l_addr, r_addr) = root_addr.children().unwrap();
+                    let (l_addr, r_addr) = root_addr
+                        .children()
+                        .expect("has children because we checked `root` is a parent");
                     go(l_addr, left.as_ref(), acc);
                     go(r_addr, right.as_ref(), acc);
                 }
@@ -440,8 +482,10 @@ impl<H: Hashable + Clone + PartialEq> LocatedPrunableTree<H> {
     /// Returns either the witness for the leaf at the specified position, or an error that
     /// describes the causes of failure.
     pub fn witness(&self, position: Position, truncate_at: Position) -> Result<Vec<H>, QueryError> {
-        // traverse down to the desired leaf position, and then construct
-        // the authentication path on the way back up.
+        /// Traverse down to the desired leaf position, and then construct
+        /// the authentication path on the way back up.
+        //
+        /// Pre-condition: `root_addr` must be the address of `root`.
         fn go<H: Hashable + Clone + PartialEq>(
             root: &PrunableTree<H>,
             root_addr: Address,
@@ -450,7 +494,9 @@ impl<H: Hashable + Clone + PartialEq> LocatedPrunableTree<H> {
         ) -> Result<Vec<H>, Vec<Address>> {
             match &root.0 {
                 Node::Parent { left, right, .. } => {
-                    let (l_addr, r_addr) = root_addr.children().unwrap();
+                    let (l_addr, r_addr) = root_addr
+                        .children()
+                        .expect("has children because we checked `root` is a parent");
                     if root_addr.level() > 1.into() {
                         let r_start = r_addr.position_range_start();
                         if position < r_start {
@@ -525,6 +571,7 @@ impl<H: Hashable + Clone + PartialEq> LocatedPrunableTree<H> {
     /// subtree root with the specified position as its maximum position exists, or `None`
     /// otherwise.
     pub fn truncate_to_position(&self, position: Position) -> Option<Self> {
+        /// Pre-condition: `root_addr` must be the address of `root`.
         fn go<H: Hashable + Clone + PartialEq>(
             position: Position,
             root_addr: Address,
@@ -532,7 +579,9 @@ impl<H: Hashable + Clone + PartialEq> LocatedPrunableTree<H> {
         ) -> Option<PrunableTree<H>> {
             match &root.0 {
                 Node::Parent { ann, left, right } => {
-                    let (l_child, r_child) = root_addr.children().unwrap();
+                    let (l_child, r_child) = root_addr
+                        .children()
+                        .expect("has children because we checked `root` is a parent");
                     if position < r_child.position_range_start() {
                         // we are truncating within the range of the left node, so recurse
                         // to the left to truncate the left child and then reconstruct the
@@ -586,8 +635,10 @@ impl<H: Hashable + Clone + PartialEq> LocatedPrunableTree<H> {
         subtree: Self,
         contains_marked: bool,
     ) -> Result<(Self, Vec<IncompleteAt>), InsertionError> {
-        // A function to recursively dig into the tree, creating a path downward and introducing
-        // empty nodes as necessary until we can insert the provided subtree.
+        /// A function to recursively dig into the tree, creating a path downward and introducing
+        /// empty nodes as necessary until we can insert the provided subtree.
+        ///
+        /// Pre-condition: `root_addr` must be the address of `into`.
         #[allow(clippy::type_complexity)]
         fn go<H: Hashable + Clone + PartialEq>(
             root_addr: Address,
@@ -688,13 +739,15 @@ impl<H: Hashable + Clone + PartialEq> LocatedPrunableTree<H> {
                         parent
                             .clone()
                             .merge_checked(root_addr, subtree.root)
-                            .map_err(InsertionError::Conflict)
+                            .map_err(InsertionError::from)
                             .map(|tree| (tree, vec![]))
                     }
                     Tree(Node::Parent { ann, left, right }) => {
                         // In this case, we have an existing parent but we need to dig down farther
                         // before we can insert the subtree that we're carrying for insertion.
-                        let (l_addr, r_addr) = root_addr.children().unwrap();
+                        let (l_addr, r_addr) = root_addr
+                            .children()
+                            .expect("has children because we checked `into` is a parent");
                         if l_addr.contains(&subtree.root_addr) {
                             let (new_left, incomplete) =
                                 go(l_addr, left.as_ref(), subtree, contains_marked)?;
@@ -770,7 +823,7 @@ impl<H: Hashable + Clone + PartialEq> LocatedPrunableTree<H> {
                 if r.remainder.next().is_some() {
                     Err(InsertionError::TreeFull)
                 } else {
-                    Ok((r.subtree, r.max_insert_position.unwrap(), checkpoint_id))
+                    Ok((r.subtree, r.max_insert_position, checkpoint_id))
                 }
             })
     }
@@ -892,6 +945,7 @@ impl<H: Hashable + Clone + PartialEq> LocatedPrunableTree<H> {
     /// Clears the specified retention flags at all positions specified, pruning any branches
     /// that no longer need to be retained.
     pub fn clear_flags(&self, to_clear: BTreeMap<Position, RetentionFlags>) -> Self {
+        /// Pre-condition: `root_addr` must be the address of `root`.
         fn go<H: Hashable + Clone + PartialEq>(
             to_clear: &[(Position, RetentionFlags)],
             root_addr: Address,
@@ -903,7 +957,9 @@ impl<H: Hashable + Clone + PartialEq> LocatedPrunableTree<H> {
             } else {
                 match &root.0 {
                     Node::Parent { ann, left, right } => {
-                        let (l_addr, r_addr) = root_addr.children().unwrap();
+                        let (l_addr, r_addr) = root_addr
+                            .children()
+                            .expect("has children because we checked `root` is a parent");
 
                         let p = to_clear.partition_point(|(p, _)| p < &l_addr.position_range_end());
                         trace!(
@@ -1001,6 +1057,7 @@ mod tests {
     use super::{LocatedPrunableTree, PrunableTree, RetentionFlags};
     use crate::{
         error::{InsertionError, QueryError},
+        prunable::MergeError,
         testing::{arb_char_str, arb_prunable_tree},
         tree::{
             tests::{leaf, nil, parent},
@@ -1097,7 +1154,7 @@ mod tests {
         assert_eq!(
             t0.clone()
                 .merge_checked(Address::from_parts(1.into(), 0), t2.clone()),
-            Err(Address::from_parts(0.into(), 0))
+            Err(MergeError::Conflict(Address::from_parts(0.into(), 0)))
         );
 
         let t3: PrunableTree<String> = parent(t0, t2);
@@ -1228,7 +1285,7 @@ mod tests {
             root in arb_prunable_tree(arb_char_str(), 8, 2^6)
         ) {
             let root_addr = Address::from_parts(Level::from(7), 0);
-            let tree = LocatedTree::from_parts(root_addr, root);
+            let tree = LocatedTree::from_parts(root_addr, root).unwrap();
 
             let (to_clear, to_retain) = tree.flag_positions().into_iter().enumerate().fold(
                 (BTreeMap::new(), BTreeMap::new()),

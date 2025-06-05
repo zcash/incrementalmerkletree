@@ -1,17 +1,18 @@
-use std::mem::size_of;
+use alloc::vec::Vec;
+use core::mem::size_of;
 
 use crate::{Address, Hashable, Level, MerklePath, Position, Source};
 
 #[cfg(feature = "legacy-api")]
-use {std::collections::VecDeque, std::iter::repeat};
+use {alloc::boxed::Box, alloc::collections::VecDeque, core::iter::repeat};
 
 #[cfg(any(test, feature = "test-dependencies"))]
 use {
+    core::num::{NonZeroU64, NonZeroU8},
     rand::{
         distributions::{Distribution, Standard},
         Rng, RngCore,
     },
-    std::num::{NonZeroU64, NonZeroU8},
 };
 
 /// Validation errors that can occur during reconstruction of a Merkle frontier from
@@ -195,7 +196,7 @@ where
         NonEmptyFrontier::from_parts(
             position,
             rng.gen(),
-            std::iter::repeat_with(|| rng.gen())
+            core::iter::repeat_with(|| rng.gen())
                 .take(position.past_ommer_count().into())
                 .collect(),
         )
@@ -209,7 +210,7 @@ where
     ) -> (Vec<H>, Self) {
         let prior_subtree_count: u64 = u64::from(tree_size) >> u8::from(subtree_depth);
         if prior_subtree_count > 0 {
-            let prior_roots: Vec<H> = std::iter::repeat_with(|| rng.gen())
+            let prior_roots: Vec<H> = core::iter::repeat_with(|| rng.gen())
                 .take(prior_subtree_count as usize)
                 .collect();
 
@@ -673,14 +674,15 @@ impl<H: Hashable + Clone, const DEPTH: u8> CommitmentTree<H, DEPTH> {
     }
 }
 
-#[cfg(any(test, feature = "test-dependencies"))]
+#[cfg(any(all(test, feature = "std"), feature = "test-dependencies"))]
 pub mod testing {
     use core::fmt::Debug;
     use proptest::collection::vec;
     use proptest::prelude::*;
     use rand::{distributions::Standard, prelude::Distribution};
-    use std::collections::hash_map::DefaultHasher;
-    use std::hash::Hasher;
+
+    #[cfg(feature = "std")]
+    use {core::hash::Hasher, std::collections::hash_map::DefaultHasher};
 
     use crate::{frontier::Frontier, Hashable, Level};
 
@@ -699,6 +701,7 @@ pub mod testing {
     #[derive(Copy, Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
     pub struct TestNode(pub u64);
 
+    #[cfg(feature = "std")]
     impl Hashable for TestNode {
         fn empty_leaf() -> Self {
             Self(0)
@@ -762,9 +765,9 @@ pub mod testing {
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "std"))]
 mod tests {
-
+    use alloc::string::{String, ToString};
     use rand::SeedableRng;
     use rand_chacha::ChaChaRng;
 
