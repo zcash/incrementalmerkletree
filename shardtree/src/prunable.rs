@@ -1027,6 +1027,55 @@ impl<H: Hashable + Clone + PartialEq> LocatedPrunableTree<H> {
         go(&self.root, self.root_addr, &mut result);
         result
     }
+
+    /// Returns the Merkle frontier of the tree, if the tree is nonempty and has no `Nil` leaves
+    /// prior to the leaf at the greatest position.
+    pub fn frontier(&self) -> Option<NonEmptyFrontier<H>> {
+        /// Traverses the rightmost path of the tree, collecting the frontier leaf and ommers.
+        /// Returns `(position, leaf_hash, ommers)` with ommers ordered from lowest to highest
+        /// level, or `None` if the frontier cannot be extracted.
+        ///
+        /// Pre-condition: `addr` must be the address of `root`.
+        fn go<H: Hashable + Clone + PartialEq>(
+            addr: Address,
+            root: &PrunableTree<H>,
+        ) -> Option<(Position, H, Vec<H>)> {
+            match &root.0 {
+                Node::Nil => None,
+                Node::Leaf { value: (h, _) } => {
+                    if addr.level() == Level::ZERO {
+                        Some((Position::from(addr.index()), h.clone(), vec![]))
+                    } else {
+                        // A leaf above level 0 is a pruned subtree; we cannot extract
+                        // the frontier leaf or internal ommers.
+                        None
+                    }
+                }
+                Node::Parent { left, right, .. } => {
+                    let (l_addr, r_addr) = addr
+                        .children()
+                        .expect("A parent node cannot appear at level 0");
+
+                    if right.0.is_nil() {
+                        // Right subtree is empty; the frontier is in the left subtree
+                        // and no ommer is needed at this level.
+                        go(l_addr, left)
+                    } else {
+                        // Right subtree is populated; the frontier is within it.
+                        // The left subtree's root hash becomes an ommer.
+                        let (pos, leaf, mut ommers) = go(r_addr, right)?;
+                        let left_hash =
+                            left.root_hash(l_addr, r_addr.position_range_start()).ok()?;
+                        ommers.push(left_hash);
+                        Some((pos, leaf, ommers))
+                    }
+                }
+            }
+        }
+
+        let (position, leaf, ommers) = go(self.root_addr, &self.root)?;
+        NonEmptyFrontier::from_parts(position, leaf, ommers).ok()
+    }
 }
 
 // We need an applicative functor for Result for this function so that we can correctly
@@ -1051,7 +1100,7 @@ fn accumulate_result_with<A, B, C>(
 mod tests {
     use std::collections::{BTreeMap, BTreeSet};
 
-    use incrementalmerkletree::{Address, Level, Position};
+    use incrementalmerkletree::{frontier::NonEmptyFrontier, Address, Level, Position};
     use proptest::proptest;
 
     use super::{LocatedPrunableTree, PrunableTree, RetentionFlags};
@@ -1277,6 +1326,230 @@ mod tests {
                 3
             )]))
         );
+    }
+
+    #[test]
+    fn frontier_empty_tree() {
+        let t: LocatedPrunableTree<String> = LocatedTree {
+            root_addr: Address::from_parts(2.into(), 0),
+            root: nil(),
+        };
+        assert_eq!(t.frontier(), None);
+    }
+
+    #[test]
+    fn frontier_single_leaf() {
+        // A single leaf at position 0
+        let t: LocatedPrunableTree<String> = LocatedTree {
+            root_addr: Address::from_parts(0.into(), 0),
+            root: leaf(("a".to_string(), RetentionFlags::EPHEMERAL)),
+        };
+        assert_eq!(
+            t.frontier(),
+            Some(NonEmptyFrontier::from_parts(Position::from(0), "a".to_string(), vec![]).unwrap())
+        );
+    }
+
+    #[test]
+    fn frontier_two_leaves() {
+        // Positions 0 and 1 populated
+        let t: LocatedPrunableTree<String> = LocatedTree {
+            root_addr: Address::from_parts(1.into(), 0),
+            root: parent(
+                leaf(("a".to_string(), RetentionFlags::EPHEMERAL)),
+                leaf(("b".to_string(), RetentionFlags::EPHEMERAL)),
+            ),
+        };
+        // Position 1 = binary 1: ommer at level 0 = "a"
+        assert_eq!(
+            t.frontier(),
+            Some(
+                NonEmptyFrontier::from_parts(
+                    Position::from(1),
+                    "b".to_string(),
+                    vec!["a".to_string()]
+                )
+                .unwrap()
+            )
+        );
+    }
+
+    #[test]
+    fn frontier_left_only() {
+        // Only left child populated (position 0), right is Nil
+        let t: LocatedPrunableTree<String> = LocatedTree {
+            root_addr: Address::from_parts(1.into(), 0),
+            root: parent(leaf(("a".to_string(), RetentionFlags::EPHEMERAL)), nil()),
+        };
+        // Position 0, no ommers
+        assert_eq!(
+            t.frontier(),
+            Some(NonEmptyFrontier::from_parts(Position::from(0), "a".to_string(), vec![]).unwrap())
+        );
+    }
+
+    #[test]
+    fn frontier_deeper_tree() {
+        // Positions 0-5 populated at level 3
+        //           root
+        //          /    \
+        //       (l2,0)  (l2,1)
+        //       / \      / \
+        //     ab   cd   ef  Nil
+        let t: LocatedPrunableTree<String> = LocatedTree {
+            root_addr: Address::from_parts(3.into(), 0),
+            root: parent(
+                parent(
+                    parent(
+                        leaf(("a".to_string(), RetentionFlags::EPHEMERAL)),
+                        leaf(("b".to_string(), RetentionFlags::EPHEMERAL)),
+                    ),
+                    parent(
+                        leaf(("c".to_string(), RetentionFlags::EPHEMERAL)),
+                        leaf(("d".to_string(), RetentionFlags::EPHEMERAL)),
+                    ),
+                ),
+                parent(
+                    parent(
+                        leaf(("e".to_string(), RetentionFlags::EPHEMERAL)),
+                        leaf(("f".to_string(), RetentionFlags::EPHEMERAL)),
+                    ),
+                    nil(),
+                ),
+            ),
+        };
+
+        // Position 5 = binary 101: ommers at levels 0 and 2
+        // Level 0 ommer: "e" (sibling of "f")
+        // Level 2 ommer: hash of left subtree = "abcd"
+        assert_eq!(
+            t.frontier(),
+            Some(
+                NonEmptyFrontier::from_parts(
+                    Position::from(5),
+                    "f".to_string(),
+                    vec!["e".to_string(), "abcd".to_string()]
+                )
+                .unwrap()
+            )
+        );
+    }
+
+    #[test]
+    fn frontier_with_pruned_left_sibling() {
+        // Left subtree is a pruned leaf (at level > 0), right subtree has detail
+        //        root (level 3)
+        //       /        \
+        //   "abcd"     (l2,1)
+        //  (pruned)     / \
+        //             ef   Nil
+        let t: LocatedPrunableTree<String> = LocatedTree {
+            root_addr: Address::from_parts(3.into(), 0),
+            root: parent(
+                leaf(("abcd".to_string(), RetentionFlags::EPHEMERAL)),
+                parent(
+                    parent(
+                        leaf(("e".to_string(), RetentionFlags::EPHEMERAL)),
+                        leaf(("f".to_string(), RetentionFlags::EPHEMERAL)),
+                    ),
+                    nil(),
+                ),
+            ),
+        };
+
+        // The pruned left sibling's hash "abcd" should be used as the level-2 ommer
+        assert_eq!(
+            t.frontier(),
+            Some(
+                NonEmptyFrontier::from_parts(
+                    Position::from(5),
+                    "f".to_string(),
+                    vec!["e".to_string(), "abcd".to_string()]
+                )
+                .unwrap()
+            )
+        );
+    }
+
+    #[test]
+    fn frontier_with_nil_left_sibling() {
+        // Left subtree is Nil (incomplete), right has the frontier
+        let t: LocatedPrunableTree<String> = LocatedTree {
+            root_addr: Address::from_parts(2.into(), 0),
+            root: parent(
+                nil(),
+                parent(
+                    leaf(("c".to_string(), RetentionFlags::EPHEMERAL)),
+                    leaf(("d".to_string(), RetentionFlags::EPHEMERAL)),
+                ),
+            ),
+        };
+
+        // Should return None because the left sibling is Nil (incomplete)
+        assert_eq!(t.frontier(), None);
+    }
+
+    #[test]
+    fn frontier_pruned_rightmost_subtree() {
+        // Rightmost path hits a pruned leaf at level > 0
+        let t: LocatedPrunableTree<String> = LocatedTree {
+            root_addr: Address::from_parts(2.into(), 0),
+            root: parent(
+                parent(
+                    leaf(("a".to_string(), RetentionFlags::EPHEMERAL)),
+                    leaf(("b".to_string(), RetentionFlags::EPHEMERAL)),
+                ),
+                leaf(("cd".to_string(), RetentionFlags::EPHEMERAL)),
+            ),
+        };
+
+        // Right child is a leaf at level 1 (pruned subtree); can't extract frontier
+        assert_eq!(t.frontier(), None);
+    }
+
+    #[test]
+    fn frontier_nonzero_index_shard() {
+        // A shard at index 1 (positions 4-7): the absolute position has bits
+        // above the shard level, so NonEmptyFrontier::from_parts will fail.
+        let t: LocatedPrunableTree<String> = LocatedTree {
+            root_addr: Address::from_parts(2.into(), 1),
+            root: parent(
+                parent(
+                    leaf(("a".to_string(), RetentionFlags::EPHEMERAL)),
+                    leaf(("b".to_string(), RetentionFlags::EPHEMERAL)),
+                ),
+                nil(),
+            ),
+        };
+
+        // Position 5 (binary 101) needs 2 ommers, but we only have 1 within the shard
+        // (level 0 ommer "a"). The bit at level 2 is set in position 5, requiring an
+        // ommer we don't have. from_parts rejects this.
+        assert_eq!(t.frontier(), None);
+    }
+
+    #[test]
+    fn frontier_roundtrip_via_insert() {
+        use incrementalmerkletree::Retention;
+
+        // Build a frontier, insert it into an empty tree, then extract it back
+        let frontier = NonEmptyFrontier::from_parts(
+            Position::from(5),
+            "f".to_string(),
+            vec!["e".to_string(), "abcd".to_string()],
+        )
+        .unwrap();
+
+        let empty_tree: LocatedPrunableTree<String> = LocatedTree {
+            root_addr: Address::from_parts(3.into(), 0),
+            root: nil(),
+        };
+
+        let (filled_tree, _) = empty_tree
+            .insert_frontier_nodes(frontier.clone(), &Retention::<()>::Ephemeral)
+            .unwrap();
+
+        assert_eq!(filled_tree.frontier(), Some(frontier));
     }
 
     proptest! {
