@@ -160,6 +160,42 @@ impl<
         Ok(result)
     }
 
+    /// Returns the frontier of the tree.
+    ///
+    /// The frontier consists of the rightmost leaf and the ommers (sibling hashes)
+    /// needed to compute the root. This method assembles ommers from within the
+    /// last shard (below `SHARD_HEIGHT`) and from sibling subtree roots above the
+    /// shard level.
+    ///
+    /// Returns [`Frontier::empty`] if the tree has no shards or if the frontier
+    /// cannot be determined from the available data.
+    pub fn frontier(&self) -> Result<Frontier<H, DEPTH>, ShardTreeError<S::Error>> {
+        let last_shard = self.store.last_shard().map_err(ShardTreeError::Storage)?;
+        let last_shard = match last_shard {
+            Some(s) => s,
+            None => return Ok(Frontier::empty()),
+        };
+
+        let (position, leaf, mut ommers) = match last_shard.frontier_ommers() {
+            Some(parts) => parts,
+            None => return Ok(Frontier::empty()),
+        };
+
+        // Walk from the shard root address up to the tree root, collecting ommers
+        // from sibling subtrees above the shard level.
+        let mut cur_addr = last_shard.root_addr;
+        while cur_addr.level() < Level::from(DEPTH) {
+            if cur_addr.is_right_child() {
+                let sibling_hash = self.root(cur_addr.sibling(), position + 1)?;
+                ommers.push(sibling_hash);
+            }
+            cur_addr = cur_addr.parent();
+        }
+
+        Frontier::from_parts(position, leaf, ommers)
+            .map_err(|_| ShardTreeError::Query(QueryError::TreeIncomplete(vec![Self::root_addr()])))
+    }
+
     /// Inserts a new root into the tree at the given address.
     ///
     /// The level associated with the given address may not exceed `DEPTH`.
@@ -1471,6 +1507,124 @@ mod tests {
     fn rewind_remove_mark() {
         check_rewind_remove_mark(new_tree);
     }
+
+    #[test]
+    fn frontier_empty_tree() {
+        let tree: ShardTree<MemoryShardStore<String, u32>, 4, 3> =
+            ShardTree::new(MemoryShardStore::empty(), 100);
+        assert_eq!(tree.frontier().unwrap(), Frontier::empty());
+    }
+
+    #[test]
+    fn frontier_single_leaf() {
+        let mut tree: ShardTree<MemoryShardStore<String, u32>, 4, 3> =
+            ShardTree::new(MemoryShardStore::empty(), 100);
+        tree.append("a".to_string(), Retention::Ephemeral).unwrap();
+
+        let frontier = tree.frontier().unwrap();
+        assert_eq!(
+            frontier,
+            Frontier::from_parts(Position::from(0), "a".to_string(), vec![]).unwrap()
+        );
+    }
+
+    #[test]
+    fn frontier_within_single_shard() {
+        // Insert a frontier at position 5 within the first shard (SHARD_HEIGHT=3).
+        // Position 5 = binary 101: ommers at level 0 ("e") and level 2 ("abcd").
+        let original = NonEmptyFrontier::from_parts(
+            Position::from(5),
+            "f".to_string(),
+            vec!["e".to_string(), "abcd".to_string()],
+        )
+        .unwrap();
+
+        let mut tree: ShardTree<MemoryShardStore<String, u32>, 4, 3> =
+            ShardTree::new(MemoryShardStore::empty(), 100);
+        tree.insert_frontier_nodes(original.clone(), Retention::Ephemeral)
+            .unwrap();
+
+        let frontier = tree.frontier().unwrap();
+        assert_eq!(frontier.value(), Some(&original));
+    }
+
+    #[test]
+    fn frontier_multi_shard_roundtrip() {
+        // Insert a frontier at position 9, which is in the second shard (SHARD_HEIGHT=3).
+        // Position 9 = binary 1001: ommers at level 0 ("i") and level 3 ("abcdefgh").
+        // Level 0 ommer "i" is within the shard; level 3 ommer "abcdefgh" is the
+        // sibling shard's root above the shard level.
+        let original = NonEmptyFrontier::from_parts(
+            Position::from(9),
+            "j".to_string(),
+            vec!["i".to_string(), "abcdefgh".to_string()],
+        )
+        .unwrap();
+
+        let mut tree: ShardTree<MemoryShardStore<String, u32>, 4, 3> =
+            ShardTree::new(MemoryShardStore::empty(), 100);
+        tree.insert_frontier_nodes(original.clone(), Retention::Ephemeral)
+            .unwrap();
+
+        let frontier = tree.frontier().unwrap();
+        assert_eq!(frontier.value(), Some(&original));
+    }
+
+    #[test]
+    fn frontier_from_appended_leaves() {
+        // Append leaves with the last one marked, so it isn't pruned away.
+        let mut tree: ShardTree<MemoryShardStore<String, u32>, 4, 3> =
+            ShardTree::new(MemoryShardStore::empty(), 100);
+        for c in 'a'..='i' {
+            tree.append(c.to_string(), Retention::Ephemeral).unwrap();
+        }
+        tree.append("j".to_string(), Retention::Marked).unwrap();
+
+        let frontier = tree.frontier().unwrap();
+        // Position 9 = binary 1001: ommers at level 0 ("i") and level 3 ("abcdefgh")
+        let expected = NonEmptyFrontier::from_parts(
+            Position::from(9),
+            "j".to_string(),
+            vec!["i".to_string(), "abcdefgh".to_string()],
+        )
+        .unwrap();
+        assert_eq!(frontier.value(), Some(&expected));
+    }
+
+    #[test]
+    fn frontier_with_append() {
+        // Insert a frontier at position 9, which is in the second shard (SHARD_HEIGHT=3).
+        // Position 9 = binary 1001: ommers at level 0 ("i") and level 3 ("abcdefgh").
+        // Level 0 ommer "i" is within the shard; level 3 ommer "abcdefgh" is the
+        // sibling shard's root above the shard level.
+        let original = NonEmptyFrontier::from_parts(
+            Position::from(9),
+            "j".to_string(),
+            vec!["i".to_string(), "abcdefgh".to_string()],
+        )
+        .unwrap();
+
+        let mut tree: ShardTree<MemoryShardStore<String, u32>, 4, 3> =
+            ShardTree::new(MemoryShardStore::empty(), 100);
+        tree.insert_frontier_nodes(original.clone(), Retention::Ephemeral)
+            .unwrap();
+
+        // Now, append leaves to the inserted frontier state.
+        for c in 'k'..='n' {
+            tree.append(c.to_string(), Retention::Ephemeral).unwrap();
+        }
+        tree.append("o".to_string(), Retention::Marked).unwrap();
+
+        let frontier = tree.frontier().unwrap();
+        let expected = NonEmptyFrontier::from_parts(
+            Position::from(14),
+            "o".to_string(),
+            vec!["mn".to_string(), "ijkl".to_string(), "abcdefgh".to_string()],
+        )
+        .unwrap();
+        assert_eq!(frontier.value(), Some(&expected));
+    }
+
 
     #[test]
     fn checkpoint_pruning_repeated() {

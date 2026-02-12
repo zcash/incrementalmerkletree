@@ -9,6 +9,7 @@ and this project adheres to Rust's notion of
 
 ### Added
 - `shardtree::prunable::LocatedPrunableTree::frontier`
+- `shardtree::ShardTree::frontier`
 
 ## [0.6.1] - 2025-01-30
 

@@ -1028,9 +1028,13 @@ impl<H: Hashable + Clone + PartialEq> LocatedPrunableTree<H> {
         result
     }
 
-    /// Returns the Merkle frontier of the tree, if the tree is nonempty and has no `Nil` leaves
-    /// prior to the leaf at the greatest position.
-    pub fn frontier(&self) -> Option<NonEmptyFrontier<H>> {
+    /// Returns the position, leaf hash, and ommers for the frontier of this tree,
+    /// or `None` if the frontier cannot be determined.
+    ///
+    /// The returned ommers cover only the levels within this tree (from level 0 up to
+    /// but not including this tree's root level). This is a building block for
+    /// [`ShardTree::frontier`] which extends the ommers to the full tree depth.
+    pub(crate) fn frontier_ommers(&self) -> Option<(Position, H, Vec<H>)> {
         /// Traverses the rightmost path of the tree, collecting the frontier leaf and ommers.
         /// Returns `(position, leaf_hash, ommers)` with ommers ordered from lowest to highest
         /// level, or `None` if the frontier cannot be extracted.
@@ -1073,7 +1077,13 @@ impl<H: Hashable + Clone + PartialEq> LocatedPrunableTree<H> {
             }
         }
 
-        let (position, leaf, ommers) = go(self.root_addr, &self.root)?;
+        go(self.root_addr, &self.root)
+    }
+
+    /// Returns the Merkle frontier of the tree, if the tree is nonempty and has no `Nil` leaves
+    /// prior to the leaf at the greatest position.
+    pub fn frontier(&self) -> Option<NonEmptyFrontier<H>> {
+        let (position, leaf, ommers) = self.frontier_ommers()?;
         NonEmptyFrontier::from_parts(position, leaf, ommers).ok()
     }
 }
