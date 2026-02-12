@@ -851,6 +851,22 @@ impl<
                     // no truncation or computation of child subtrees of this leaf is necessary, just use
                     // the cached leaf value
                     Ok((value.0.clone(), None))
+                } else if cap.root_addr.level()
+                    == ShardTree::<S, DEPTH, SHARD_HEIGHT>::subtree_level()
+                {
+                    // We are at the shard level and need a truncated root. Compute it
+                    // directly from the shard data rather than splitting this leaf, which
+                    // would introduce Parent nodes below the shard level into the cap.
+                    let root = self.root_from_shards(
+                        if target_addr.contains(&cap.root_addr) {
+                            cap.root_addr
+                        } else {
+                            target_addr
+                        },
+                        truncate_at,
+                    )?;
+                    // The result incorporates truncation so must not be cached.
+                    Ok((root, None))
                 } else {
                     // since the tree was truncated below this level, recursively call with an
                     // empty parent node to trigger the continued traversal
