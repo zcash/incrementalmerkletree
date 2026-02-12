@@ -765,7 +765,10 @@ impl<
         match &cap.root.0 {
             Node::Parent { ann, left, right } => {
                 match ann {
-                    Some(cached_root) if target_addr.contains(&cap.root_addr) => {
+                    Some(cached_root)
+                        if target_addr.contains(&cap.root_addr)
+                            && truncate_at >= cap.root_addr.position_range_end() =>
+                    {
                         Ok((cached_root.as_ref().clone(), None))
                     }
                     _ => {
@@ -832,8 +835,12 @@ impl<
                                 .and_then(|l| l.node_value())
                                 .zip(new_right.as_ref().and_then(|r| r.node_value()))
                                 .map(|(l, r)| {
-                                    // the node values of child nodes cannot contain the hashes of
-                                    // empty nodes or nodes with positions greater than the
+                                    // Child node values are guaranteed to be non-truncated:
+                                    // the Nil handler only caches a Leaf when
+                                    // `truncate_at >= range_end`, and Parent annotations
+                                    // are built from these leaves recursively via this
+                                    // same `.zip().map()` chain, so the invariant holds
+                                    // at every level.
                                     Arc::new(S::H::combine(l_addr.level(), l, r))
                                 }),
                             left: new_left.map_or_else(|| left.clone(), Arc::new),
