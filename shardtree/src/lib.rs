@@ -1735,6 +1735,61 @@ mod tests {
     }
 
     #[test]
+    fn cached_parent_annotation_does_not_short_circuit_truncation() {
+        // Regression test: the Parent handler's annotation fast-path in root_internal
+        // must not return a cached (non-truncated) hash when truncation is required.
+        //
+        // The scenario:
+        // 1. Fill all positions so the full root can be cached as a Leaf in the cap.
+        // 2. root_caching with no truncation -> cap = Leaf(full_hash)
+        // 3. root_caching with truncation -> Leaf handler's third branch splits the
+        //    Leaf into Parent(None, Nil, Nil) and recurses. On return, reannotate_root
+        //    sets the original Leaf value (full_hash) as the Parent annotation.
+        //    Cap = Parent(Some(full_hash), Nil, Nil)
+        // 4. root with truncation -> Parent handler's fast-path sees the annotation
+        //    and incorrectly returns full_hash instead of recomputing with truncation.
+        //
+        // DEPTH=4, SHARD_HEIGHT=2: 4 shards of 4 positions each, 16 total positions.
+        let mut tree: ShardTree<MemoryShardStore<String, u32>, 4, 2> =
+            ShardTree::new(MemoryShardStore::empty(), 100);
+
+        // Fill all 16 positions (shards 0-3).
+        for (i, c) in ('a'..='p').enumerate() {
+            tree.append(
+                c.to_string(),
+                Retention::Checkpoint {
+                    id: (i + 1) as u32,
+                    marking: Marking::None,
+                },
+            )
+            .unwrap();
+        }
+
+        let root_addr = ShardTree::<MemoryShardStore<String, u32>, 4, 2>::root_addr();
+
+        // Step 1: Cache the full root. The cap becomes Leaf("abcdefghijklmnop").
+        let full_root = tree.root_caching(root_addr, Position::from(16)).unwrap();
+        assert_eq!(full_root, "abcdefghijklmnop");
+
+        // Step 2: Call root_caching with truncation at position 4. This correctly
+        // returns the truncated root, but the Leaf handler's reannotate_root sets
+        // the full root hash as the annotation on the replacement Parent node in
+        // the cap: Parent(Some("abcdefghijklmnop"), Nil, Nil).
+        let truncated_root = tree.root_caching(root_addr, Position::from(4)).unwrap();
+        assert_eq!(truncated_root, "abcd____________");
+
+        // Step 3: Call root again with the same truncation. The cap now has
+        // Parent(Some("abcdefghijklmnop"), ...). The bug causes the fast-path to
+        // return "abcdefghijklmnop" instead of recomputing with truncation.
+        let truncated_root_again = tree.root(root_addr, Position::from(4)).unwrap();
+
+        assert_eq!(
+            truncated_root, truncated_root_again,
+            "Truncated root must not be affected by cached annotation on Parent node"
+        );
+    }
+
+    #[test]
     fn root_caching_does_not_corrupt_cap_with_sub_shard_nodes() {
         // Regression test: root_caching must not split cached shard-level Leaf nodes
         // into Parent nodes with children below the shard level. Such sub-shard Parent
