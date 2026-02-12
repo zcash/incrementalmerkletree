@@ -1401,12 +1401,12 @@ mod tests {
 
     use crate::{
         error::{QueryError, ShardTreeError},
-        store::memory::MemoryShardStore,
+        store::{memory::MemoryShardStore, ShardStore},
         testing::{
             arb_char_str, arb_shardtree, check_shard_sizes, check_shardtree_insertion,
             check_witness_with_pruned_subtrees,
         },
-        InsertionError, LocatedPrunableTree, ShardTree,
+        InsertionError, LocatedPrunableTree, LocatedTree, ShardTree,
     };
 
     #[test]
@@ -1715,6 +1715,91 @@ mod tests {
         assert_matches!(
             tree2.insert_frontier_nodes::<()>(frontier, &Retention::Ephemeral),
             Err(InsertionError::Conflict(_))
+        );
+    }
+
+    #[test]
+    fn root_caching_does_not_corrupt_cap_with_sub_shard_nodes() {
+        // Regression test: root_caching must not split cached shard-level Leaf nodes
+        // into Parent nodes with children below the shard level. Such sub-shard Parent
+        // nodes corrupt the cap, causing deserialization failures when the cap is later
+        // read with a level-shifted root address (as zcash_client_sqlite does).
+        //
+        // DEPTH=4, SHARD_HEIGHT=2: 4 shards of 4 positions each.
+        // The cap covers levels 2..4 (2 internal levels above the shard leaves).
+        let mut tree: ShardTree<MemoryShardStore<String, u32>, 4, 2> =
+            ShardTree::new(MemoryShardStore::empty(), 100);
+
+        // Fill shard 0 (positions 0-3) and start shard 1 (position 4).
+        tree.append(
+            "a".to_string(),
+            Retention::Checkpoint {
+                id: 1,
+                marking: Marking::None,
+            },
+        )
+        .unwrap();
+        tree.append(
+            "b".to_string(),
+            Retention::Checkpoint {
+                id: 2,
+                marking: Marking::None,
+            },
+        )
+        .unwrap();
+        tree.append(
+            "c".to_string(),
+            Retention::Checkpoint {
+                id: 3,
+                marking: Marking::None,
+            },
+        )
+        .unwrap();
+        tree.append(
+            "d".to_string(),
+            Retention::Checkpoint {
+                id: 4,
+                marking: Marking::None,
+            },
+        )
+        .unwrap();
+        tree.append(
+            "e".to_string(),
+            Retention::Checkpoint {
+                id: 5,
+                marking: Marking::None,
+            },
+        )
+        .unwrap();
+
+        // Insert shard 0's root hash into the cap at the shard level. This is what
+        // put_subtree_roots does in zcash_client_sqlite: it inserts known subtree root
+        // hashes so they can be used for witness/root computation without reading shard data.
+        //
+        // Shard 0 root = combine(1, combine(0, "a", "b"), combine(0, "c", "d")) = "abcd"
+        tree.insert(Address::from_parts(Level::from(2), 0), "abcd".to_string())
+            .unwrap();
+
+        // Compute the root with truncation within shard 0. This triggers the bug:
+        // the Leaf handler in root_internal splits the shard-level Leaf("abcd") into a
+        // Parent with children at level 1 (below shard level 2).
+        let _root = tree.root_caching(
+            ShardTree::<MemoryShardStore<String, u32>, 4, 2>::root_addr(),
+            Position::from(2), // truncate within shard 0
+        );
+
+        // Validate the cap's structural integrity. In zcash_client_sqlite, the cap is read
+        // back and located at a level-shifted root address: (DEPTH - SHARD_HEIGHT, 0).
+        // In the shifted coordinate system, shard-level nodes are at level 0, where Parent
+        // nodes are forbidden (because level-0 addresses have no children).
+        //
+        // If root_caching split the shard-level Leaf, the cap will have a Parent at what
+        // becomes level 0 in the shifted space, and from_parts will return Err.
+        let cap = tree.store().get_cap().unwrap();
+        let shifted_root_addr = Address::from_parts(Level::from(4 - 2), 0);
+        assert!(
+            LocatedTree::from_parts(shifted_root_addr, cap).is_ok(),
+            "Cap must not contain Parent nodes at or below shard level"
         );
     }
 
