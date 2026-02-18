@@ -765,7 +765,10 @@ impl<
         match &cap.root.0 {
             Node::Parent { ann, left, right } => {
                 match ann {
-                    Some(cached_root) if target_addr.contains(&cap.root_addr) => {
+                    Some(cached_root)
+                        if target_addr.contains(&cap.root_addr)
+                            && truncate_at >= cap.root_addr.position_range_end() =>
+                    {
                         Ok((cached_root.as_ref().clone(), None))
                     }
                     _ => {
@@ -832,8 +835,12 @@ impl<
                                 .and_then(|l| l.node_value())
                                 .zip(new_right.as_ref().and_then(|r| r.node_value()))
                                 .map(|(l, r)| {
-                                    // the node values of child nodes cannot contain the hashes of
-                                    // empty nodes or nodes with positions greater than the
+                                    // Child node values are guaranteed to be non-truncated:
+                                    // the Nil handler only caches a Leaf when
+                                    // `truncate_at >= range_end`, and Parent annotations
+                                    // are built from these leaves recursively via this
+                                    // same `.zip().map()` chain, so the invariant holds
+                                    // at every level.
                                     Arc::new(S::H::combine(l_addr.level(), l, r))
                                 }),
                             left: new_left.map_or_else(|| left.clone(), Arc::new),
@@ -851,6 +858,22 @@ impl<
                     // no truncation or computation of child subtrees of this leaf is necessary, just use
                     // the cached leaf value
                     Ok((value.0.clone(), None))
+                } else if cap.root_addr.level()
+                    == ShardTree::<S, DEPTH, SHARD_HEIGHT>::subtree_level()
+                {
+                    // We are at the shard level and need a truncated root. Compute it
+                    // directly from the shard data rather than splitting this leaf, which
+                    // would introduce Parent nodes below the shard level into the cap.
+                    let root = self.root_from_shards(
+                        if target_addr.contains(&cap.root_addr) {
+                            cap.root_addr
+                        } else {
+                            target_addr
+                        },
+                        truncate_at,
+                    )?;
+                    // The result incorporates truncation so must not be cached.
+                    Ok((root, None))
                 } else {
                     // since the tree was truncated below this level, recursively call with an
                     // empty parent node to trigger the continued traversal
@@ -1401,12 +1424,12 @@ mod tests {
 
     use crate::{
         error::{QueryError, ShardTreeError},
-        store::memory::MemoryShardStore,
+        store::{memory::MemoryShardStore, ShardStore},
         testing::{
             arb_char_str, arb_shardtree, check_shard_sizes, check_shardtree_insertion,
             check_witness_with_pruned_subtrees,
         },
-        InsertionError, LocatedPrunableTree, ShardTree,
+        InsertionError, LocatedPrunableTree, LocatedTree, ShardTree,
     };
 
     #[test]
@@ -1715,6 +1738,146 @@ mod tests {
         assert_matches!(
             tree2.insert_frontier_nodes::<()>(frontier, &Retention::Ephemeral),
             Err(InsertionError::Conflict(_))
+        );
+    }
+
+    #[test]
+    fn cached_parent_annotation_does_not_short_circuit_truncation() {
+        // Regression test: the Parent handler's annotation fast-path in root_internal
+        // must not return a cached (non-truncated) hash when truncation is required.
+        //
+        // The scenario:
+        // 1. Fill all positions so the full root can be cached as a Leaf in the cap.
+        // 2. root_caching with no truncation -> cap = Leaf(full_hash)
+        // 3. root_caching with truncation -> Leaf handler's third branch splits the
+        //    Leaf into Parent(None, Nil, Nil) and recurses. On return, reannotate_root
+        //    sets the original Leaf value (full_hash) as the Parent annotation.
+        //    Cap = Parent(Some(full_hash), Nil, Nil)
+        // 4. root with truncation -> Parent handler's fast-path sees the annotation
+        //    and incorrectly returns full_hash instead of recomputing with truncation.
+        //
+        // DEPTH=4, SHARD_HEIGHT=2: 4 shards of 4 positions each, 16 total positions.
+        let mut tree: ShardTree<MemoryShardStore<String, u32>, 4, 2> =
+            ShardTree::new(MemoryShardStore::empty(), 100);
+
+        // Fill all 16 positions (shards 0-3).
+        for (i, c) in ('a'..='p').enumerate() {
+            tree.append(
+                c.to_string(),
+                Retention::Checkpoint {
+                    id: (i + 1) as u32,
+                    marking: Marking::None,
+                },
+            )
+            .unwrap();
+        }
+
+        let root_addr = ShardTree::<MemoryShardStore<String, u32>, 4, 2>::root_addr();
+
+        // Step 1: Cache the full root. The cap becomes Leaf("abcdefghijklmnop").
+        let full_root = tree.root_caching(root_addr, Position::from(16)).unwrap();
+        assert_eq!(full_root, "abcdefghijklmnop");
+
+        // Step 2: Call root_caching with truncation at position 4. This correctly
+        // returns the truncated root, but the Leaf handler's reannotate_root sets
+        // the full root hash as the annotation on the replacement Parent node in
+        // the cap: Parent(Some("abcdefghijklmnop"), Nil, Nil).
+        let truncated_root = tree.root_caching(root_addr, Position::from(4)).unwrap();
+        assert_eq!(truncated_root, "abcd____________");
+
+        // Step 3: Call root again with the same truncation. The cap now has
+        // Parent(Some("abcdefghijklmnop"), ...). The bug causes the fast-path to
+        // return "abcdefghijklmnop" instead of recomputing with truncation.
+        let truncated_root_again = tree.root(root_addr, Position::from(4)).unwrap();
+
+        assert_eq!(
+            truncated_root, truncated_root_again,
+            "Truncated root must not be affected by cached annotation on Parent node"
+        );
+    }
+
+    #[test]
+    fn root_caching_does_not_corrupt_cap_with_sub_shard_nodes() {
+        // Regression test: root_caching must not split cached shard-level Leaf nodes
+        // into Parent nodes with children below the shard level. Such sub-shard Parent
+        // nodes corrupt the cap, causing deserialization failures when the cap is later
+        // read with a level-shifted root address (as zcash_client_sqlite does).
+        //
+        // DEPTH=4, SHARD_HEIGHT=2: 4 shards of 4 positions each.
+        // The cap covers levels 2..4 (2 internal levels above the shard leaves).
+        let mut tree: ShardTree<MemoryShardStore<String, u32>, 4, 2> =
+            ShardTree::new(MemoryShardStore::empty(), 100);
+
+        // Fill shard 0 (positions 0-3) and start shard 1 (position 4).
+        tree.append(
+            "a".to_string(),
+            Retention::Checkpoint {
+                id: 1,
+                marking: Marking::None,
+            },
+        )
+        .unwrap();
+        tree.append(
+            "b".to_string(),
+            Retention::Checkpoint {
+                id: 2,
+                marking: Marking::None,
+            },
+        )
+        .unwrap();
+        tree.append(
+            "c".to_string(),
+            Retention::Checkpoint {
+                id: 3,
+                marking: Marking::None,
+            },
+        )
+        .unwrap();
+        tree.append(
+            "d".to_string(),
+            Retention::Checkpoint {
+                id: 4,
+                marking: Marking::None,
+            },
+        )
+        .unwrap();
+        tree.append(
+            "e".to_string(),
+            Retention::Checkpoint {
+                id: 5,
+                marking: Marking::None,
+            },
+        )
+        .unwrap();
+
+        // Insert shard 0's root hash into the cap at the shard level. This is what
+        // put_subtree_roots does in zcash_client_sqlite: it inserts known subtree root
+        // hashes so they can be used for witness/root computation without reading shard data.
+        //
+        // Shard 0 root = combine(1, combine(0, "a", "b"), combine(0, "c", "d")) = "abcd"
+        tree.insert(Address::from_parts(Level::from(2), 0), "abcd".to_string())
+            .unwrap();
+
+        // Compute the root with truncation within shard 0. This triggers the bug:
+        // the Leaf handler in root_internal splits the shard-level Leaf("abcd") into a
+        // Parent with children at level 1 (below shard level 2).
+        let _root = tree.root_caching(
+            ShardTree::<MemoryShardStore<String, u32>, 4, 2>::root_addr(),
+            Position::from(2), // truncate within shard 0
+        );
+
+        // Validate the cap's structural integrity. In zcash_client_sqlite, the cap is read
+        // back and located at a level-shifted root address: (DEPTH - SHARD_HEIGHT, 0).
+        // In the shifted coordinate system, shard-level nodes are at level 0, where Parent
+        // nodes are forbidden (because level-0 addresses have no children).
+        //
+        // If root_caching split the shard-level Leaf, the cap will have a Parent at what
+        // becomes level 0 in the shifted space, and from_parts will return Err.
+        let cap = tree.store().get_cap().unwrap();
+        let shifted_root_addr = Address::from_parts(Level::from(4 - 2), 0);
+        assert!(
+            LocatedTree::from_parts(shifted_root_addr, cap).is_ok(),
+            "Cap must not contain Parent nodes at or below shard level"
         );
     }
 
