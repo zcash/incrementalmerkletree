@@ -8,7 +8,7 @@ and this project adheres to Rust's notion of
 ## Unreleased
 
 ### Added
-- `shardtree::prunable::LocatedPrunableTree::frontier`
+- `shardtree::prunable::{LocatedPrunableTree::frontier, FrontierError}`
 - `shardtree::ShardTree::frontier`
 
 ## [0.6.1] - 2025-01-30

@@ -176,10 +176,22 @@ impl<
             None => return Ok(Frontier::empty()),
         };
 
-        let (position, leaf, mut ommers) = match last_shard.frontier_ommers() {
-            Some(parts) => parts,
-            None => return Ok(Frontier::empty()),
-        };
+        let (position, leaf, mut ommers) =
+            match last_shard.frontier_ommers().map_err(|e| match e {
+                prunable::FrontierError::TreeIncomplete { address } => {
+                    ShardTreeError::Query(QueryError::TreeIncomplete(vec![address]))
+                }
+                _ => {
+                    // FIXME: We need a breaking release to add a more correct error type
+                    // for this case; at that time, we should also make `ShardTreeError`
+                    // non-exhaustive.
+                    let shard_addr = last_shard.root_addr();
+                    ShardTreeError::Query(QueryError::TreeIncomplete(vec![shard_addr]))
+                }
+            })? {
+                Some(parts) => parts,
+                None => return Ok(Frontier::empty()),
+            };
 
         // Walk from the shard root address up to the tree root, collecting ommers
         // from sibling subtrees above the shard level.
@@ -192,6 +204,7 @@ impl<
             cur_addr = cur_addr.parent();
         }
 
+        // FIXME: this should also have a better error variant.
         Frontier::from_parts(position, leaf, ommers)
             .map_err(|_| ShardTreeError::Query(QueryError::TreeIncomplete(vec![Self::root_addr()])))
     }
@@ -1624,7 +1637,6 @@ mod tests {
         .unwrap();
         assert_eq!(frontier.value(), Some(&expected));
     }
-
 
     #[test]
     fn checkpoint_pruning_repeated() {

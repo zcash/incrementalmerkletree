@@ -388,6 +388,39 @@ pub struct IncompleteAt {
     pub required_for_witness: bool,
 }
 
+/// Validation errors that can occur during reconstruction of a Merkle frontier from
+/// the state of a [`LocatedPrunableTree`].
+#[derive(Clone, Debug, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum FrontierError {
+    /// An error representing that the number of ommers provided in frontier construction does not
+    /// the expected length of the ommers list given the position.
+    PositionMismatch { expected_ommers: u8 },
+    /// An error representing that the position and/or list of ommers provided to frontier
+    /// construction would result in a frontier that exceeds the maximum statically allowed depth
+    /// of the tree. `depth` is the minimum tree depth that would be required in order for that
+    /// tree to contain the position in question.
+    MaxDepthExceeded { depth: u8 },
+    /// The tree from which the frontier was being extracted is incomplete, and consequently no
+    /// frontier can be computed.
+    TreeIncomplete { address: Address },
+    /// The tree from which the frontier was being extracted is corrupt; an invalid node was found
+    /// at the given address.
+    CorruptedData { address: Address },
+}
+
+impl From<incrementalmerkletree::frontier::FrontierError> for FrontierError {
+    fn from(value: incrementalmerkletree::frontier::FrontierError) -> Self {
+        use incrementalmerkletree::frontier::FrontierError::*;
+        match value {
+            PositionMismatch { expected_ommers } => {
+                FrontierError::PositionMismatch { expected_ommers }
+            }
+            MaxDepthExceeded { depth } => FrontierError::MaxDepthExceeded { depth },
+        }
+    }
+}
+
 impl<H: Hashable + Clone + PartialEq> LocatedPrunableTree<H> {
     /// Returns the maximum position at which a non-`Nil` leaf has been observed in the tree.
     ///
@@ -1028,37 +1061,37 @@ impl<H: Hashable + Clone + PartialEq> LocatedPrunableTree<H> {
         result
     }
 
-    /// Returns the position, leaf hash, and ommers for the frontier of this tree,
-    /// or `None` if the frontier cannot be determined.
+    /// Returns the position, leaf hash, and ommers for the frontier of this tree, `Ok(None)` if
+    /// the tree is empty, or `Err(())` if the frontier cannot be computed due to missing data.
     ///
     /// The returned ommers cover only the levels within this tree (from level 0 up to
     /// but not including this tree's root level). This is a building block for
     /// [`ShardTree::frontier`] which extends the ommers to the full tree depth.
-    pub(crate) fn frontier_ommers(&self) -> Option<(Position, H, Vec<H>)> {
+    pub(crate) fn frontier_ommers(&self) -> Result<Option<(Position, H, Vec<H>)>, FrontierError> {
         /// Traverses the rightmost path of the tree, collecting the frontier leaf and ommers.
         /// Returns `(position, leaf_hash, ommers)` with ommers ordered from lowest to highest
         /// level, or `None` if the frontier cannot be extracted.
         ///
         /// Pre-condition: `addr` must be the address of `root`.
         fn go<H: Hashable + Clone + PartialEq>(
-            addr: Address,
+            address: Address,
             root: &PrunableTree<H>,
-        ) -> Option<(Position, H, Vec<H>)> {
+        ) -> Result<Option<(Position, H, Vec<H>)>, FrontierError> {
             match &root.0 {
-                Node::Nil => None,
+                Node::Nil => Err(FrontierError::TreeIncomplete { address }),
                 Node::Leaf { value: (h, _) } => {
-                    if addr.level() == Level::ZERO {
-                        Some((Position::from(addr.index()), h.clone(), vec![]))
+                    if address.level() == Level::ZERO {
+                        Ok(Some((Position::from(address.index()), h.clone(), vec![])))
                     } else {
                         // A leaf above level 0 is a pruned subtree; we cannot extract
                         // the frontier leaf or internal ommers.
-                        None
+                        Err(FrontierError::TreeIncomplete { address })
                     }
                 }
                 Node::Parent { left, right, .. } => {
-                    let (l_addr, r_addr) = addr
+                    let (l_addr, r_addr) = address
                         .children()
-                        .expect("A parent node cannot appear at level 0");
+                        .ok_or(FrontierError::CorruptedData { address })?;
 
                     if right.0.is_nil() {
                         // Right subtree is empty; the frontier is in the left subtree
@@ -1067,24 +1100,36 @@ impl<H: Hashable + Clone + PartialEq> LocatedPrunableTree<H> {
                     } else {
                         // Right subtree is populated; the frontier is within it.
                         // The left subtree's root hash becomes an ommer.
-                        let (pos, leaf, mut ommers) = go(r_addr, right)?;
-                        let left_hash =
-                            left.root_hash(l_addr, r_addr.position_range_start()).ok()?;
-                        ommers.push(left_hash);
-                        Some((pos, leaf, ommers))
+                        go(r_addr, right)?
+                            .map(|(pos, leaf, mut ommers)| {
+                                let left_hash = left
+                                    .root_hash(l_addr, r_addr.position_range_start())
+                                    .map_err(|_| FrontierError::TreeIncomplete {
+                                        address: l_addr,
+                                    })?;
+                                ommers.push(left_hash);
+                                Ok((pos, leaf, ommers))
+                            })
+                            .transpose()
                     }
                 }
             }
         }
 
-        go(self.root_addr, &self.root)
+        if self.root.is_nil() {
+            Ok(None)
+        } else {
+            go(self.root_addr, &self.root)
+        }
     }
 
     /// Returns the Merkle frontier of the tree, if the tree is nonempty and has no `Nil` leaves
     /// prior to the leaf at the greatest position.
-    pub fn frontier(&self) -> Option<NonEmptyFrontier<H>> {
-        let (position, leaf, ommers) = self.frontier_ommers()?;
-        NonEmptyFrontier::from_parts(position, leaf, ommers).ok()
+    pub fn frontier(&self) -> Result<Option<NonEmptyFrontier<H>>, FrontierError> {
+        self.frontier_ommers()?
+            .map(|(position, leaf, ommers)| NonEmptyFrontier::from_parts(position, leaf, ommers))
+            .transpose()
+            .map_err(FrontierError::from)
     }
 }
 
@@ -1108,6 +1153,7 @@ fn accumulate_result_with<A, B, C>(
 
 #[cfg(test)]
 mod tests {
+    use assert_matches::assert_matches;
     use std::collections::{BTreeMap, BTreeSet};
 
     use incrementalmerkletree::{frontier::NonEmptyFrontier, Address, Level, Position};
@@ -1116,7 +1162,7 @@ mod tests {
     use super::{LocatedPrunableTree, PrunableTree, RetentionFlags};
     use crate::{
         error::{InsertionError, QueryError},
-        prunable::MergeError,
+        prunable::{FrontierError, MergeError},
         testing::{arb_char_str, arb_prunable_tree},
         tree::{
             tests::{leaf, nil, parent},
@@ -1344,7 +1390,7 @@ mod tests {
             root_addr: Address::from_parts(2.into(), 0),
             root: nil(),
         };
-        assert_eq!(t.frontier(), None);
+        assert_eq!(t.frontier(), Ok(None));
     }
 
     #[test]
@@ -1356,7 +1402,9 @@ mod tests {
         };
         assert_eq!(
             t.frontier(),
-            Some(NonEmptyFrontier::from_parts(Position::from(0), "a".to_string(), vec![]).unwrap())
+            Ok(Some(
+                NonEmptyFrontier::from_parts(Position::from(0), "a".to_string(), vec![]).unwrap()
+            ))
         );
     }
 
@@ -1373,14 +1421,14 @@ mod tests {
         // Position 1 = binary 1: ommer at level 0 = "a"
         assert_eq!(
             t.frontier(),
-            Some(
+            Ok(Some(
                 NonEmptyFrontier::from_parts(
                     Position::from(1),
                     "b".to_string(),
                     vec!["a".to_string()]
                 )
                 .unwrap()
-            )
+            ))
         );
     }
 
@@ -1394,7 +1442,9 @@ mod tests {
         // Position 0, no ommers
         assert_eq!(
             t.frontier(),
-            Some(NonEmptyFrontier::from_parts(Position::from(0), "a".to_string(), vec![]).unwrap())
+            Ok(Some(
+                NonEmptyFrontier::from_parts(Position::from(0), "a".to_string(), vec![]).unwrap()
+            ))
         );
     }
 
@@ -1434,14 +1484,14 @@ mod tests {
         // Level 2 ommer: hash of left subtree = "abcd"
         assert_eq!(
             t.frontier(),
-            Some(
+            Ok(Some(
                 NonEmptyFrontier::from_parts(
                     Position::from(5),
                     "f".to_string(),
                     vec!["e".to_string(), "abcd".to_string()]
                 )
                 .unwrap()
-            )
+            ))
         );
     }
 
@@ -1470,14 +1520,14 @@ mod tests {
         // The pruned left sibling's hash "abcd" should be used as the level-2 ommer
         assert_eq!(
             t.frontier(),
-            Some(
+            Ok(Some(
                 NonEmptyFrontier::from_parts(
                     Position::from(5),
                     "f".to_string(),
                     vec!["e".to_string(), "abcd".to_string()]
                 )
                 .unwrap()
-            )
+            ))
         );
     }
 
@@ -1496,7 +1546,7 @@ mod tests {
         };
 
         // Should return None because the left sibling is Nil (incomplete)
-        assert_eq!(t.frontier(), None);
+        assert_matches!(t.frontier(), Err(FrontierError::TreeIncomplete { .. }));
     }
 
     #[test]
@@ -1514,7 +1564,7 @@ mod tests {
         };
 
         // Right child is a leaf at level 1 (pruned subtree); can't extract frontier
-        assert_eq!(t.frontier(), None);
+        assert_matches!(t.frontier(), Err(FrontierError::TreeIncomplete { .. }));
     }
 
     #[test]
@@ -1535,7 +1585,7 @@ mod tests {
         // Position 5 (binary 101) needs 2 ommers, but we only have 1 within the shard
         // (level 0 ommer "a"). The bit at level 2 is set in position 5, requiring an
         // ommer we don't have. from_parts rejects this.
-        assert_eq!(t.frontier(), None);
+        assert_matches!(t.frontier(), Err(FrontierError::PositionMismatch { .. }));
     }
 
     #[test]
@@ -1559,7 +1609,7 @@ mod tests {
             .insert_frontier_nodes(frontier.clone(), &Retention::<()>::Ephemeral)
             .unwrap();
 
-        assert_eq!(filled_tree.frontier(), Some(frontier));
+        assert_eq!(filled_tree.frontier(), Ok(Some(frontier)));
     }
 
     proptest! {
