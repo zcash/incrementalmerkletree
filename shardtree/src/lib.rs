@@ -1619,7 +1619,7 @@ mod tests {
 
         let mut tree: ShardTree<MemoryShardStore<String, u32>, 4, 3> =
             ShardTree::new(MemoryShardStore::empty(), 100);
-        tree.insert_frontier_nodes(original.clone(), Retention::Ephemeral)
+        tree.insert_frontier_nodes(original, Retention::Ephemeral)
             .unwrap();
 
         // Now, append leaves to the inserted frontier state.
