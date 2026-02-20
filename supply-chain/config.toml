@@ -1,0 +1,167 @@
+
+# cargo-vet config file
+
+[cargo-vet]
+version = "0.10"
+
+[imports.bytecode-alliance]
+url = "https://raw.githubusercontent.com/bytecodealliance/wasmtime/main/supply-chain/audits.toml"
+
+[imports.embark-studios]
+url = "https://raw.githubusercontent.com/EmbarkStudios/rust-ecosystem/main/audits.toml"
+
+[imports.fermyon]
+url = "https://raw.githubusercontent.com/fermyon/spin/main/supply-chain/audits.toml"
+
+[imports.google]
+url = "https://raw.githubusercontent.com/google/supply-chain/main/audits.toml"
+
+[imports.isrg]
+url = "https://raw.githubusercontent.com/divviup/libprio-rs/main/supply-chain/audits.toml"
+
+[imports.mozilla]
+url = "https://raw.githubusercontent.com/mozilla/supply-chain/main/audits.toml"
+
+[imports.zcash]
+url = "https://raw.githubusercontent.com/zcash/rust-ecosystem/main/supply-chain/audits.toml"
+
+[policy.incrementalmerkletree]
+audit-as-crates-io = true
+
+[policy.incrementalmerkletree-testing]
+audit-as-crates-io = true
+
+[policy.shardtree]
+audit-as-crates-io = true
+
+[[exemptions.assert_matches]]
+version = "1.5.0"
+criteria = "safe-to-deploy"
+
+[[exemptions.errno]]
+version = "0.3.5"
+criteria = "safe-to-deploy"
+
+[[exemptions.getrandom]]
+version = "0.2.10"
+criteria = "safe-to-deploy"
+
+[[exemptions.hermit-abi]]
+version = "0.3.3"
+criteria = "safe-to-deploy"
+
+[[exemptions.instant]]
+version = "0.1.12"
+criteria = "safe-to-deploy"
+
+[[exemptions.libc]]
+version = "0.2.149"
+criteria = "safe-to-deploy"
+
+[[exemptions.libm]]
+version = "0.2.8"
+criteria = "safe-to-deploy"
+
+[[exemptions.linux-raw-sys]]
+version = "0.3.8"
+criteria = "safe-to-deploy"
+
+[[exemptions.once_cell]]
+version = "1.18.0"
+criteria = "safe-to-deploy"
+
+[[exemptions.ppv-lite86]]
+version = "0.2.17"
+criteria = "safe-to-deploy"
+
+[[exemptions.proc-macro2]]
+version = "1.0.69"
+criteria = "safe-to-deploy"
+
+[[exemptions.proptest]]
+version = "1.2.0"
+criteria = "safe-to-deploy"
+
+[[exemptions.quick-error]]
+version = "1.2.3"
+criteria = "safe-to-deploy"
+
+[[exemptions.redox_syscall]]
+version = "0.3.5"
+criteria = "safe-to-deploy"
+
+[[exemptions.regex-syntax]]
+version = "0.6.29"
+criteria = "safe-to-deploy"
+
+[[exemptions.rustix]]
+version = "0.37.27"
+criteria = "safe-to-deploy"
+
+[[exemptions.rusty-fork]]
+version = "0.3.0"
+criteria = "safe-to-deploy"
+
+[[exemptions.syn]]
+version = "2.0.38"
+criteria = "safe-to-deploy"
+
+[[exemptions.tempfile]]
+version = "3.6.0"
+criteria = "safe-to-deploy"
+
+[[exemptions.tracing]]
+version = "0.1.40"
+criteria = "safe-to-deploy"
+
+[[exemptions.tracing-attributes]]
+version = "0.1.27"
+criteria = "safe-to-deploy"
+
+[[exemptions.unarray]]
+version = "0.1.4"
+criteria = "safe-to-deploy"
+
+[[exemptions.wait-timeout]]
+version = "0.2.0"
+criteria = "safe-to-deploy"
+
+[[exemptions.wasi]]
+version = "0.11.0+wasi-snapshot-preview1"
+criteria = "safe-to-deploy"
+
+[[exemptions.windows-sys]]
+version = "0.48.0"
+criteria = "safe-to-deploy"
+
+[[exemptions.windows-targets]]
+version = "0.48.5"
+criteria = "safe-to-deploy"
+
+[[exemptions.windows_aarch64_gnullvm]]
+version = "0.48.5"
+criteria = "safe-to-deploy"
+
+[[exemptions.windows_aarch64_msvc]]
+version = "0.48.5"
+criteria = "safe-to-deploy"
+
+[[exemptions.windows_i686_gnu]]
+version = "0.48.5"
+criteria = "safe-to-deploy"
+
+[[exemptions.windows_i686_msvc]]
+version = "0.48.5"
+criteria = "safe-to-deploy"
+
+[[exemptions.windows_x86_64_gnu]]
+version = "0.48.5"
+criteria = "safe-to-deploy"
+
+[[exemptions.windows_x86_64_gnullvm]]
+version = "0.48.5"
+criteria = "safe-to-deploy"
+
+[[exemptions.windows_x86_64_msvc]]
+version = "0.48.5"
+criteria = "safe-to-deploy"
