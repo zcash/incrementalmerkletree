@@ -13,6 +13,12 @@ and this project adheres to Rust's notion of
 - `shardtree::prunable::{LocatedPrunableTree::frontier, FrontierError}`
 - `shardtree::ShardTree::frontier`
 
+### Fixed
+- Fixed a bug that could cause corruption of the `ShardTree` cap,
+  by creation of an invalid `Parent` node a the leaf level.
+- Fixed a bug that could cause incorrect node annotations to be
+  stored in rare circumstances.
+
 ## [0.6.1] - 2025-01-30
 
 ### Changed
