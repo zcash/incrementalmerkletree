@@ -34,6 +34,7 @@ pub use incrementalmerkletree::{
     frontier::{Frontier, NonEmptyFrontier},
     Address, Hashable, Level, Position, Retention, Source,
 };
+use std::cell::RefCell;
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::fmt::Debug;
 use std::ops::Range;
@@ -422,7 +423,7 @@ impl<C> Checkpoint<C> {
 
 /// A sparse representation of a Merkle tree with linear appending of leaves that contains enough
 /// information to produce a witness for any `mark`ed leaf.
-#[derive(Clone, PartialEq, Eq)]
+#[derive(Clone)]
 pub struct BridgeTree<H, C, const DEPTH: u8> {
     /// The ordered list of Merkle bridges representing the history
     /// of the tree. There will be one bridge for each saved leaf.
@@ -441,7 +442,30 @@ pub struct BridgeTree<H, C, const DEPTH: u8> {
     /// exceeded, the oldest checkpoint will be dropped when creating
     /// a new checkpoint.
     max_checkpoints: usize,
+    /// A memoized copy of the root of the current frontier (the root at checkpoint depth 0).
+    /// Computing this root requires hashing the frontier against empty subtree roots up to the
+    /// full depth of the tree, which is expensive relative to an append; since the frontier (and
+    /// therefore this root) changes only on `append` and `rewind`, we cache the value and clear
+    /// it in exactly those two operations. `checkpoint`, `mark`, `remove_mark`, and
+    /// `garbage_collect` all leave the frontier unchanged and so preserve the cache.
+    ///
+    /// This field is purely a derived cache: it is excluded from equality and is not part of the
+    /// tree's serialized form (reconstructed values start with an empty cache).
+    current_root: RefCell<Option<H>>,
 }
+
+impl<H: PartialEq, C: PartialEq, const DEPTH: u8> PartialEq for BridgeTree<H, C, DEPTH> {
+    fn eq(&self, other: &Self) -> bool {
+        // `current_root` is a derived cache and is deliberately not compared.
+        self.prior_bridges == other.prior_bridges
+            && self.current_bridge == other.current_bridge
+            && self.saved == other.saved
+            && self.checkpoints == other.checkpoints
+            && self.max_checkpoints == other.max_checkpoints
+    }
+}
+
+impl<H: Eq, C: Eq, const DEPTH: u8> Eq for BridgeTree<H, C, DEPTH> {}
 
 impl<H: Debug, C: Debug, const DEPTH: u8> Debug for BridgeTree<H, C, DEPTH> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> Result<(), std::fmt::Error> {
@@ -478,6 +502,7 @@ impl<H, C, const DEPTH: u8> BridgeTree<H, C, DEPTH> {
             saved: BTreeMap::new(),
             checkpoints: VecDeque::new(),
             max_checkpoints,
+            current_root: RefCell::new(None),
         }
     }
 
@@ -547,6 +572,7 @@ impl<H: Hashable + Clone + Ord, C: Clone + Ord, const DEPTH: u8> BridgeTree<H, C
             saved: BTreeMap::new(),
             checkpoints: VecDeque::new(),
             max_checkpoints,
+            current_root: RefCell::new(None),
         }
     }
 
@@ -572,6 +598,7 @@ impl<H: Hashable + Clone + Ord, C: Clone + Ord, const DEPTH: u8> BridgeTree<H, C
             saved,
             checkpoints,
             max_checkpoints,
+            current_root: RefCell::new(None),
         })
     }
 
@@ -640,10 +667,12 @@ impl<H: Hashable + Clone + Ord, C: Clone + Ord, const DEPTH: u8> BridgeTree<H, C
                 false
             } else {
                 bridge.append(value);
+                self.current_root.replace(None);
                 true
             }
         } else {
             self.current_bridge = Some(MerkleBridge::new(value));
+            self.current_root.replace(None);
             true
         }
     }
@@ -655,13 +684,23 @@ impl<H: Hashable + Clone + Ord, C: Clone + Ord, const DEPTH: u8> BridgeTree<H, C
     pub fn root(&self, checkpoint_depth: usize) -> Option<H> {
         let root_level = Level::from(DEPTH);
         if checkpoint_depth == 0 {
-            Some(
-                self.current_bridge
-                    .as_ref()
-                    .map_or(H::empty_root(root_level), |bridge| {
-                        bridge.frontier().root(Some(root_level))
-                    }),
-            )
+            // The root of the current frontier is memoized in `current_root`, which is cleared by
+            // `append` and `rewind` (the only operations that change the frontier). Repeated
+            // queries between mutations — e.g. one consistency check per connected block, where
+            // the common case is a block that appends no leaves — are then O(1) rather than
+            // re-folding the frontier against empty subtree roots up to the full tree depth.
+            if let Some(cached) = self.current_root.borrow().as_ref() {
+                return Some(cached.clone());
+            }
+
+            let root = self
+                .current_bridge
+                .as_ref()
+                .map_or(H::empty_root(root_level), |bridge| {
+                    bridge.frontier().root(Some(root_level))
+                });
+            *self.current_root.borrow_mut() = Some(root.clone());
+            Some(root)
         } else if self.checkpoints.len() >= checkpoint_depth {
             let checkpoint_idx = self.checkpoints.len() - checkpoint_depth;
             self.checkpoints
@@ -808,6 +847,7 @@ impl<H: Hashable + Clone + Ord, C: Clone + Ord, const DEPTH: u8> BridgeTree<H, C
                 .prior_bridges
                 .last()
                 .map(|b| b.successor(self.saved.contains_key(&b.position())));
+            self.current_root.replace(None);
             true
         } else {
             false

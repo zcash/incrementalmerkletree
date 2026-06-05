@@ -7,6 +7,16 @@ and this project adheres to Rust's notion of
 
 ## [Unreleased]
 
+### Changed
+- `BridgeTree::root(0)` (the root of the current frontier) is now memoized. The
+  cached value is cleared by `append` and `rewind`, the only operations that
+  change the frontier; `checkpoint`, `mark`, `remove_mark`, and
+  `garbage_collect` preserve it. Repeated root queries between mutations are now
+  `O(1)` rather than re-folding the frontier against empty subtree roots up to
+  the full depth of the tree. As a consequence `BridgeTree` no longer implements
+  `Sync` (it now holds an interior-mutable cache); it remains `Send`. Equality
+  and the serialized form are unaffected, as the cache is excluded from both.
+
 ## [0.7.0] - 2025-06-04
 
 ### Changed
