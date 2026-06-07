@@ -7,7 +7,7 @@ authors = [
     "Sean Bowe <ewillbefull@gmail.com>",
 ]
 edition = "2021"
-rust-version = "1.64"
+rust-version = "1.70"
 repository = "https://github.com/zcash/incrementalmerkletree"
 homepage = "https://github.com/zcash/incrementalmerkletree"
 license = "MIT OR Apache-2.0"

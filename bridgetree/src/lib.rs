@@ -34,10 +34,10 @@ pub use incrementalmerkletree::{
     frontier::{Frontier, NonEmptyFrontier},
     Address, Hashable, Level, Position, Retention, Source,
 };
-use std::cell::RefCell;
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::fmt::Debug;
 use std::ops::Range;
+use std::sync::OnceLock;
 
 /// Errors that can be discovered during checks that verify the compatibility of adjacent bridges.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -451,7 +451,7 @@ pub struct BridgeTree<H, C, const DEPTH: u8> {
     ///
     /// This field is purely a derived cache: it is excluded from equality and is not part of the
     /// tree's serialized form (reconstructed values start with an empty cache).
-    current_root: RefCell<Option<H>>,
+    current_root: OnceLock<H>,
 }
 
 impl<H: PartialEq, C: PartialEq, const DEPTH: u8> PartialEq for BridgeTree<H, C, DEPTH> {
@@ -502,7 +502,7 @@ impl<H, C, const DEPTH: u8> BridgeTree<H, C, DEPTH> {
             saved: BTreeMap::new(),
             checkpoints: VecDeque::new(),
             max_checkpoints,
-            current_root: RefCell::new(None),
+            current_root: OnceLock::new(),
         }
     }
 
@@ -572,7 +572,7 @@ impl<H: Hashable + Clone + Ord, C: Clone + Ord, const DEPTH: u8> BridgeTree<H, C
             saved: BTreeMap::new(),
             checkpoints: VecDeque::new(),
             max_checkpoints,
-            current_root: RefCell::new(None),
+            current_root: OnceLock::new(),
         }
     }
 
@@ -598,7 +598,7 @@ impl<H: Hashable + Clone + Ord, C: Clone + Ord, const DEPTH: u8> BridgeTree<H, C
             saved,
             checkpoints,
             max_checkpoints,
-            current_root: RefCell::new(None),
+            current_root: OnceLock::new(),
         })
     }
 
@@ -667,12 +667,12 @@ impl<H: Hashable + Clone + Ord, C: Clone + Ord, const DEPTH: u8> BridgeTree<H, C
                 false
             } else {
                 bridge.append(value);
-                self.current_root.replace(None);
+                self.current_root.take();
                 true
             }
         } else {
             self.current_bridge = Some(MerkleBridge::new(value));
-            self.current_root.replace(None);
+            self.current_root.take();
             true
         }
     }
@@ -689,18 +689,14 @@ impl<H: Hashable + Clone + Ord, C: Clone + Ord, const DEPTH: u8> BridgeTree<H, C
             // queries between mutations — e.g. one consistency check per connected block, where
             // the common case is a block that appends no leaves — are then O(1) rather than
             // re-folding the frontier against empty subtree roots up to the full tree depth.
-            if let Some(cached) = self.current_root.borrow().as_ref() {
-                return Some(cached.clone());
-            }
-
-            let root = self
-                .current_bridge
-                .as_ref()
-                .map_or(H::empty_root(root_level), |bridge| {
-                    bridge.frontier().root(Some(root_level))
-                });
-            *self.current_root.borrow_mut() = Some(root.clone());
-            Some(root)
+            let root = self.current_root.get_or_init(|| {
+                self.current_bridge
+                    .as_ref()
+                    .map_or(H::empty_root(root_level), |bridge| {
+                        bridge.frontier().root(Some(root_level))
+                    })
+            });
+            Some(root.clone())
         } else if self.checkpoints.len() >= checkpoint_depth {
             let checkpoint_idx = self.checkpoints.len() - checkpoint_depth;
             self.checkpoints
@@ -847,7 +843,7 @@ impl<H: Hashable + Clone + Ord, C: Clone + Ord, const DEPTH: u8> BridgeTree<H, C
                 .prior_bridges
                 .last()
                 .map(|b| b.successor(self.saved.contains_key(&b.position())));
-            self.current_root.replace(None);
+            self.current_root.take();
             true
         } else {
             false
@@ -1093,6 +1089,14 @@ mod tests {
             assert!(tree.append(c.to_string()))
         }
         assert!(!tree.append('i'.to_string()));
+    }
+
+    #[test]
+    fn bridgetree_is_send_and_sync() {
+        // The memoized root cache must keep `BridgeTree` both `Send` and `Sync`;
+        // a `RefCell`/`Cell` cache would silently make it `!Sync`.
+        fn assert_send_sync<T: Send + Sync>() {}
+        assert_send_sync::<BridgeTree<String, usize, 8>>();
     }
 
     fn check_garbage_collect<H: Hashable + Clone + Ord + Debug, const DEPTH: u8>(
