@@ -731,7 +731,7 @@ impl<H: Hashable + Clone + Ord, C: Clone + Ord, const DEPTH: u8> BridgeTree<H, C
                 if self
                     .prior_bridges
                     .last()
-                    .map_or(false, |prior_b| prior_b.position() == cur_b.position())
+                    .is_some_and(|prior_b| prior_b.position() == cur_b.position())
                 {
                     // the current bridge has not been advanced, so we just need to make
                     // sure that we have are tracking the marked leaf
@@ -800,7 +800,7 @@ impl<H: Hashable + Clone + Ord, C: Clone + Ord, const DEPTH: u8> BridgeTree<H, C
                     if self
                         .prior_bridges
                         .last()
-                        .map_or(false, |pb| pb.position() == cur_b.position())
+                        .is_some_and(|pb| pb.position() == cur_b.position())
                     {
                         self.current_bridge = Some(cur_b);
                     } else {
@@ -858,16 +858,10 @@ impl<H: Hashable + Clone + Ord, C: Clone + Ord, const DEPTH: u8> BridgeTree<H, C
         position: Position,
         checkpoint_depth: usize,
     ) -> Result<Vec<H>, WitnessingError> {
-        #[derive(Debug)]
-        enum AuthBase<'a, C> {
-            Current,
-            Checkpoint(usize, &'a Checkpoint<C>),
-        }
-
-        // Find the earliest checkpoint having a matching root, or the current
-        // root if it matches and there is no earlier matching checkpoint.
+        // Find the earliest checkpoint having a matching root, or None (meaning the
+        // current root) if it matches and there is no earlier matching checkpoint.
         let auth_base = if checkpoint_depth == 0 {
-            Ok(AuthBase::Current)
+            Ok(None)
         } else if self.checkpoints.len() >= checkpoint_depth {
             let c_idx = self.checkpoints.len() - checkpoint_depth;
             if self
@@ -885,7 +879,7 @@ impl<H: Hashable + Clone + Ord, C: Clone + Ord, const DEPTH: u8> BridgeTree<H, C
                 // created, so we can't treat it as marked.
                 Err(WitnessingError::PositionNotMarked(position))
             } else {
-                Ok(AuthBase::Checkpoint(c_idx, &self.checkpoints[c_idx]))
+                Ok(Some(&self.checkpoints[c_idx]))
             }
         } else {
             Err(WitnessingError::CheckpointInvalid)
@@ -903,7 +897,7 @@ impl<H: Hashable + Clone + Ord, C: Clone + Ord, const DEPTH: u8> BridgeTree<H, C
         // up to the specified checkpoint depth.
         let fuse_from = saved_idx + 1;
         let successor = match auth_base {
-            AuthBase::Current => {
+            None => {
                 // fuse all the way up to the current tip
                 MerkleBridge::fuse_all(
                     self.prior_bridges[fuse_from..]
@@ -913,13 +907,13 @@ impl<H: Hashable + Clone + Ord, C: Clone + Ord, const DEPTH: u8> BridgeTree<H, C
                 .map(|fused| fused.unwrap()) // safe as the iterator being fused is nonempty
                 .map_err(WitnessingError::BridgeFusionError)
             }
-            AuthBase::Checkpoint(_, checkpoint) if fuse_from < checkpoint.bridges_len => {
+            Some(checkpoint) if fuse_from < checkpoint.bridges_len => {
                 // fuse from the provided checkpoint
                 MerkleBridge::fuse_all(self.prior_bridges[fuse_from..checkpoint.bridges_len].iter())
                     .map(|fused| fused.unwrap()) // safe as the iterator being fused is nonempty
                     .map_err(WitnessingError::BridgeFusionError)
             }
-            AuthBase::Checkpoint(_, checkpoint) if fuse_from == checkpoint.bridges_len => {
+            Some(checkpoint) if fuse_from == checkpoint.bridges_len => {
                 // The successor bridge should just be the empty successor to the
                 // checkpointed bridge.
                 if checkpoint.bridges_len > 0 {
@@ -928,7 +922,7 @@ impl<H: Hashable + Clone + Ord, C: Clone + Ord, const DEPTH: u8> BridgeTree<H, C
                     Err(WitnessingError::CheckpointInvalid)
                 }
             }
-            AuthBase::Checkpoint(_, checkpoint) => {
+            Some(checkpoint) => {
                 // if the saved index is after the checkpoint, we can't generate
                 // an auth path
                 Err(WitnessingError::CheckpointTooDeep(
