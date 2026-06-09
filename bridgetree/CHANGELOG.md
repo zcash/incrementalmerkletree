@@ -5,7 +5,20 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to Rust's notion of
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [0.7.1] - 2026-06-07
+
+### Optimization
+- `BridgeTree::root(0)` (the root of the current frontier) is now memoized. The
+  cached value is cleared by `append` and `rewind`, the only operations that
+  change the frontier; `checkpoint`, `mark`, `remove_mark`, and
+  `garbage_collect` preserve it. Repeated root queries between mutations are now
+  `O(1)` rather than re-folding the frontier against empty subtree roots up to
+  the full depth of the tree. The cache uses `std::sync::OnceLock`, so `BridgeTree`
+  remains both `Send` and `Sync`. Equality and the serialized form are unaffected,
+  as the cache is excluded from both.
+
+### Changed
+- MSRV is now 1.70 (for `std::sync::OnceLock`).
 
 ## [0.7.0] - 2025-06-04
 
