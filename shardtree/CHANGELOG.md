@@ -42,6 +42,8 @@ and this project adheres to Rust's notion of
   retained anchors interleaved with the checkpoints being pruned. Repeated
   checkpoints sharing a tree position, as a stalled chain produces, triggered it
   within a single pruning window.
+- Checkpoint truncation now discards cached cap roots that commit to positions
+  beyond the checkpoint, so replacement commitments produce the correct root.
 
 
 ## [0.6.2] - 2026-02-20

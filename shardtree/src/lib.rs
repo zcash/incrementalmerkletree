@@ -870,18 +870,16 @@ impl<
                     .map_err(ShardTreeError::Storage)?
                     .and_then(|s| s.truncate_to_position(position));
 
-                let cap_tree = LocatedTree {
-                    root_addr: Self::root_addr(),
-                    root: self.store.get_cap().map_err(ShardTreeError::Storage)?,
-                };
+                if let Some(truncated) = replacement {
+                    let truncated_cap = LocatedTree {
+                        root_addr: Self::root_addr(),
+                        root: self.store.get_cap().map_err(ShardTreeError::Storage)?,
+                    }
+                    .truncate_cache_to_position(position);
 
-                if let Some(truncated_cap) = cap_tree.truncate_to_position(position) {
                     self.store
                         .put_cap(truncated_cap.root)
                         .map_err(ShardTreeError::Storage)?;
-                };
-
-                if let Some(truncated) = replacement {
                     self.store
                         .truncate_shards(subtree_addr.index())
                         .map_err(ShardTreeError::Storage)?;
@@ -2622,6 +2620,84 @@ mod tests {
         assert!(
             LocatedTree::from_parts(shifted_root_addr, cap).is_ok(),
             "Cap must not contain Parent nodes at or below shard level"
+        );
+    }
+
+    #[test]
+    fn truncate_clears_cap_hashes_beyond_checkpoint() {
+        fn insert_first_shard(tree: &mut ShardTree<MemoryShardStore<String, u32>, 6, 3>) {
+            tree.batch_insert(
+                Position::from(0),
+                ('a'..='h').map(|c| {
+                    (
+                        c.to_string(),
+                        if c == 'h' {
+                            Retention::Checkpoint {
+                                id: 1,
+                                marking: Marking::None,
+                            }
+                        } else {
+                            Retention::Ephemeral
+                        },
+                    )
+                }),
+            )
+            .unwrap();
+        }
+
+        let mut tree: ShardTree<MemoryShardStore<String, u32>, 6, 3> =
+            ShardTree::new(MemoryShardStore::empty(), 100);
+
+        // Simulate imported subtree roots and cache their combined hash.
+        tree.insert(
+            Address::from_parts(Level::from(3), 0),
+            "abcdefgh".to_string(),
+        )
+        .unwrap();
+        tree.insert(
+            Address::from_parts(Level::from(3), 1),
+            "ijklmnop".to_string(),
+        )
+        .unwrap();
+        assert_eq!(
+            tree.root_caching(
+                ShardTree::<MemoryShardStore<String, u32>, 6, 3>::root_addr(),
+                Position::from(16),
+            ),
+            Ok(format!("abcdefghijklmnop{}", "_".repeat(48)))
+        );
+
+        // Scanning replaces the first imported shard root with its leaves and records a
+        // checkpoint at the end of that shard.
+        insert_first_shard(&mut tree);
+
+        assert_eq!(tree.truncate_to_checkpoint(&1), Ok(true));
+
+        // The imported root committed to both shards. After truncation, inserting a
+        // replacement second shard must not reuse that stale cached root.
+        tree.insert(
+            Address::from_parts(Level::from(3), 1),
+            "IJKLMNOP".to_string(),
+        )
+        .unwrap();
+        let expected_root = format!("abcdefghIJKLMNOP{}", "_".repeat(48));
+        assert_eq!(
+            tree.root_at_checkpoint_depth(None),
+            Ok(Some(expected_root.clone()))
+        );
+
+        let mut reference: ShardTree<MemoryShardStore<String, u32>, 6, 3> =
+            ShardTree::new(MemoryShardStore::empty(), 100);
+        insert_first_shard(&mut reference);
+        reference
+            .insert(
+                Address::from_parts(Level::from(3), 1),
+                "IJKLMNOP".to_string(),
+            )
+            .unwrap();
+        assert_eq!(
+            reference.root_at_checkpoint_depth(None),
+            Ok(Some(expected_root))
         );
     }
 

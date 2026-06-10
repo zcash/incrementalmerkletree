@@ -789,6 +789,53 @@ where
         }
     }
 
+    /// Removes cached nodes and annotations that commit to positions beyond `position`.
+    ///
+    /// Unlike [`Self::truncate_to_position`], this may discard a cached leaf that spans the
+    /// boundary because the underlying shard data remains authoritative.
+    pub(crate) fn truncate_cache_to_position(&self, position: Position) -> Self {
+        /// Pre-condition: `root_addr` must be the address of `root`.
+        fn go<H>(position: Position, root_addr: Address, root: &PrunableTree<H>) -> PrunableTree<H>
+        where
+            H: Hashable + Clone + PartialEq,
+        {
+            if position < root_addr.position_range_start() {
+                Tree::empty()
+            } else if root_addr.max_position() <= position {
+                root.clone()
+            } else {
+                match &root.0 {
+                    Node::Parent { left, right, .. } => {
+                        let (l_child, r_child) = root_addr
+                            .children()
+                            .expect("has children because we checked `root` is a parent");
+                        if position < r_child.position_range_start() {
+                            Tree::unite(
+                                l_child.level(),
+                                None,
+                                go(position, l_child, left.as_ref()),
+                                Tree::empty(),
+                            )
+                        } else {
+                            Tree::unite(
+                                l_child.level(),
+                                None,
+                                left.as_ref().clone(),
+                                go(position, r_child, right.as_ref()),
+                            )
+                        }
+                    }
+                    Node::Leaf { .. } | Node::Nil => Tree::empty(),
+                }
+            }
+        }
+
+        LocatedTree {
+            root_addr: self.root_addr,
+            root: go(position, self.root_addr, &self.root),
+        }
+    }
+
     /// Inserts a descendant subtree into this subtree, creating empty sibling nodes as necessary
     /// to fill out the tree.
     ///
@@ -1304,6 +1351,7 @@ fn accumulate_result_with<A, B, C>(
 mod tests {
     use assert_matches::assert_matches;
     use std::collections::{BTreeMap, BTreeSet};
+    use std::sync::Arc;
 
     use incrementalmerkletree::{frontier::NonEmptyFrontier, Address, Level, Position};
     use proptest::proptest;
@@ -1315,7 +1363,7 @@ mod tests {
         testing::{arb_char_str, arb_prunable_tree},
         tree::{
             tests::{leaf, nil, parent},
-            LocatedTree,
+            LocatedTree, Tree,
         },
     };
 
@@ -1386,6 +1434,65 @@ mod tests {
                 leaf(("c".to_string(), RetentionFlags::MARKED)),
                 leaf(("ab".to_string(), RetentionFlags::EPHEMERAL))
             )
+        );
+    }
+
+    #[test]
+    fn truncate_cache_to_position_discards_nodes_that_span_cut() {
+        let root_addr = Address::from_parts(2.into(), 0);
+        let tree: LocatedPrunableTree<String> = LocatedTree {
+            root_addr,
+            root: parent(
+                parent(
+                    leaf(("a".to_string(), RetentionFlags::EPHEMERAL)),
+                    leaf(("b".to_string(), RetentionFlags::EPHEMERAL)),
+                ),
+                leaf(("cd".to_string(), RetentionFlags::EPHEMERAL)),
+            ),
+        };
+        assert_eq!(
+            tree.truncate_cache_to_position(Position::from(2)),
+            LocatedTree {
+                root_addr,
+                root: parent(
+                    parent(
+                        leaf(("a".to_string(), RetentionFlags::EPHEMERAL)),
+                        leaf(("b".to_string(), RetentionFlags::EPHEMERAL)),
+                    ),
+                    nil(),
+                ),
+            }
+        );
+
+        let annotated: LocatedPrunableTree<String> = LocatedTree {
+            root_addr,
+            root: Tree::parent(
+                Some(Arc::new("abcd".to_string())),
+                Tree::parent(
+                    Some(Arc::new("ab".to_string())),
+                    leaf(("a".to_string(), RetentionFlags::EPHEMERAL)),
+                    leaf(("b".to_string(), RetentionFlags::EPHEMERAL)),
+                ),
+                parent(
+                    leaf(("c".to_string(), RetentionFlags::EPHEMERAL)),
+                    leaf(("d".to_string(), RetentionFlags::EPHEMERAL)),
+                ),
+            ),
+        };
+        assert_eq!(
+            annotated.truncate_cache_to_position(Position::from(2)),
+            LocatedTree {
+                root_addr,
+                root: Tree::parent(
+                    None,
+                    Tree::parent(
+                        Some(Arc::new("ab".to_string())),
+                        leaf(("a".to_string(), RetentionFlags::EPHEMERAL)),
+                        leaf(("b".to_string(), RetentionFlags::EPHEMERAL)),
+                    ),
+                    parent(leaf(("c".to_string(), RetentionFlags::EPHEMERAL)), nil()),
+                ),
+            }
         );
     }
 
