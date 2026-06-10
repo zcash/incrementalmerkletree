@@ -597,59 +597,86 @@ impl<H: Hashable + Clone + PartialEq> LocatedPrunableTree<H> {
         }
     }
 
-    /// Prunes this tree by replacing all nodes that are right-hand children along the path
-    /// to the specified position with [`Node::Nil`].
+    /// Truncates this tree, discarding every node that commits to any position beyond the
+    /// specified position and retreating the truncation boundary as necessary so that no
+    /// retained node commits to discarded data.
     ///
-    /// The leaf at the specified position is retained. Returns the truncated tree if a leaf or
-    /// subtree root with the specified position as its maximum position exists, or `None`
-    /// otherwise.
-    pub fn truncate_to_position(&self, position: Position) -> Option<Self> {
+    /// If the path toward the position ends at a pruned leaf committing to later positions,
+    /// or at a [`Node::Nil`] node, that node is discarded and the boundary retreats to the
+    /// position preceding its range. Parent annotations whose ranges extend beyond the
+    /// boundary are discarded for the same reason.
+    ///
+    /// Returns the truncated tree and the achieved boundary: the greatest position, at most
+    /// the requested one, beyond which no retained node commits to data (a leaf need not
+    /// exist there). `None` means nothing could be retained; the returned tree is empty.
+    pub fn truncate_to_position(&self, position: Position) -> (Self, Option<Position>) {
         /// Pre-condition: `root_addr` must be the address of `root`.
         fn go<H: Hashable + Clone + PartialEq>(
             position: Position,
             root_addr: Address,
             root: &PrunableTree<H>,
-        ) -> Option<PrunableTree<H>> {
-            match &root.0 {
-                Node::Parent { ann, left, right } => {
-                    let (l_child, r_child) = root_addr
-                        .children()
-                        .expect("has children because we checked `root` is a parent");
-                    if position < r_child.position_range_start() {
-                        // we are truncating within the range of the left node, so recurse
-                        // to the left to truncate the left child and then reconstruct the
-                        // node with `Nil` as the right sibling
-                        go(position, l_child, left.as_ref()).map(|left| {
-                            Tree::unite(l_child.level(), ann.clone(), left, Tree::empty())
-                        })
-                    } else {
-                        // we are truncating within the range of the right node, so recurse
-                        // to the right to truncate the right child and then reconstruct the
-                        // node with the left sibling unchanged
-                        go(position, r_child, right.as_ref()).map(|right| {
-                            Tree::unite(r_child.level(), ann.clone(), left.as_ref().clone(), right)
-                        })
+        ) -> (PrunableTree<H>, Option<Position>) {
+            if root_addr.max_position() <= position {
+                // the subtree commits to nothing beyond the truncation position; even its
+                // annotations are safe to retain
+                (root.clone(), Some(position))
+            } else {
+                match &root.0 {
+                    Node::Parent { left, right, .. } => {
+                        let (l_child, r_child) = root_addr
+                            .children()
+                            .expect("has children because we checked `root` is a parent");
+                        // both arms drop the annotation: this node's range extends beyond the cut
+                        if position < r_child.position_range_start() {
+                            // we are truncating within the range of the left node, so recurse
+                            // to the left to truncate the left child and then reconstruct the
+                            // node with `Nil` as the right sibling
+                            let (left, boundary) = go(position, l_child, left.as_ref());
+                            (
+                                Tree::unite(l_child.level(), None, left, Tree::empty()),
+                                boundary,
+                            )
+                        } else {
+                            // we are truncating within the range of the right node, so recurse
+                            // to the right to truncate the right child and then reconstruct the
+                            // node with the left sibling unchanged
+                            let (right, boundary) = go(position, r_child, right.as_ref());
+                            (
+                                Tree::unite(r_child.level(), None, left.as_ref().clone(), right),
+                                boundary,
+                            )
+                        }
+                    }
+                    // a pruned leaf here commits to data beyond the truncation position, and
+                    // a `Nil` node admits no cut within its range: discard and retreat
+                    Node::Leaf { .. } | Node::Nil => {
+                        let range_start = root_addr.position_range_start();
+                        (
+                            Tree::empty(),
+                            if range_start == Position::from(0) {
+                                None
+                            } else {
+                                Some(range_start - 1)
+                            },
+                        )
                     }
                 }
-                Node::Leaf { .. } => {
-                    if root_addr.max_position() <= position {
-                        Some(root.clone())
-                    } else {
-                        None
-                    }
-                }
-                Node::Nil => None,
             }
         }
 
-        if self.root_addr.position_range().contains(&position) {
-            go(position, self.root_addr, &self.root).map(|root| LocatedTree {
+        let (root, boundary) = if position < self.root_addr.position_range_start() {
+            (Tree::empty(), None)
+        } else {
+            go(position, self.root_addr, &self.root)
+        };
+
+        (
+            LocatedTree {
                 root_addr: self.root_addr,
                 root,
-            })
-        } else {
-            None
-        }
+            },
+            boundary,
+        )
     }
 
     /// Inserts a descendant subtree into this subtree, creating empty sibling nodes as necessary
@@ -1155,6 +1182,7 @@ fn accumulate_result_with<A, B, C>(
 mod tests {
     use assert_matches::assert_matches;
     use std::collections::{BTreeMap, BTreeSet};
+    use std::sync::Arc;
 
     use incrementalmerkletree::{frontier::NonEmptyFrontier, Address, Level, Position};
     use proptest::proptest;
@@ -1166,7 +1194,7 @@ mod tests {
         testing::{arb_char_str, arb_prunable_tree},
         tree::{
             tests::{leaf, nil, parent},
-            LocatedTree,
+            LocatedTree, Tree,
         },
     };
 
@@ -1236,6 +1264,162 @@ mod tests {
             parent(
                 leaf(("c".to_string(), RetentionFlags::MARKED)),
                 leaf(("ab".to_string(), RetentionFlags::EPHEMERAL))
+            )
+        );
+    }
+
+    #[test]
+    fn truncate_to_position() {
+        let root_addr = Address::from_parts(2.into(), 0);
+        let t: LocatedPrunableTree<String> = LocatedTree {
+            root_addr,
+            root: parent(
+                parent(
+                    leaf(("a".to_string(), RetentionFlags::EPHEMERAL)),
+                    leaf(("b".to_string(), RetentionFlags::EPHEMERAL)),
+                ),
+                parent(
+                    leaf(("c".to_string(), RetentionFlags::EPHEMERAL)),
+                    leaf(("d".to_string(), RetentionFlags::EPHEMERAL)),
+                ),
+            ),
+        };
+
+        // Truncation at a position whose leaf is present in the tree succeeds exactly.
+        assert_eq!(
+            t.truncate_to_position(Position::from(2)),
+            (
+                LocatedTree {
+                    root_addr,
+                    root: parent(
+                        parent(
+                            leaf(("a".to_string(), RetentionFlags::EPHEMERAL)),
+                            leaf(("b".to_string(), RetentionFlags::EPHEMERAL)),
+                        ),
+                        parent(leaf(("c".to_string(), RetentionFlags::EPHEMERAL)), nil()),
+                    ),
+                },
+                Some(Position::from(2))
+            )
+        );
+
+        // Truncation at or beyond the maximum position of the tree retains the tree
+        // unmodified.
+        assert_eq!(
+            t.truncate_to_position(Position::from(7)),
+            (t.clone(), Some(Position::from(7)))
+        );
+
+        // Truncation at a position preceding the tree's range discards the entire tree.
+        let t0 = LocatedTree {
+            root_addr: Address::from_parts(2.into(), 1),
+            root: t.root,
+        };
+        assert_eq!(
+            t0.truncate_to_position(Position::from(3)),
+            (
+                LocatedTree {
+                    root_addr: Address::from_parts(2.into(), 1),
+                    root: nil(),
+                },
+                None
+            )
+        );
+
+        // When the truncation position lands within the range of a pruned leaf, the leaf
+        // is discarded and the boundary retreats to the position preceding its range.
+        let t1: LocatedPrunableTree<String> = LocatedTree {
+            root_addr,
+            root: parent(
+                parent(
+                    leaf(("a".to_string(), RetentionFlags::EPHEMERAL)),
+                    leaf(("b".to_string(), RetentionFlags::EPHEMERAL)),
+                ),
+                leaf(("cd".to_string(), RetentionFlags::EPHEMERAL)),
+            ),
+        };
+        assert_eq!(
+            t1.truncate_to_position(Position::from(2)),
+            (
+                LocatedTree {
+                    root_addr,
+                    root: parent(
+                        parent(
+                            leaf(("a".to_string(), RetentionFlags::EPHEMERAL)),
+                            leaf(("b".to_string(), RetentionFlags::EPHEMERAL)),
+                        ),
+                        nil(),
+                    ),
+                },
+                Some(Position::from(1))
+            )
+        );
+
+        // A pruned leaf spanning the entire tree leaves nothing to retain.
+        let t2: LocatedPrunableTree<String> = LocatedTree {
+            root_addr,
+            root: leaf(("abcd".to_string(), RetentionFlags::EPHEMERAL)),
+        };
+        assert_eq!(
+            t2.truncate_to_position(Position::from(2)),
+            (
+                LocatedTree {
+                    root_addr,
+                    root: nil(),
+                },
+                None
+            )
+        );
+
+        // Descent into a `Nil` node likewise retreats to the position preceding its range.
+        let t3: LocatedPrunableTree<String> = LocatedTree {
+            root_addr,
+            root: parent(
+                parent(
+                    leaf(("a".to_string(), RetentionFlags::EPHEMERAL)),
+                    leaf(("b".to_string(), RetentionFlags::EPHEMERAL)),
+                ),
+                nil(),
+            ),
+        };
+        assert_eq!(
+            t3.truncate_to_position(Position::from(2)),
+            (t3, Some(Position::from(1)))
+        );
+
+        // The annotation of a parent whose range extends beyond the truncation position is
+        // discarded, while the annotations of fully retained subtrees are preserved.
+        let t4: LocatedPrunableTree<String> = LocatedTree {
+            root_addr,
+            root: Tree::parent(
+                Some(Arc::new("abcd".to_string())),
+                Tree::parent(
+                    Some(Arc::new("ab".to_string())),
+                    leaf(("a".to_string(), RetentionFlags::EPHEMERAL)),
+                    leaf(("b".to_string(), RetentionFlags::EPHEMERAL)),
+                ),
+                parent(
+                    leaf(("c".to_string(), RetentionFlags::EPHEMERAL)),
+                    leaf(("d".to_string(), RetentionFlags::EPHEMERAL)),
+                ),
+            ),
+        };
+        assert_eq!(
+            t4.truncate_to_position(Position::from(2)),
+            (
+                LocatedTree {
+                    root_addr,
+                    root: Tree::parent(
+                        None,
+                        Tree::parent(
+                            Some(Arc::new("ab".to_string())),
+                            leaf(("a".to_string(), RetentionFlags::EPHEMERAL)),
+                            leaf(("b".to_string(), RetentionFlags::EPHEMERAL)),
+                        ),
+                        parent(leaf(("c".to_string(), RetentionFlags::EPHEMERAL)), nil()),
+                    ),
+                },
+                Some(Position::from(2))
             )
         );
     }

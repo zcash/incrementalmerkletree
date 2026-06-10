@@ -8,7 +8,7 @@ use incrementalmerkletree::Hashable;
 use incrementalmerkletree_testing as testing;
 
 use super::*;
-use crate::store::{memory::MemoryShardStore, ShardStore};
+use crate::store::{memory::MemoryShardStore, ShardStore, TreeState};
 
 pub fn arb_retention_flags() -> impl Strategy<Value = RetentionFlags> + Clone {
     select(vec![
@@ -225,7 +225,9 @@ impl<
     }
 
     fn rewind(&mut self, checkpoint_depth: usize) -> bool {
-        ShardTree::truncate_to_checkpoint_depth(self, checkpoint_depth).unwrap()
+        ShardTree::truncate_to_checkpoint_depth(self, checkpoint_depth)
+            .unwrap()
+            .is_some()
     }
 }
 
@@ -323,7 +325,10 @@ pub fn check_shardtree_insertion<
         ]
     );
 
-    assert_matches!(tree.truncate_to_checkpoint_depth(0), Ok(true));
+    assert_matches!(
+        tree.truncate_to_checkpoint_depth(0),
+        Ok(Some(TreeState::AtPosition(pos))) if pos == Position::from(11)
+    );
 
     assert_matches!(
         tree.batch_insert(

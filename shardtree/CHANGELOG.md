@@ -7,6 +7,27 @@ and this project adheres to Rust's notion of
 
 ## Unreleased
 
+### Changed
+- `shardtree::ShardTree::{truncate_to_checkpoint, truncate_to_checkpoint_depth}`
+  now return `Result<Option<shardtree::store::TreeState>, ...>` instead of
+  `Result<bool, ...>`. `None` replaces `false` (no such checkpoint); `Some`
+  reports the tree state actually achieved, which may be earlier than the
+  checkpointed position if pruning prevents an exact truncation. In that case
+  checkpoints beyond the achieved state (including the requested one) are
+  removed, and the caller must restore the missing range, e.g. by rescanning.
+- `shardtree::LocatedPrunableTree::truncate_to_position` now returns
+  `(Self, Option<Position>)` instead of `Option<Self>`. Truncation always
+  succeeds, retreating the boundary when pruning prevents an exact cut; the
+  returned position is the boundary actually achieved. Parent annotations
+  committing to discarded data are now also discarded.
+
+### Fixed
+- `shardtree::ShardTree::{truncate_to_checkpoint, truncate_to_checkpoint_depth}`
+  no longer silently leave the tree unmodified when the checkpointed position
+  falls within a pruned node. The stale retained hashes previously caused
+  persistent `InsertionError::Conflict` failures when re-inserting subtree
+  data after a chain reorg.
+
 ## [0.6.2] - 2026-02-20
 
 ### Added

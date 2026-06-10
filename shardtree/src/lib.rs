@@ -655,99 +655,143 @@ impl<
     /// Truncates the tree, discarding all information after the checkpoint at the specified
     /// checkpoint depth.
     ///
-    /// Returns `true` if the truncation succeeds or has no effect, or `false` if no checkpoint
-    /// exists at the specified depth. Depth 0 refers to the most recent checkpoint in the tree;
+    /// Returns `Ok(None)`, leaving the tree unmodified, if no checkpoint exists at the
+    /// specified depth; otherwise returns the achieved [`TreeState`]. See
+    /// [`Self::truncate_to_checkpoint`] for the semantics when the achieved state retreats
+    /// from the checkpointed position.
     ///
     /// ## Parameters
     /// - `checkpoint_depth`: A zero-based index over the checkpoints that have been added to the
-    ///   tree, in reverse checkpoint identifier order.
+    ///   tree, in reverse checkpoint identifier order. Depth 0 is the most recent checkpoint.
     pub fn truncate_to_checkpoint_depth(
         &mut self,
         checkpoint_depth: usize,
-    ) -> Result<bool, ShardTreeError<S::Error>> {
+    ) -> Result<Option<TreeState>, ShardTreeError<S::Error>> {
         if let Some((checkpoint_id, c)) = self
             .store
             .get_checkpoint_at_depth(checkpoint_depth)
             .map_err(ShardTreeError::Storage)?
         {
-            self.truncate_to_checkpoint_internal(&checkpoint_id, &c)?;
-            Ok(true)
+            self.truncate_to_checkpoint_internal(&checkpoint_id, &c)
+                .map(Some)
         } else {
-            Ok(false)
+            Ok(None)
         }
     }
 
     /// Truncates the tree, discarding all information after the specified checkpoint.
     ///
-    /// Returns `true` if the truncation succeeds or has no effect, or `false` if no checkpoint
-    /// exists for the specified checkpoint identifier.
+    /// Returns `Ok(None)`, leaving the tree unmodified, if the checkpoint does not exist;
+    /// otherwise returns the achieved [`TreeState`]. If pruning makes an exact truncation at
+    /// the checkpointed position impossible, the boundary retreats to the closest preceding
+    /// position at which no retained node commits to discarded data, and every checkpoint
+    /// beyond that boundary (including the specified one) is removed. The caller must then
+    /// restore the discarded range, e.g. by rescanning from the achieved tree state.
     pub fn truncate_to_checkpoint(
         &mut self,
         checkpoint_id: &C,
-    ) -> Result<bool, ShardTreeError<S::Error>> {
+    ) -> Result<Option<TreeState>, ShardTreeError<S::Error>> {
         if let Some(c) = self
             .store
             .get_checkpoint(checkpoint_id)
             .map_err(ShardTreeError::Storage)?
         {
-            self.truncate_to_checkpoint_internal(checkpoint_id, &c)?;
-            Ok(true)
+            self.truncate_to_checkpoint_internal(checkpoint_id, &c)
+                .map(Some)
         } else {
-            Ok(false)
+            Ok(None)
         }
     }
 
+    /// Truncates the tree at the position of the provided checkpoint; see
+    /// [`Self::truncate_to_checkpoint`] for the semantics.
     fn truncate_to_checkpoint_internal(
         &mut self,
         checkpoint_id: &C,
         checkpoint: &Checkpoint,
-    ) -> Result<(), ShardTreeError<S::Error>> {
-        match checkpoint.tree_state() {
+    ) -> Result<TreeState, ShardTreeError<S::Error>> {
+        let achieved = match checkpoint.tree_state() {
+            TreeState::Empty => TreeState::Empty,
+            TreeState::AtPosition(position) => {
+                let subtree_addr = Self::subtree_addr(position);
+                let (truncated, boundary) = self
+                    .store
+                    .get_shard(subtree_addr)
+                    .map_err(ShardTreeError::Storage)?
+                    .unwrap_or_else(|| LocatedTree::empty(subtree_addr))
+                    .truncate_to_position(position);
+
+                match boundary {
+                    Some(boundary) => {
+                        self.store
+                            .truncate_shards(subtree_addr.index())
+                            .map_err(ShardTreeError::Storage)?;
+                        if !truncated.root().is_empty() {
+                            self.store
+                                .put_shard(truncated)
+                                .map_err(ShardTreeError::Storage)?;
+                        }
+                        TreeState::AtPosition(boundary)
+                    }
+                    None => TreeState::Empty,
+                }
+            }
+        };
+
+        match achieved {
             TreeState::Empty => {
                 self.store
                     .truncate_shards(0)
                     .map_err(ShardTreeError::Storage)?;
                 self.store
-                    .truncate_checkpoints_retaining(checkpoint_id)
-                    .map_err(ShardTreeError::Storage)?;
-                self.store
                     .put_cap(Tree::empty())
                     .map_err(ShardTreeError::Storage)?;
             }
-            TreeState::AtPosition(position) => {
-                let subtree_addr = Self::subtree_addr(position);
-                let replacement = self
-                    .store
-                    .get_shard(subtree_addr)
-                    .map_err(ShardTreeError::Storage)?
-                    .and_then(|s| s.truncate_to_position(position));
-
-                let cap_tree = LocatedTree {
+            TreeState::AtPosition(boundary) => {
+                // Truncating the cap at the achieved boundary (not the checkpointed position)
+                // keeps it from retaining hashes that commit to discarded data. The cap's own
+                // reported boundary is ignorable: for cap nodes at or below shard level the
+                // discarded hashes are recomputable from the stored shards, so this is cache
+                // eviction rather than data loss.
+                let (truncated_cap, _) = LocatedTree {
                     root_addr: Self::root_addr(),
                     root: self.store.get_cap().map_err(ShardTreeError::Storage)?,
-                };
-
-                if let Some(truncated_cap) = cap_tree.truncate_to_position(position) {
-                    self.store
-                        .put_cap(truncated_cap.root)
-                        .map_err(ShardTreeError::Storage)?;
-                };
-
-                if let Some(truncated) = replacement {
-                    self.store
-                        .truncate_shards(subtree_addr.index())
-                        .map_err(ShardTreeError::Storage)?;
-                    self.store
-                        .put_shard(truncated)
-                        .map_err(ShardTreeError::Storage)?;
-                    self.store
-                        .truncate_checkpoints_retaining(checkpoint_id)
-                        .map_err(ShardTreeError::Storage)?;
                 }
+                .truncate_to_position(boundary);
+                self.store
+                    .put_cap(truncated_cap.root)
+                    .map_err(ShardTreeError::Storage)?;
             }
         }
 
-        Ok(())
+        self.store
+            .truncate_checkpoints_retaining(checkpoint_id)
+            .map_err(ShardTreeError::Storage)?;
+
+        // Checkpoints beyond the achieved boundary (including the truncation target)
+        // describe states the tree can no longer represent.
+        if achieved != checkpoint.tree_state() {
+            let checkpoint_count = self
+                .store
+                .checkpoint_count()
+                .map_err(ShardTreeError::Storage)?;
+            let mut beyond_boundary = vec![];
+            self.store
+                .for_each_checkpoint(checkpoint_count, |checkpoint_id, c| {
+                    if c.tree_state() > achieved {
+                        beyond_boundary.push(checkpoint_id.clone());
+                    }
+                    Ok(())
+                })
+                .map_err(ShardTreeError::Storage)?;
+            for checkpoint_id in beyond_boundary {
+                self.store
+                    .remove_checkpoint(&checkpoint_id)
+                    .map_err(ShardTreeError::Storage)?;
+            }
+        }
+
+        Ok(achieved)
     }
 
     /// Computes the root of any subtree of this tree rooted at the given address, with the overall
@@ -1473,7 +1517,7 @@ mod tests {
 
     use crate::{
         error::{QueryError, ShardTreeError},
-        store::{memory::MemoryShardStore, ShardStore},
+        store::{memory::MemoryShardStore, Checkpoint, ShardStore, TreeState},
         testing::{
             arb_char_str, arb_shardtree, check_shard_sizes, check_shardtree_insertion,
             check_witness_with_pruned_subtrees,
@@ -2045,6 +2089,226 @@ mod tests {
             LocatedTree::from_parts(shifted_root_addr, cap).is_ok(),
             "Cap must not contain Parent nodes at or below shard level"
         );
+    }
+
+    /// A tree of two shards whose contents have been pruned into the two shard root
+    /// hashes, as a wallet holds after importing light-client subtree roots.
+    fn two_pruned_shards_tree() -> ShardTree<MemoryShardStore<String, u32>, 6, 3> {
+        let mut tree: ShardTree<MemoryShardStore<String, u32>, 6, 3> =
+            ShardTree::new(MemoryShardStore::empty(), 100);
+        tree.insert(
+            Address::from_parts(Level::from(3), 0),
+            "abcdefgh".to_string(),
+        )
+        .unwrap();
+        tree.insert(
+            Address::from_parts(Level::from(3), 1),
+            "ijklmnop".to_string(),
+        )
+        .unwrap();
+        tree
+    }
+
+    #[test]
+    fn truncate_retreats_within_pruned_leaf() {
+        let mut tree = two_pruned_shards_tree();
+
+        // position 9 lies inside the pruned second shard
+        tree.store_mut()
+            .add_checkpoint(1, Checkpoint::at_position(Position::from(9)))
+            .unwrap();
+
+        // The pruned leaf containing position 9 commits to data through position 15, so
+        // the truncation must discard it, retreating to the end of the first shard.
+        assert_eq!(
+            tree.truncate_to_checkpoint(&1),
+            Ok(Some(TreeState::AtPosition(Position::from(7))))
+        );
+
+        // the target checkpoint is beyond the achieved boundary, so it was removed
+        assert_matches!(tree.store().get_checkpoint(&1), Ok(None));
+
+        // Inserting different data for the discarded range, as a wallet rescanning after
+        // a chain reorg does, must succeed instead of reporting a conflict with hashes
+        // committing to the pre-reorg chain state.
+        tree.insert(
+            Address::from_parts(Level::from(3), 1),
+            "IJKLMNOP".to_string(),
+        )
+        .unwrap();
+        assert_eq!(
+            tree.root_at_checkpoint_depth(None),
+            Ok(Some(format!("abcdefghIJKLMNOP{}", "_".repeat(48))))
+        );
+    }
+
+    #[test]
+    fn truncate_retreats_at_nil_node() {
+        let mut tree: ShardTree<MemoryShardStore<String, u32>, 6, 3> =
+            ShardTree::new(MemoryShardStore::empty(), 100);
+
+        // positions 10..=15 remain unobserved
+        tree.batch_insert(
+            Position::from(0),
+            ('a'..='j').map(|c| (c.to_string(), Retention::Ephemeral)),
+        )
+        .unwrap();
+
+        // Add a checkpoint at a position in the unobserved region of the second shard.
+        tree.store_mut()
+            .add_checkpoint(1, Checkpoint::at_position(Position::from(12)))
+            .unwrap();
+
+        // Truncation toward position 12 descends into the `Nil` subtree covering
+        // positions 12..=15, so the boundary retreats to position 11.
+        assert_eq!(
+            tree.truncate_to_checkpoint(&1),
+            Ok(Some(TreeState::AtPosition(Position::from(11))))
+        );
+        assert_matches!(tree.store().get_checkpoint(&1), Ok(None));
+
+        // The retained data for positions 0..=9 must be untouched, and the tree must
+        // accept newly inserted data for the positions beyond it.
+        tree.batch_insert(
+            Position::from(10),
+            ('k'..='p').map(|c| (c.to_string(), Retention::Ephemeral)),
+        )
+        .unwrap();
+        assert_eq!(
+            tree.root_at_checkpoint_depth(None),
+            Ok(Some(format!("abcdefghijklmnop{}", "_".repeat(48))))
+        );
+    }
+
+    #[test]
+    fn truncate_reports_empty_tree_when_nothing_survives() {
+        let mut tree: ShardTree<MemoryShardStore<String, u32>, 6, 3> =
+            ShardTree::new(MemoryShardStore::empty(), 100);
+
+        tree.insert(
+            Address::from_parts(Level::from(3), 0),
+            "abcdefgh".to_string(),
+        )
+        .unwrap();
+        tree.store_mut()
+            .add_checkpoint(1, Checkpoint::at_position(Position::from(3)))
+            .unwrap();
+
+        // The pruned leaf containing position 3 spans the entire first shard, so nothing
+        // at or before the checkpointed position survives the truncation.
+        assert_eq!(tree.truncate_to_checkpoint(&1), Ok(Some(TreeState::Empty)));
+        assert_matches!(tree.store().get_checkpoint(&1), Ok(None));
+        assert_eq!(tree.store().get_shard_roots(), Ok(vec![]));
+
+        // The tree must accept a fresh insertion of different data for the same range.
+        tree.insert(
+            Address::from_parts(Level::from(3), 0),
+            "ABCDEFGH".to_string(),
+        )
+        .unwrap();
+        assert_eq!(
+            tree.root_at_checkpoint_depth(None),
+            Ok(Some(format!("ABCDEFGH{}", "_".repeat(56))))
+        );
+    }
+
+    #[test]
+    fn truncate_clears_cap_hashes_beyond_achieved_boundary() {
+        fn insert_leaves(tree: &mut ShardTree<MemoryShardStore<String, u32>, 6, 3>) {
+            tree.batch_insert(
+                Position::from(0),
+                ('a'..='h').map(|c| {
+                    (
+                        c.to_string(),
+                        if c == 'h' {
+                            Retention::Checkpoint {
+                                id: 1,
+                                marking: Marking::None,
+                            }
+                        } else {
+                            Retention::Ephemeral
+                        },
+                    )
+                }),
+            )
+            .unwrap();
+        }
+
+        let mut tree: ShardTree<MemoryShardStore<String, u32>, 6, 3> =
+            ShardTree::new(MemoryShardStore::empty(), 100);
+
+        // Insert a pruned node spanning the first two shards into the cap, along with the
+        // leaf data for the first shard; the leaf data for the second shard is unknown.
+        tree.insert(
+            Address::from_parts(Level::from(4), 0),
+            "abcdefghijklmnop".to_string(),
+        )
+        .unwrap();
+        insert_leaves(&mut tree);
+
+        // The checkpointed position is the maximum position of the first shard, so the
+        // truncation succeeds exactly and the checkpoint is retained.
+        assert_eq!(
+            tree.truncate_to_checkpoint(&1),
+            Ok(Some(TreeState::AtPosition(Position::from(7))))
+        );
+        assert_matches!(tree.store().get_checkpoint(&1), Ok(Some(_)));
+
+        // The cap node spanning positions 0..=15 committed to the discarded contents of
+        // the second shard, so it must not have survived the truncation; the root must
+        // reflect newly inserted data for the second shard rather than a stale cached
+        // hash.
+        tree.insert(
+            Address::from_parts(Level::from(3), 1),
+            "IJKLMNOP".to_string(),
+        )
+        .unwrap();
+        let expected_root = format!("abcdefghIJKLMNOP{}", "_".repeat(48));
+        assert_eq!(
+            tree.root_at_checkpoint_depth(None),
+            Ok(Some(expected_root.clone()))
+        );
+
+        // The recomputed root must agree with that of a freshly constructed reference
+        // tree containing the same data.
+        let mut reference: ShardTree<MemoryShardStore<String, u32>, 6, 3> =
+            ShardTree::new(MemoryShardStore::empty(), 100);
+        insert_leaves(&mut reference);
+        reference
+            .insert(
+                Address::from_parts(Level::from(3), 1),
+                "IJKLMNOP".to_string(),
+            )
+            .unwrap();
+        assert_eq!(
+            reference.root_at_checkpoint_depth(None),
+            Ok(Some(expected_root))
+        );
+    }
+
+    #[test]
+    fn truncate_removes_checkpoints_beyond_achieved_boundary() {
+        let mut tree = two_pruned_shards_tree();
+        for (id, pos) in [(1, 3), (2, 9), (3, 12)] {
+            tree.store_mut()
+                .add_checkpoint(id, Checkpoint::at_position(Position::from(pos)))
+                .unwrap();
+        }
+
+        // Truncation to the checkpoint at position 9 retreats to position 7. The
+        // requested checkpoint and the later checkpoint are removed; the checkpoint at
+        // position 3 is retained because its position does not exceed the achieved
+        // boundary.
+        assert_eq!(
+            tree.truncate_to_checkpoint(&2),
+            Ok(Some(TreeState::AtPosition(Position::from(7))))
+        );
+        assert_matches!(tree.store().get_checkpoint(&1), Ok(Some(_)));
+        assert_matches!(tree.store().get_checkpoint(&2), Ok(None));
+        assert_matches!(tree.store().get_checkpoint(&3), Ok(None));
+        assert_eq!(tree.store().checkpoint_count(), Ok(1));
+
+        assert_eq!(tree.truncate_to_checkpoint(&42), Ok(None));
     }
 
     #[test]
