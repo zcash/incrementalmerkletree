@@ -85,7 +85,10 @@ impl<H> NonEmptyFrontier<H> {
     }
 }
 
-impl<H: Hashable + Clone> NonEmptyFrontier<H> {
+impl<H> NonEmptyFrontier<H>
+where
+    H: Hashable + Clone,
+{
     /// Append a new leaf to the frontier, and recompute ommers by hashing together full subtrees
     /// until an empty ommer slot is found.
     pub fn append(&mut self, leaf: H) {
@@ -186,12 +189,16 @@ impl<H: Hashable + Clone> NonEmptyFrontier<H> {
 }
 
 #[cfg(any(test, feature = "test-dependencies"))]
-impl<H: Hashable + Clone> NonEmptyFrontier<H>
+impl<H> NonEmptyFrontier<H>
 where
+    H: Hashable + Clone,
     Standard: Distribution<H>,
 {
     /// Generates a random frontier of a Merkle tree having the specified nonzero size.
-    pub fn random_of_size<R: RngCore>(rng: &mut R, tree_size: NonZeroU64) -> Self {
+    pub fn random_of_size<R>(rng: &mut R, tree_size: NonZeroU64) -> Self
+    where
+        R: RngCore,
+    {
         let position = (u64::from(tree_size) - 1).into();
         NonEmptyFrontier::from_parts(
             position,
@@ -203,11 +210,14 @@ where
         .unwrap()
     }
 
-    pub fn random_with_prior_subtree_roots<R: RngCore>(
+    pub fn random_with_prior_subtree_roots<R>(
         rng: &mut R,
         tree_size: NonZeroU64,
         subtree_depth: NonZeroU8,
-    ) -> (Vec<H>, Self) {
+    ) -> (Vec<H>, Self)
+    where
+        R: RngCore,
+    {
         let prior_subtree_count: u64 = u64::from(tree_size) >> u8::from(subtree_depth);
         if prior_subtree_count > 0 {
             let prior_roots: Vec<H> = core::iter::repeat_with(|| rng.gen())
@@ -328,7 +338,10 @@ impl<H, const DEPTH: u8> Frontier<H, DEPTH> {
     }
 }
 
-impl<H: Hashable + Clone, const DEPTH: u8> Frontier<H, DEPTH> {
+impl<H, const DEPTH: u8> Frontier<H, DEPTH>
+where
+    H: Hashable + Clone,
+{
     /// Appends a new value to the frontier at the next available slot.
     /// Returns true if successful and false if the frontier would exceed
     /// the maximum allowed depth.
@@ -382,12 +395,16 @@ impl<H: Hashable + Clone, const DEPTH: u8> Frontier<H, DEPTH> {
 }
 
 #[cfg(any(test, feature = "test-dependencies"))]
-impl<H: Hashable + Clone, const DEPTH: u8> Frontier<H, DEPTH>
+impl<H, const DEPTH: u8> Frontier<H, DEPTH>
 where
+    H: Hashable + Clone,
     Standard: Distribution<H>,
 {
     /// Generates a random frontier of a Merkle tree having the specified size.
-    pub fn random_of_size<R: RngCore>(rng: &mut R, tree_size: u64) -> Self {
+    pub fn random_of_size<R>(rng: &mut R, tree_size: u64) -> Self
+    where
+        R: RngCore,
+    {
         assert!(tree_size <= 2u64.checked_pow(DEPTH.into()).unwrap());
         Frontier {
             frontier: NonZeroU64::new(tree_size)
@@ -395,11 +412,14 @@ where
         }
     }
 
-    pub fn random_with_prior_subtree_roots<R: RngCore>(
+    pub fn random_with_prior_subtree_roots<R>(
         rng: &mut R,
         tree_size: u64,
         subtree_depth: NonZeroU8,
-    ) -> (Vec<H>, Self) {
+    ) -> (Vec<H>, Self)
+    where
+        R: RngCore,
+    {
         assert!(tree_size <= 2u64.checked_pow(DEPTH.into()).unwrap());
         NonZeroU64::new(tree_size).map_or((vec![], Frontier::empty()), |tree_size| {
             let (prior_roots, frontier) =
@@ -421,7 +441,10 @@ pub struct PathFiller<H> {
 }
 
 #[cfg(feature = "legacy-api")]
-impl<H: Hashable> PathFiller<H> {
+impl<H> PathFiller<H>
+where
+    H: Hashable,
+{
     pub fn empty() -> Self {
         PathFiller {
             queue: VecDeque::new(),
@@ -543,7 +566,10 @@ impl<H, const DEPTH: u8> CommitmentTree<H, DEPTH> {
 }
 
 #[cfg(feature = "legacy-api")]
-impl<H: Hashable + Clone, const DEPTH: u8> CommitmentTree<H, DEPTH> {
+impl<H, const DEPTH: u8> CommitmentTree<H, DEPTH>
+where
+    H: Hashable + Clone,
+{
     pub fn from_frontier(frontier: &Frontier<H, DEPTH>) -> Self {
         frontier.value().map_or_else(Self::empty, |f| {
             let mut ommers_iter = f.ommers().iter().cloned();
@@ -686,8 +712,9 @@ pub mod testing {
 
     use crate::{frontier::Frontier, Hashable, Level};
 
-    impl<H: Hashable + Clone, const DEPTH: u8> crate::testing::Frontier<H>
-        for super::Frontier<H, DEPTH>
+    impl<H, const DEPTH: u8> crate::testing::Frontier<H> for super::Frontier<H, DEPTH>
+    where
+        H: Hashable + Clone,
     {
         fn append(&mut self, value: H) -> bool {
             super::Frontier::append(self, value)
@@ -717,7 +744,10 @@ pub mod testing {
     }
 
     impl Distribution<TestNode> for Standard {
-        fn sample<R: Rng + ?Sized>(&self, rng: &mut R) -> TestNode {
+        fn sample<R>(&self, rng: &mut R) -> TestNode
+        where
+            R: Rng + ?Sized,
+        {
             TestNode(rng.gen())
         }
     }
@@ -726,10 +756,14 @@ pub mod testing {
         any::<u64>().prop_map(TestNode)
     }
 
-    pub fn arb_frontier<H: Hashable + Clone + Debug, T: Strategy<Value = H>, const DEPTH: u8>(
+    pub fn arb_frontier<H, T, const DEPTH: u8>(
         min_size: usize,
         arb_node: T,
-    ) -> impl Strategy<Value = Frontier<H, DEPTH>> {
+    ) -> impl Strategy<Value = Frontier<H, DEPTH>>
+    where
+        H: Hashable + Clone + Debug,
+        T: Strategy<Value = H>,
+    {
         assert!((1 << DEPTH) >= min_size + 100);
         vec(arb_node, min_size..(min_size + 100)).prop_map(move |v| {
             let mut frontier = Frontier::empty();
@@ -745,14 +779,14 @@ pub mod testing {
 
     #[cfg(feature = "legacy-api")]
     #[cfg_attr(docsrs, doc(cfg(feature = "legacy-api")))]
-    pub fn arb_commitment_tree<
-        H: Hashable + Clone + Debug,
-        T: Strategy<Value = H>,
-        const DEPTH: u8,
-    >(
+    pub fn arb_commitment_tree<H, T, const DEPTH: u8>(
         min_size: usize,
         arb_node: T,
-    ) -> impl Strategy<Value = CommitmentTree<H, DEPTH>> {
+    ) -> impl Strategy<Value = CommitmentTree<H, DEPTH>>
+    where
+        H: Hashable + Clone + Debug,
+        T: Strategy<Value = H>,
+    {
         assert!((1 << DEPTH) >= min_size + 100);
         vec(arb_node, min_size..(min_size + 100)).prop_map(move |v| {
             let mut tree = CommitmentTree::empty();

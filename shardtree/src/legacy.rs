@@ -76,7 +76,10 @@ impl<
 }
 
 /// Operations on [`LocatedTree`]s that are annotated with Merkle hashes.
-impl<H: Hashable + Clone + PartialEq> LocatedPrunableTree<H> {
+impl<H> LocatedPrunableTree<H>
+where
+    H: Hashable + Clone + PartialEq,
+{
     fn combine_optional(
         opt_t0: Option<Self>,
         opt_t1: Option<Self>,
