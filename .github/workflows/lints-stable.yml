@@ -3,6 +3,9 @@ name: Stable lints
 # We only run these lints on trial-merges of PRs to reduce noise.
 on: pull_request
 
+permissions:
+  contents: read
+
 jobs:
   clippy:
     name: Clippy (MSRV)
@@ -10,9 +13,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
-      - name: Run clippy
-        uses: actions-rs/clippy-check@b5b5f21f4797c02da247df37026fcd0a5024aa4d # v1.0.7
         with:
-          name: Clippy (MSRV)
-          token: ${{ secrets.GITHUB_TOKEN }}
-          args: --all-features --all-targets -- -D warnings
+          persist-credentials: false
+      - name: Run clippy
+        run: cargo clippy --all-features --all-targets -- -D warnings
