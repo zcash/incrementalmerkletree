@@ -863,15 +863,47 @@ impl<
         Ok(root)
     }
 
-    // compute the root, along with an optional update to the cap
+    /// Computes the Merkle root of the subtree at `target_addr` by walking the
+    /// cap downward from `cap`, returning it together with an optional rebuilt
+    /// subtree the caller may write back to cache the hashes computed here
+    /// (used by [`Self::root_caching`]; [`Self::root`] discards it).
+    ///
+    /// The walk stays inside the cap, whose nodes are never below the shard
+    /// level, so `cap.root_addr.level()` is always `>= SHARD_HEIGHT`. Once it
+    /// reaches the shard level it hands off to [`Self::root_from_shards`],
+    /// which reads the actual shard data from the store. (`cap.root` being the
+    /// tree located at `cap.root_addr` is assumed by construction of a
+    /// [`LocatedPrunableTree`].)
+    ///
+    /// # Arguments
+    ///
+    /// * `cap` - The located subtree currently being processed: the cap node
+    ///   at `cap.root_addr` paired with that address. At the entry point this
+    ///   is the whole stored cap located at [`Self::root_addr`]; recursive
+    ///   calls pass each child subtree paired with its child address.
+    /// * `target_addr` - The address of the node whose root hash is computed.
+    ///   It must be contained within `cap.root_addr`: at the same level or
+    ///   deeper, with its range inside `cap.root_addr`'s; it is never an
+    ///   ancestor of `cap.root_addr`.
+    /// * `truncate_at` - An inclusive lower bound on positions to treat as
+    ///   empty: every leaf at a position `>= truncate_at` is replaced by the
+    ///   empty root for its level.
+    ///
+    /// `target_addr` may in principle be either a cap node (level
+    /// `>= SHARD_HEIGHT`) or a node inside a shard (level `< SHARD_HEIGHT`),
+    /// the latter resolved by [`Self::root_from_shards`]. In practice every
+    /// in-crate caller passes a cap node: `root_at_checkpoint_*` use
+    /// [`Self::root_addr`] (level `DEPTH`), and the frontier/witness path uses
+    /// sibling addresses at levels `SHARD_HEIGHT..=DEPTH`. The sub-shard target
+    /// path is supported but currently unused internally (still reachable via
+    /// the public
+    /// [`Self::root`] / [`Self::root_caching`] wrappers, which do not restrict
+    /// the level).
     #[allow(clippy::type_complexity)]
     fn root_internal(
         &self,
         cap: &LocatedPrunableTree<S::H>,
-        // The address at which we want to compute the root hash
         target_addr: Address,
-        // An inclusive lower bound for positions whose leaf values will be replaced by empty
-        // roots.
         truncate_at: Position,
     ) -> Result<(H, Option<PrunableTree<H>>), ShardTreeError<S::Error>> {
         match &cap.root.0 {
