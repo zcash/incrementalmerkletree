@@ -51,6 +51,28 @@ impl RetentionFlags {
     }
 }
 
+impl fmt::Display for RetentionFlags {
+    /// Renders the set retention flags as a `|`-separated list (`CHECKPOINT`, `MARKED`,
+    /// `REFERENCE`), or `EPHEMERAL` when no flags are set.
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        let mut parts = Vec::new();
+        if self.contains(RetentionFlags::CHECKPOINT) {
+            parts.push("CHECKPOINT");
+        }
+        if self.contains(RetentionFlags::MARKED) {
+            parts.push("MARKED");
+        }
+        if self.contains(RetentionFlags::REFERENCE) {
+            parts.push("REFERENCE");
+        }
+        if parts.is_empty() {
+            f.write_str("EPHEMERAL")
+        } else {
+            f.write_str(&parts.join("|"))
+        }
+    }
+}
+
 impl<'a, C> From<&'a Retention<C>> for RetentionFlags {
     fn from(retention: &'a Retention<C>) -> Self {
         match retention {
