@@ -260,6 +260,208 @@ impl<A, V> LocatedTree<A, V> {
         self.root.incomplete_nodes(self.root_addr)
     }
 
+    /// Returns a multi-line, indented "connector" rendering of this tree for debugging and test
+    /// output (top-down, root first), in the style of the `tree` command but using ASCII connectors
+    /// `|-- ` and `` `-- ``.
+    ///
+    /// Each node is shown as its address `[level,index]` followed by its kind:
+    ///
+    /// * `Parent (ann: <ann>)`, where `<ann>` is produced by `fmt_ann`;
+    /// * `Leaf <value>`, where `<value>` is produced by `fmt_val`;
+    /// * `Nil` for an empty subtree.
+    pub fn pretty_print_indented_with<FA, FV>(&self, fmt_ann: FA, fmt_val: FV) -> String
+    where
+        FA: Fn(&A) -> String,
+        FV: Fn(&V) -> String,
+    {
+        // `self_prefix` is printed before this node's label; `child_prefix` is the base prefix that
+        // its descendants extend with their own connectors.
+        fn go<A, V, FA, FV>(
+            out: &mut String,
+            addr: Address,
+            tree: &Tree<A, V>,
+            self_prefix: &str,
+            child_prefix: &str,
+            fmt_ann: &FA,
+            fmt_val: &FV,
+        ) where
+            FA: Fn(&A) -> String,
+            FV: Fn(&V) -> String,
+        {
+            if !out.is_empty() {
+                out.push('\n');
+            }
+            let loc = format!("[{},{}]", u8::from(addr.level()), addr.index());
+            match &tree.0 {
+                Node::Parent { ann, left, right } => {
+                    out.push_str(&format!(
+                        "{self_prefix}{loc} Parent (ann: {})",
+                        fmt_ann(ann)
+                    ));
+                    let (l_addr, r_addr) = addr
+                        .children()
+                        .expect("a parent node always has child addresses");
+                    let l_self = format!("{child_prefix}|-- ");
+                    let l_child = format!("{child_prefix}|   ");
+                    let r_self = format!("{child_prefix}`-- ");
+                    let r_child = format!("{child_prefix}    ");
+                    go(out, l_addr, left, &l_self, &l_child, fmt_ann, fmt_val);
+                    go(out, r_addr, right, &r_self, &r_child, fmt_ann, fmt_val);
+                }
+                Node::Leaf { value } => {
+                    out.push_str(&format!("{self_prefix}{loc} Leaf {}", fmt_val(value)));
+                }
+                Node::Nil => {
+                    out.push_str(&format!("{self_prefix}{loc} Nil"));
+                }
+            }
+        }
+
+        let mut out = String::new();
+        go(
+            &mut out,
+            self.root_addr,
+            &self.root,
+            "",
+            "",
+            &fmt_ann,
+            &fmt_val,
+        );
+        out
+    }
+
+    /// Returns a 2D, "inverted tree" rendering of this tree for debugging and test output, drawn
+    /// with diagonal `/` and `\` branches that converge downward to the root at the bottom (leaves
+    /// and `Nil` nodes are on the top rows).
+    ///
+    /// Each node is a single token: its address `[level,index]` for parents, `[level,index]:<value>`
+    /// for leaves (where `<value>` is produced by `fmt_val`), and `[level,index]:Nil` for empty
+    /// subtrees. When `fmt_ann` returns a non-empty string for a parent it is appended as
+    /// `[level,index]:<ann>`. Token width drives the spacing, so keep the closure outputs short.
+    ///
+    /// The rendering assumes ASCII token text.
+    pub fn pretty_print_bottom_top_with<FA, FV>(&self, fmt_ann: FA, fmt_val: FV) -> String
+    where
+        FA: Fn(&A) -> String,
+        FV: Fn(&V) -> String,
+    {
+        // Renders the subtree at `addr` into a block of equal-length lines whose own root token sits
+        // on the bottom line, returning the block and the column of that root token's center.
+        fn render<A, V, FA, FV>(
+            addr: Address,
+            tree: &Tree<A, V>,
+            fmt_ann: &FA,
+            fmt_val: &FV,
+        ) -> (Vec<String>, usize)
+        where
+            FA: Fn(&A) -> String,
+            FV: Fn(&V) -> String,
+        {
+            let level = u8::from(addr.level());
+            let index = addr.index();
+            match &tree.0 {
+                Node::Parent { ann, left, right } => {
+                    let (l_addr, r_addr) = addr
+                        .children()
+                        .expect("a parent node always has child addresses");
+                    let (l_block, l_col) = render(l_addr, left, fmt_ann, fmt_val);
+                    let (r_block, r_col) = render(r_addr, right, fmt_ann, fmt_val);
+
+                    let l_w = l_block.iter().map(|s| s.len()).max().unwrap_or(0);
+                    let r_w = r_block.iter().map(|s| s.len()).max().unwrap_or(0);
+                    let h = l_block.len().max(r_block.len());
+                    // Bottom-align the two child blocks so both roots land on the same (last) row.
+                    let l_pad = h - l_block.len();
+                    let r_pad = h - r_block.len();
+                    let row_chars =
+                        |block: &[String], pad: usize, w: usize, i: usize| -> Vec<char> {
+                            if i < pad {
+                                vec![' '; w]
+                            } else {
+                                let mut v: Vec<char> = block[i - pad].chars().collect();
+                                v.resize(w, ' ');
+                                v
+                            }
+                        };
+
+                    // Choose the inter-block gap so the two root columns are an even distance apart,
+                    // which lets the slope-1 diagonals meet exactly above the centered parent.
+                    let lc = l_col;
+                    let mut gap = 1usize;
+                    let mut rc = l_w + gap + r_col;
+                    while (rc - lc) % 2 != 0 {
+                        gap += 1;
+                        rc = l_w + gap + r_col;
+                    }
+                    let top_w = l_w + gap + r_w;
+                    let hdiag = (rc - lc) / 2 - 1;
+                    let parent_col = lc + hdiag + 1;
+
+                    let ann_str = fmt_ann(ann);
+                    let token: Vec<char> = if ann_str.is_empty() {
+                        format!("[{level},{index}]").chars().collect()
+                    } else {
+                        format!("[{level},{index}]:{ann_str}").chars().collect()
+                    };
+                    let tw = token.len();
+                    // The centered parent token may extend left of column 0; shift everything right.
+                    let token_start = parent_col as isize - (tw as isize) / 2;
+                    let left_pad = if token_start < 0 {
+                        (-token_start) as usize
+                    } else {
+                        0
+                    };
+                    let token_start = (token_start + left_pad as isize) as usize;
+                    let width = (top_w + left_pad).max(token_start + tw);
+                    let total_h = h + hdiag + 1;
+
+                    let mut grid = vec![vec![' '; width]; total_h];
+                    for (i, row) in grid[..h].iter_mut().enumerate() {
+                        for (j, ch) in row_chars(&l_block, l_pad, l_w, i).into_iter().enumerate() {
+                            if ch != ' ' {
+                                row[left_pad + j] = ch;
+                            }
+                        }
+                        for (j, ch) in row_chars(&r_block, r_pad, r_w, i).into_iter().enumerate() {
+                            if ch != ' ' {
+                                row[left_pad + l_w + gap + j] = ch;
+                            }
+                        }
+                    }
+                    for (di, row) in grid[h..h + hdiag].iter_mut().enumerate() {
+                        let i = di + 1;
+                        row[left_pad + lc + i] = '\\';
+                        row[left_pad + rc - i] = '/';
+                    }
+                    for (j, ch) in token.iter().enumerate() {
+                        grid[total_h - 1][token_start + j] = *ch;
+                    }
+
+                    let lines = grid
+                        .into_iter()
+                        .map(|r| r.into_iter().collect::<String>())
+                        .collect();
+                    (lines, parent_col + left_pad)
+                }
+                terminal => {
+                    let token = match terminal {
+                        Node::Leaf { value } => format!("[{level},{index}]:{}", fmt_val(value)),
+                        _ => format!("[{level},{index}]:Nil"),
+                    };
+                    let center = token.chars().count() / 2;
+                    (vec![token], center)
+                }
+            }
+        }
+
+        let (lines, _) = render(self.root_addr, &self.root, &fmt_ann, &fmt_val);
+        lines
+            .into_iter()
+            .map(|l| l.trim_end().to_string())
+            .collect::<Vec<_>>()
+            .join("\n")
+    }
+
     /// Returns the value at the specified position, if any.
     pub fn value_at_position(&self, position: Position) -> Option<&V> {
         /// Pre-condition: `addr` must be the address of `root`.
