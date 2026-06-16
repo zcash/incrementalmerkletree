@@ -28,6 +28,6 @@ either = { version = "1.8", default-features = false }
 proptest = "1"
 rand = "0.8"
 rand_chacha = "0.3"
-rand_core = "0.6"
+rand_core = "0.10"
 tempfile = ">=3, <3.7.0" # 3.7 has MSRV 1.63
 tracing = "0.1"
