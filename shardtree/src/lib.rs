@@ -750,15 +750,34 @@ impl<
         Ok(())
     }
 
-    /// Computes the root of any subtree of this tree rooted at the given address, with the overall
-    /// tree truncated to the specified position.
+    /// Computes the Merkle root of the subtree rooted at `address`, as if the
+    /// tree were truncated at `truncate_at`.
     ///
-    /// The specified address is not required to be at any particular level, though it cannot
-    /// exceed the level corresponding to the maximum depth of the tree. Nodes to the right of the
-    /// given position, and parents of such nodes, will be replaced by the empty root for the
-    /// associated level.
+    /// This does not necessarily compute the root of the overall tree: it
+    /// returns the root hash of the node identified by `address`, which may be
+    /// any node in the tree, not just the top. To get the overall root, pass
+    /// [`Self::root_addr`] as `address`, or use
+    /// [`Self::root_at_checkpoint_depth`].
     ///
-    /// Use [`Self::root_at_checkpoint_depth`] to obtain the root of the overall tree.
+    /// # Arguments
+    ///
+    /// * `address` - The address of the node whose subtree root is computed.
+    ///   It may be at any level from 0 up to (and including) the level of the
+    ///   tree's overall root; the result is the root hash of that node's
+    ///   subtree. Must be contained within [`Self::root_addr`] (see Panics).
+    /// * `truncate_at` - An inclusive lower bound on positions to treat as
+    ///   empty: every leaf at a position `>= truncate_at`, and every parent
+    ///   whose value depends only on such leaves, is replaced by the empty
+    ///   root for its level. This yields the root as of a prefix of the tree.
+    ///   Pass a position at or beyond the tree's extent to include all
+    ///   inserted leaves. This is how the checkpoint queries (e.g.
+    ///   [`Self::root_at_checkpoint_depth`] and the witness methods) compute a
+    ///   root or witness as of a past checkpoint, ignoring later leaves.
+    ///
+    /// # Panics
+    ///
+    /// Panics if `address` is not contained within [`Self::root_addr`], i.e.
+    /// if it lies outside this tree.
     pub fn root(
         &self,
         address: Address,
