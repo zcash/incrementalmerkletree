@@ -397,6 +397,83 @@ impl<H: Hashable + Clone + PartialEq> PrunableTree<H> {
 /// A [`LocatedTree`] annotated with Merkle hashes.
 pub type LocatedPrunableTree<H> = LocatedTree<Option<Arc<H>>, (H, RetentionFlags)>;
 
+impl<H: fmt::Display> LocatedPrunableTree<H> {
+    /// Returns a multi-line, indented "connector" rendering of this tree (top-down, root first), in
+    /// the style of the `tree` command using ASCII connectors `|-- ` and `` `-- ``.
+    ///
+    /// This is a convenience wrapper around [`LocatedTree::pretty_print_indented_with`] that renders
+    /// the annotation and leaf-value types of a prunable tree: missing parent annotations as `-`,
+    /// and leaf values with their retention flags.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use std::sync::Arc;
+    /// use incrementalmerkletree::{Address, Level};
+    /// use shardtree::{LocatedTree, Node, Tree, RetentionFlags};
+    ///
+    /// let tree = LocatedTree::from_parts(
+    ///     Address::from_parts(Level::from(1), 0),
+    ///     Tree::parent(
+    ///         None,
+    ///         Tree::leaf(("a".to_string(), RetentionFlags::EPHEMERAL)),
+    ///         Tree::leaf(("b".to_string(), RetentionFlags::MARKED)),
+    ///     ),
+    /// )
+    /// .unwrap();
+    ///
+    /// assert_eq!(
+    ///     tree.pretty_print_indented(),
+    ///     "[1,0] Parent (ann: -)\n|-- [0,0] Leaf a (EPHEMERAL)\n`-- [0,1] Leaf b (MARKED)",
+    /// );
+    /// ```
+    pub fn pretty_print_indented(&self) -> String {
+        self.pretty_print_indented_with(
+            |ann: &Option<Arc<H>>| {
+                ann.as_ref()
+                    .map_or_else(|| "-".to_string(), |h| h.to_string())
+            },
+            |value: &(H, RetentionFlags)| format!("{} ({})", value.0, value.1),
+        )
+    }
+
+    /// Returns a 2D, "inverted tree" rendering of this tree: terminal nodes on top, diagonal
+    /// branches converging downward to the root at the bottom.
+    ///
+    /// This is a convenience wrapper around [`LocatedTree::pretty_print_bottom_top_with`]. To keep the drawing
+    /// compact, leaf values are rendered as just the hash (without retention flags) and parents show
+    /// only their `[level,index]` label (the cached annotation is omitted).
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use std::sync::Arc;
+    /// use incrementalmerkletree::{Address, Level};
+    /// use shardtree::{LocatedTree, Node, Tree, RetentionFlags};
+    ///
+    /// let tree = LocatedTree::from_parts(
+    ///     Address::from_parts(Level::from(1), 0),
+    ///     Tree::parent(
+    ///         None,
+    ///         Tree::leaf(("a".to_string(), RetentionFlags::EPHEMERAL)),
+    ///         Tree::leaf(("b".to_string(), RetentionFlags::MARKED)),
+    ///     ),
+    /// )
+    /// .unwrap();
+    ///
+    /// assert_eq!(
+    ///     tree.pretty_print_bottom_top(),
+    ///     "[0,0]:a [0,1]:b\n    \\     /\n     \\   /\n      \\ /\n     [1,0]",
+    /// );
+    /// ```
+    pub fn pretty_print_bottom_top(&self) -> String {
+        self.pretty_print_bottom_top_with(
+            |ann: &Option<Arc<H>>| ann.as_ref().map_or_else(String::new, |h| h.to_string()),
+            |value: &(H, RetentionFlags)| value.0.to_string(),
+        )
+    }
+}
+
 /// A data structure describing the nature of a [`Node::Nil`] node in the tree that was introduced
 /// as the consequence of an insertion.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
