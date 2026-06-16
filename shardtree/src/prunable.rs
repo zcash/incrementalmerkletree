@@ -98,7 +98,27 @@ impl<C> From<Retention<C>> for RetentionFlags {
     }
 }
 
-/// A [`Tree`] annotated with Merkle hashes.
+/// A [`Tree`] specialized for Merkle storage with pruning support.
+///
+/// This is the concrete [`Tree`] used throughout `shardtree`. It pins the two
+/// generic parameters of [`Tree`] to:
+///
+/// - Parent annotation `Option<Arc<H>>`: an optional cached Merkle hash for the
+///   subtree rooted at that `Parent`. `None` means the hash is not stored and
+///   must be recomputed from the children; `Some(h)` is a cached hash.
+/// - Leaf value `(H, RetentionFlags)`: the leaf's Merkle hash paired with its
+///   [`RetentionFlags`].
+///
+/// The "prunable" in the name comes from those [`RetentionFlags`]: each leaf
+/// records whether it may be discarded (pruned) or must be retained. An
+/// [`EPHEMERAL`](RetentionFlags::EPHEMERAL) leaf may be dropped once it is no
+/// longer needed as part of a witness, whereas
+/// [`CHECKPOINT`](RetentionFlags::CHECKPOINT),
+/// [`MARKED`](RetentionFlags::MARKED), and
+/// [`REFERENCE`](RetentionFlags::REFERENCE) leaves are retained under the
+/// conditions documented on [`RetentionFlags`]. Pruning (see
+/// [`PrunableTree::prune`]) collapses retained-hash-only structure into a
+/// single annotated node, which is how the tree stays compact.
 pub type PrunableTree<H> = Tree<Option<Arc<H>>, (H, RetentionFlags)>;
 
 /// Errors that can occur when merging trees.
