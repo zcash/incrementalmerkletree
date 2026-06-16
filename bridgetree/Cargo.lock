@@ -112,9 +112,9 @@ dependencies = [
 
 [[package]]
 name = "incrementalmerkletree-testing"
-version = "0.2.0-backcompat.0.8"
+version = "0.3.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "15cf083f22d2db3f08175ea6004dd1efa0b7900674b8279f4d565db95a9e0f54"
+checksum = "ad20fb6cf815e76ce9b9eca74f347740ab99059fe4b5e4a002403d0441a02983"
 dependencies = [
  "incrementalmerkletree",
  "proptest",
