@@ -414,7 +414,11 @@ impl<H: Hashable + Clone + PartialEq> PrunableTree<H> {
     }
 }
 
-/// A [`LocatedTree`] annotated with Merkle hashes.
+/// A [`PrunableTree`] paired with the [`Address`] of its root.
+///
+/// See [`PrunableTree`] for the meaning of the annotation and leaf types and of
+/// "prunable", and [`LocatedTree`] for what pairing a tree with its (absolute)
+/// address adds.
 pub type LocatedPrunableTree<H> = LocatedTree<Option<Arc<H>>, (H, RetentionFlags)>;
 
 impl<H: fmt::Display> LocatedPrunableTree<H> {
