@@ -836,6 +836,19 @@ impl<
         Ok(root)
     }
 
+    /// Like [`Self::root`], but caches the intermediate node hashes computed
+    /// during the traversal.
+    ///
+    /// The recomputed cap is written back to the store via
+    /// [`ShardStore::put_cap`]. Only hashes that do not incorporate
+    /// empty/truncated nodes are cached.
+    ///
+    /// # Arguments
+    ///
+    /// * `address` - The address at which we want to compute the root hash.
+    /// * `truncate_at` - An inclusive lower bound on positions to treat as
+    ///   empty: every leaf at a position `>= truncate_at` is replaced by the
+    ///   empty root for its level.
     pub fn root_caching(
         &mut self,
         address: Address,
