@@ -190,6 +190,21 @@ impl<A, V> Tree<A, V> {
 }
 
 /// A binary Merkle tree with its root at the given address.
+///
+/// A `LocatedTree` is a raw [`Tree`] paired with the [`Address`] at which its
+/// root sits. The distinction from a bare [`Tree`] is that a `LocatedTree` knows
+/// where it lives: it is not a free-floating, context-free structure.
+///
+/// The address is **absolute**, not relative. The `index` component of an
+/// [`Address`] is a global coordinate (the number of subtrees rooted at that
+/// level appearing to its left in the whole tree), not an offset relative to
+/// some parent tree passed in as context. These absolute coordinates propagate
+/// downward: a node's children have indices `index * 2` and `index * 2 + 1`, so
+/// every node's address is meaningful in the one canonical global tree.
+///
+/// What is relative is the inner [`Tree`]: its nodes store no addresses of their
+/// own. Their addresses are derived by descending from `root_addr`. So the inner
+/// [`Tree`] is context-free, and `root_addr` anchors it to an absolute position.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct LocatedTree<A, V> {
     pub(crate) root_addr: Address,
