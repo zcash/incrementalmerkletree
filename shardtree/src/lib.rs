@@ -1,24 +1,55 @@
-//! `shardtree` is a space-efficient fixed-depth Merkle tree structure that is densely
-//! filled from the left. It supports:
+//! `shardtree` is a space-efficient fixed-depth Merkle tree structure that is
+//! densely filled from the left. It supports:
 //!
-//! - *Out-of-order insertion*: leaves and nodes may be inserted into the tree in
-//!   arbitrary order. The structure will keep track of the right-most filled position as
-//!   the frontier of the tree; any unfilled leaves to the left of this position are
-//!   considered "missing", while any unfilled leaves to the right of this position are
-//!   considered "empty".
-//! - *Witnessing*: Individual leaves of the Merkle tree may be marked such that witnesses
-//!   will be maintained for the marked leaves as additional nodes are inserted into the
-//!   tree, but leaf and node data not specifically required to maintain these witnesses
-//!   is not retained, for space efficiency.
-//! - *Checkpointing*: the tree may be reset to a previously checkpointed state, up to a
-//!   fixed number of checkpoints.
+//! - *Out-of-order insertion*: leaves and nodes may be inserted into the tree
+//!   in arbitrary order. The structure will keep track of the right-most filled
+//!   position as the frontier of the tree; any unfilled leaves to the left of
+//!   this position are considered "missing", while any unfilled leaves to the
+//!   right of this position are considered "empty".
+//! - *Witnessing*: Individual leaves of the Merkle tree may be marked such that
+//!   witnesses will be maintained for the marked leaves as additional nodes are
+//!   inserted into the tree, but leaf and node data not specifically required
+//!   to maintain these witnesses is not retained, for space efficiency.
+//! - *Checkpointing*: the tree may be reset to a previously checkpointed state,
+//!   up to a fixed number of checkpoints.
 //!
-//! Due to its structure (described in the [`store`] module), witnesses for marked leaves
-//! can be advanced up to recent checkpoints or the latest state of the tree, without
-//! having to insert each intermediate leaf individually. Instead, only the roots of all
-//! complete shards between the one containing the marked leaf and the tree frontier need
-//! to be inserted, along with the necessary nodes to build a path from the marked leaf to
-//! the root of the shard containing it.
+//! # Structure: shards and the cap
+//!
+//! A tree of depth `DEPTH` is split horizontally at level `SHARD_HEIGHT` into
+//! two parts:
+//!
+//! - **Shards**: the fixed-height subtrees rooted at level `SHARD_HEIGHT`,
+//!   covering levels `0..SHARD_HEIGHT`. They hold the bulk of the data and are
+//!   the unit of persistence. Each shard is a [`LocatedPrunableTree`].
+//! - **Cap**: the upper part, levels `SHARD_HEIGHT..=DEPTH`. Its leaves are the
+//!   shard roots, and its internal nodes hash those roots up to the tree root.
+//!   The cap is a single [`PrunableTree`].
+//!
+//! Both parts are [`PrunableTree`]s: every node may carry a cached hash
+//! annotation, and leaves carry [`RetentionFlags`] that decide whether they may
+//! be pruned. Either part may be sparse (unknown subtrees are [`Node::Nil`]).
+//!
+//! This layout is what lets witnesses advance cheaply: rather than re-inserting
+//! every intermediate leaf, only the roots of the complete shards between the
+//! marked leaf and the frontier are inserted, plus the path from the marked
+//! leaf to its shard root. The shards carry the persisted state; the cap is a
+//! comparatively small, possibly-sparse cache of the upper node hashes, filled
+//! when subtree roots are inserted or when a `*_caching` query (e.g.
+//! [`ShardTree::root_caching`]) writes computed hashes back. See the [`store`]
+//! module for the storage model and a diagram.
+//!
+//! # Key types
+//!
+//! - [`ShardTree`]: the top-level tree and main entry point.
+//! - [`store::ShardStore`]: the persistence trait.
+//!   [`store::memory::MemoryShardStore`] keeps everything in memory;
+//!   [`store::caching::CachingShardStore`] wraps a backend with a write-back
+//!   cache.
+//! - [`Tree`] / [`LocatedTree`]: the core node structure, and the same paired
+//!   with its absolute [`Address`](incrementalmerkletree::Address).
+//! - [`PrunableTree`] / [`LocatedPrunableTree`]: a [`Tree`] specialized for
+//!   Merkle storage, with cached-hash annotations and prunable leaves.
+//! - [`store::Checkpoint`]: a saved position the tree can be rewound to.
 
 #![cfg_attr(docsrs, feature(doc_cfg))]
 
