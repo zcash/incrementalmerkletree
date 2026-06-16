@@ -546,6 +546,13 @@ impl<
         Ok(true)
     }
 
+    /// Removes the oldest checkpoints until at most `max_checkpoints` remain,
+    /// clearing the `CHECKPOINT` and `MARKED` retention flags they were keeping
+    /// alive so the affected leaves become prunable.
+    ///
+    /// Called after any operation that may add a checkpoint (e.g. [`Self::append`],
+    /// [`Self::insert_frontier`], [`Self::batch_insert`], and [`Self::checkpoint`])
+    /// to keep the checkpoint set bounded.
     #[tracing::instrument(skip(self))]
     fn prune_excess_checkpoints(&mut self) -> Result<(), ShardTreeError<S::Error>> {
         let checkpoint_count = self
