@@ -925,13 +925,15 @@ impl<
             }
         }
 
-        // Phase 2: Base case — at shard level or at the target address with no children to
-        // traverse, compute the root directly from shard data.
+        // Phase 2: Base case — at shard level, or a Nil node at the target address. In
+        // both cases there is no cached subtree to preserve, so compute the root directly
+        // from shard data. A Leaf at the target address is intentionally excluded here:
+        // when it needs truncation it is expanded and reannotated by the Phase 3 descent,
+        // preserving its cached hash as the replacement Parent's annotation (a cacheable
+        // Leaf at the target is already served by the Phase 1 fast path).
         let at_shard_level =
             cap.root_addr.level() == ShardTree::<S, DEPTH, SHARD_HEIGHT>::subtree_level();
-        if at_shard_level
-            || (cap.root_addr == target_addr && !matches!(&cap.root.0, Node::Parent { .. }))
-        {
+        if at_shard_level || (cap.root_addr == target_addr && matches!(&cap.root.0, Node::Nil)) {
             let addr = if target_contains {
                 cap.root_addr
             } else {
@@ -2461,16 +2463,17 @@ mod tests {
         #[test]
         fn base_leaf_at_target_truncated() {
             // A Leaf above the shard level, queried at its own address with
-            // truncation. In the pre-#143 code this is the Leaf handler's
-            // recurse-and-reannotate branch; in #143 it is the Phase 2
-            // `root_addr == target && !Parent` clause (which the other `base_*`
-            // tests reach only with a Nil node).
+            // truncation. Pre-#143 this is the Leaf handler's
+            // recurse-and-reannotate branch. #143 reproduces that branch by
+            // excluding a Leaf-at-target from the Phase 2 base case (which is
+            // restricted to Nil-at-target), so the Phase 3 descent expands the
+            // Leaf, computes the truncated root, and reannotates the resulting
+            // Parent with the original leaf value.
             //
-            // Divergence tripwire: the two implementations agree on the
-            // truncated root hash, but the cap write-back differs. Pre-#143
-            // returns a reannotated Parent (asserted below); #143 returns None
-            // because a truncated root is not cacheable. This assertion is meant
-            // to fail under #143 so the behavior change is reviewed, not hidden.
+            // The reannotated annotation is the original un-truncated hash
+            // ("abcdefgh"), never the truncated root, so the write-back stays a
+            // valid cache entry: a later non-truncated lookup served from it via
+            // the Phase 1 fast path returns the correct hash.
             let shard0 = shard(0, "a", "b", "c", "d");
             let shard1 = shard(1, "e", "f", "g", "h");
             let tree = tree_with_shards(&[shard0, shard1]);
