@@ -2453,6 +2453,75 @@ mod tests {
             assert_eq!(computed_root_hash, expected_root_hash);
         }
 
+        #[test]
+        fn base_shard_level_leaf_truncated() {
+            // A cached shard-level Leaf, queried with truncation, must not return
+            // its cached hash: the base case recomputes the (truncated) root from
+            // the backing shard and does not re-cache it. This is the shard-level
+            // Leaf entry into Phase 2, which the `base_shard_*` tests reach only
+            // with a Nil node.
+            let shard0 = shard(0, "a", "b", "c", "d");
+            let tree = tree_with_shards(&[shard0]);
+            let cap = cap_at(2, 0, pleaf("abcd"));
+
+            // truncate_at = 2 keeps positions 0,1 and empties 2,3.
+            let expected_root_hash = "ab__".to_string();
+            let target_addr = addr(2, 0);
+            let truncate_at = Position::from(2);
+            let (computed_root_hash, updated_cap) =
+                tree.root_internal(&cap, target_addr, truncate_at).unwrap();
+
+            assert_eq!(computed_root_hash, expected_root_hash);
+            // A truncated root must never be cached.
+            assert!(updated_cap.is_none());
+        }
+
+        #[test]
+        fn base_leaf_at_target_truncated() {
+            // A Leaf above the shard level, queried at its own address with
+            // truncation. In the pre-#143 code this is the Leaf handler's
+            // recurse-and-reannotate branch; in #143 it is the Phase 2
+            // `root_addr == target && !Parent` clause (which the other `base_*`
+            // tests reach only with a Nil node). The two implementations agree
+            // on the truncated root hash but differ in the optional cap
+            // write-back (pre-#143 returns a reannotated Parent, #143 returns
+            // None because a truncated root is not cacheable), so only the hash
+            // is asserted here.
+            let shard0 = shard(0, "a", "b", "c", "d");
+            let shard1 = shard(1, "e", "f", "g", "h");
+            let tree = tree_with_shards(&[shard0, shard1]);
+            let cap = cap_at(3, 0, pleaf("abcdefgh"));
+
+            // truncate_at = 4 keeps shard 0 and empties shard 1.
+            let expected_root_hash = "abcd____".to_string();
+            let target_addr = addr(3, 0);
+            let truncate_at = Position::from(4);
+            let (computed_root_hash, _) =
+                tree.root_internal(&cap, target_addr, truncate_at).unwrap();
+
+            assert_eq!(computed_root_hash, expected_root_hash);
+        }
+
+        #[test]
+        fn base_target_below_shard_level() {
+            // A target address strictly below the shard level: the base case uses
+            // `target_addr` (not `cap.root_addr`) for the shard lookup, and
+            // `root_from_shards` resolves it via the proper-descendant path
+            // `subtree.subtree(address)` rather than the whole-subtree root.
+            let shard0 = shard(0, "a", "b", "c", "d");
+            let tree = tree_with_shards(&[shard0]);
+            let cap = cap_at(2, 0, pnil());
+
+            // (1, 0) spans positions 0,1; its root is `combine(0, "a", "b")`.
+            let expected_root_hash = "ab".to_string();
+            let target_addr = addr(1, 0);
+            let truncate_at = Position::from(4);
+            let (computed_root_hash, _) =
+                tree.root_internal(&cap, target_addr, truncate_at).unwrap();
+
+            assert_eq!(computed_root_hash, expected_root_hash);
+        }
+
         // ---- Phase 2: `root_from_shards` multi-shard peak fold --------------
 
         #[test]
@@ -2492,6 +2561,30 @@ mod tests {
         }
 
         #[test]
+        fn shards_fold_unaligned_present_count() {
+            // Three shards present, the fourth truncated away. The peak stack
+            // holds two entries at different levels ((3,0) and (2,2)), so the
+            // final fold runs its inner `while addr.level() > cur_addr.level()`
+            // loop to pad the lone shard 2 up to level 3 with an empty sibling
+            // before combining. No single- or empty-stack fold reaches that loop.
+            let shard0 = shard(0, "a", "b", "c", "d");
+            let shard1 = shard(1, "e", "f", "g", "h");
+            let shard2 = shard(2, "i", "j", "k", "l");
+            let tree = tree_with_shards(&[shard0, shard1, shard2]);
+            let cap = cap_at(4, 0, pnil());
+
+            // shards 0,1 fold to "abcdefgh"; shard 2 is padded to "ijkl____";
+            // shard 3 (positions 12..16) is truncated.
+            let expected_root_hash = "abcdefghijkl____".to_string();
+            let target_addr = addr(4, 0);
+            let truncate_at = Position::from(12);
+            let (computed_root_hash, _) =
+                tree.root_internal(&cap, target_addr, truncate_at).unwrap();
+
+            assert_eq!(computed_root_hash, expected_root_hash);
+        }
+
+        #[test]
         fn shards_fold_missing_errors() {
             // A shard required for the multi-shard fold is missing.
             let shard0 = shard(0, "a", "b", "c", "d");
@@ -2508,6 +2601,28 @@ mod tests {
                 err,
                 ShardTreeError::Query(QueryError::TreeIncomplete(addrs))
                     if addrs == vec![addr(2, 1)]
+            );
+        }
+
+        #[test]
+        fn shards_fold_multiple_missing_errors() {
+            // Several shards required for the multi-shard fold are missing. The
+            // incomplete addresses accumulate (`incomplete.append`) and are all
+            // reported together, not just the first one.
+            let shard0 = shard(0, "a", "b", "c", "d");
+            let tree = tree_with_shards(&[shard0]);
+            let cap = cap_at(4, 0, pnil());
+
+            let target_addr = addr(4, 0);
+            let truncate_at = Position::from(16);
+            let err = tree
+                .root_internal(&cap, target_addr, truncate_at)
+                .unwrap_err();
+
+            assert_matches!(
+                err,
+                ShardTreeError::Query(QueryError::TreeIncomplete(addrs))
+                    if addrs == vec![addr(2, 1), addr(2, 2), addr(2, 3)]
             );
         }
 
