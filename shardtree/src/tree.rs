@@ -6,6 +6,12 @@ use std::sync::Arc;
 use incrementalmerkletree::{Address, Level, Position};
 
 /// A "pattern functor" for a single layer of a binary tree.
+///
+/// # Type parameters
+/// - `C`: the child type (in [`Tree`] this is `Arc<Tree<A, V>>`).
+/// - `A`: internal (`Parent`) node data, i.e. the annotation attached to an
+///   internal node (for instance the output type of the hash function).
+/// - `V`: the value carried on `Leaf` nodes.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Node<C, A, V> {
     /// A parent node in the tree, annotated with a value of type `A` and with left and right
@@ -75,7 +81,17 @@ impl<'a, C: Clone, A: Clone, V: Clone> Node<C, &'a A, &'a V> {
     }
 }
 
-/// An immutable binary tree with each of its nodes tagged with an annotation value.
+/// An immutable binary tree with each of its nodes tagged with an annotation
+/// value.
+///
+/// The tree is homogeneous: every node uses the same `A` and `V` types, so every
+/// `Parent` annotation has type `A` and every `Leaf` value has type `V`
+/// throughout the whole tree.
+///
+/// # Type parameters
+/// - `A`: internal (`Parent`) node data, i.e. the annotation attached to an
+///   internal node (for instance the output type of the hash function).
+/// - `V`: the value carried on `Leaf` nodes.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Tree<A, V>(pub(crate) Node<Arc<Tree<A, V>>, A, V>);
 
@@ -205,6 +221,11 @@ impl<A, V> Tree<A, V> {
 /// What is relative is the inner [`Tree`]: its nodes store no addresses of their
 /// own. Their addresses are derived by descending from `root_addr`. So the inner
 /// [`Tree`] is context-free, and `root_addr` anchors it to an absolute position.
+///
+/// # Type parameters
+/// - `A`: internal (`Parent`) node data, i.e. the annotation attached to an
+///   internal node (for instance the output type of the hash function).
+/// - `V`: the value carried on `Leaf` nodes.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct LocatedTree<A, V> {
     pub(crate) root_addr: Address,
