@@ -1585,30 +1585,38 @@ mod tests {
 
     #[test]
     fn shardtree_insertion() {
-        let tree: ShardTree<MemoryShardStore<String, u32>, 4, 3> =
-            ShardTree::new(MemoryShardStore::empty(), 100);
+        let tree = empty_tree::<String, 4, 3>();
 
         check_shardtree_insertion(tree)
     }
 
     #[test]
     fn shard_sizes() {
-        let tree: ShardTree<MemoryShardStore<String, u32>, 4, 2> =
-            ShardTree::new(MemoryShardStore::empty(), 100);
+        let tree = empty_tree::<String, 4, 2>();
 
         check_shard_sizes(tree)
     }
 
     #[test]
     fn witness_with_pruned_subtrees() {
-        let tree: ShardTree<MemoryShardStore<String, u32>, 6, 3> =
-            ShardTree::new(MemoryShardStore::empty(), 100);
+        let tree = empty_tree::<String, 6, 3>();
 
         check_witness_with_pruned_subtrees(tree)
     }
 
     fn new_tree(m: usize) -> ShardTree<MemoryShardStore<String, usize>, 4, 3> {
         ShardTree::new(MemoryShardStore::empty(), m)
+    }
+
+    /// An empty in-memory tree of the given depth and shard height, retaining up
+    /// to 100 checkpoints. Generic over the hash type so it serves both the
+    /// `String` and `SipHashable` test trees.
+    fn empty_tree<H, const DEPTH: u8, const SHARD_HEIGHT: u8>(
+    ) -> ShardTree<MemoryShardStore<H, u32>, DEPTH, SHARD_HEIGHT>
+    where
+        H: Hashable + Clone + PartialEq,
+    {
+        ShardTree::new(MemoryShardStore::empty(), 100)
     }
 
     #[test]
@@ -1648,15 +1656,13 @@ mod tests {
 
     #[test]
     fn frontier_empty_tree() {
-        let tree: ShardTree<MemoryShardStore<String, u32>, 4, 3> =
-            ShardTree::new(MemoryShardStore::empty(), 100);
+        let tree = empty_tree::<String, 4, 3>();
         assert_eq!(tree.frontier().unwrap(), Frontier::empty());
     }
 
     #[test]
     fn frontier_single_leaf() {
-        let mut tree: ShardTree<MemoryShardStore<String, u32>, 4, 3> =
-            ShardTree::new(MemoryShardStore::empty(), 100);
+        let mut tree = empty_tree::<String, 4, 3>();
         tree.append("a".to_string(), Retention::Ephemeral).unwrap();
 
         let frontier = tree.frontier().unwrap();
@@ -1677,8 +1683,7 @@ mod tests {
         )
         .unwrap();
 
-        let mut tree: ShardTree<MemoryShardStore<String, u32>, 4, 3> =
-            ShardTree::new(MemoryShardStore::empty(), 100);
+        let mut tree = empty_tree::<String, 4, 3>();
         tree.insert_frontier_nodes(original.clone(), Retention::Ephemeral)
             .unwrap();
 
@@ -1699,8 +1704,7 @@ mod tests {
         )
         .unwrap();
 
-        let mut tree: ShardTree<MemoryShardStore<String, u32>, 4, 3> =
-            ShardTree::new(MemoryShardStore::empty(), 100);
+        let mut tree = empty_tree::<String, 4, 3>();
         tree.insert_frontier_nodes(original.clone(), Retention::Ephemeral)
             .unwrap();
 
@@ -1711,8 +1715,7 @@ mod tests {
     #[test]
     fn frontier_from_appended_leaves() {
         // Append leaves with the last one marked, so it isn't pruned away.
-        let mut tree: ShardTree<MemoryShardStore<String, u32>, 4, 3> =
-            ShardTree::new(MemoryShardStore::empty(), 100);
+        let mut tree = empty_tree::<String, 4, 3>();
         for c in 'a'..='i' {
             tree.append(c.to_string(), Retention::Ephemeral).unwrap();
         }
@@ -1742,8 +1745,7 @@ mod tests {
         )
         .unwrap();
 
-        let mut tree: ShardTree<MemoryShardStore<String, u32>, 4, 3> =
-            ShardTree::new(MemoryShardStore::empty(), 100);
+        let mut tree = empty_tree::<String, 4, 3>();
         tree.insert_frontier_nodes(original, Retention::Ephemeral)
             .unwrap();
 
@@ -2088,8 +2090,7 @@ mod tests {
         //    and incorrectly returns full_hash instead of recomputing with truncation.
         //
         // DEPTH=4, SHARD_HEIGHT=2: 4 shards of 4 positions each, 16 total positions.
-        let mut tree: ShardTree<MemoryShardStore<String, u32>, 4, 2> =
-            ShardTree::new(MemoryShardStore::empty(), 100);
+        let mut tree = empty_tree::<String, 4, 2>();
 
         // Fill all 16 positions (shards 0-3).
         for (i, c) in ('a'..='p').enumerate() {
@@ -2136,8 +2137,7 @@ mod tests {
         //
         // DEPTH=4, SHARD_HEIGHT=2: 4 shards of 4 positions each.
         // The cap covers levels 2..4 (2 internal levels above the shard leaves).
-        let mut tree: ShardTree<MemoryShardStore<String, u32>, 4, 2> =
-            ShardTree::new(MemoryShardStore::empty(), 100);
+        let mut tree = empty_tree::<String, 4, 2>();
 
         // Fill shard 0 (positions 0-3) and start shard 1 (position 4).
         tree.append(
