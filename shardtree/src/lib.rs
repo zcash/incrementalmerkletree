@@ -577,6 +577,13 @@ impl<
         Ok(true)
     }
 
+    /// Removes the oldest checkpoints until at most `max_checkpoints` remain,
+    /// clearing the `CHECKPOINT` and `MARKED` retention flags they were keeping
+    /// alive so the affected leaves become prunable.
+    ///
+    /// Called after any operation that may add a checkpoint (e.g. [`Self::append`],
+    /// [`Self::insert_frontier`], [`Self::batch_insert`], and [`Self::checkpoint`])
+    /// to keep the checkpoint set bounded.
     #[tracing::instrument(skip(self))]
     fn prune_excess_checkpoints(&mut self) -> Result<(), ShardTreeError<S::Error>> {
         let checkpoint_count = self
@@ -1787,6 +1794,69 @@ mod tests {
             ),
             Ok(()),
         );
+    }
+
+    #[test]
+    fn regression_prune_excess_checkpoints_bounds_all_methods() {
+        // Regression test: every method that may add a checkpoint must trigger
+        // `prune_excess_checkpoints`, keeping the stored checkpoint count at or
+        // below `max_checkpoints`. We push past the bound through each entry
+        // point in isolation and assert the count settles at the maximum.
+        const MAX: usize = 2;
+        const N: usize = 5;
+
+        // `checkpoint`: repeated checkpoints at the same position.
+        let mut tree = new_tree(MAX);
+        tree.append("a".to_string(), Retention::Ephemeral).unwrap();
+        for i in 0..N {
+            assert_eq!(tree.checkpoint(i), Ok(true));
+        }
+        assert_eq!(tree.store().checkpoint_count(), Ok(MAX));
+
+        // `append` with `Checkpoint` retention.
+        let mut tree = new_tree(MAX);
+        for (i, c) in ('a'..='e').enumerate() {
+            tree.append(
+                c.to_string(),
+                Retention::Checkpoint {
+                    id: i,
+                    marking: Marking::None,
+                },
+            )
+            .unwrap();
+        }
+        assert_eq!(tree.store().checkpoint_count(), Ok(MAX));
+
+        // `insert_frontier` with `Checkpoint` retention, inserting successively
+        // longer frontiers so each call checkpoints a new position.
+        let mut tree = new_tree(MAX);
+        let mut frontier = Frontier::<String, 4>::empty();
+        for (i, c) in ('a'..='e').enumerate() {
+            frontier.append(c.to_string());
+            tree.insert_frontier(
+                frontier.clone(),
+                Retention::Checkpoint {
+                    id: i,
+                    marking: Marking::None,
+                },
+            )
+            .unwrap();
+        }
+        assert_eq!(tree.store().checkpoint_count(), Ok(MAX));
+
+        // `batch_insert` with `Checkpoint` retention on every value.
+        let mut tree = new_tree(MAX);
+        let values = ('a'..='e').enumerate().map(|(i, c)| {
+            (
+                c.to_string(),
+                Retention::Checkpoint {
+                    id: i,
+                    marking: Marking::None,
+                },
+            )
+        });
+        tree.batch_insert(Position::from(0), values).unwrap();
+        assert_eq!(tree.store().checkpoint_count(), Ok(MAX));
     }
 
     #[test]
