@@ -305,6 +305,39 @@ impl<A, V> LocatedTree<A, V> {
     /// * `Parent (ann: <ann>)`, where `<ann>` is produced by `fmt_ann`;
     /// * `Leaf <value>`, where `<value>` is produced by `fmt_val`;
     /// * `Nil` for an empty subtree.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use incrementalmerkletree::{Address, Level};
+    /// use shardtree::{LocatedTree, Tree};
+    ///
+    /// let tree = LocatedTree::from_parts(
+    ///     Address::from_parts(Level::from(2), 0),
+    ///     Tree::parent(
+    ///         "root",
+    ///         Tree::parent("l", Tree::leaf("a"), Tree::leaf("b")),
+    ///         Tree::parent("r", Tree::leaf("c"), Tree::leaf("d")),
+    ///     ),
+    /// )
+    /// .unwrap();
+    ///
+    /// assert_eq!(
+    ///     tree.pretty_print_indented_with(
+    ///         |ann: &&str| ann.to_string(),
+    ///         |value: &&str| value.to_string(),
+    ///     ),
+    ///     concat!(
+    ///         "[2,0] Parent (ann: root)\n",
+    ///         "|-- [1,0] Parent (ann: l)\n",
+    ///         "|   |-- [0,0] Leaf a\n",
+    ///         "|   `-- [0,1] Leaf b\n",
+    ///         "`-- [1,1] Parent (ann: r)\n",
+    ///         "    |-- [0,2] Leaf c\n",
+    ///         "    `-- [0,3] Leaf d",
+    ///     ),
+    /// );
+    /// ```
     pub fn pretty_print_indented_with<FA, FV>(&self, fmt_ann: FA, fmt_val: FV) -> String
     where
         FA: Fn(&A) -> String,
@@ -376,6 +409,34 @@ impl<A, V> LocatedTree<A, V> {
     /// `[level,index]:<ann>`. Token width drives the spacing, so keep the closure outputs short.
     ///
     /// The rendering assumes ASCII token text.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use incrementalmerkletree::{Address, Level};
+    /// use shardtree::{LocatedTree, Tree};
+    ///
+    /// let tree = LocatedTree::from_parts(
+    ///     Address::from_parts(Level::from(1), 0),
+    ///     Tree::parent("root", Tree::leaf("a"), Tree::leaf("b")),
+    /// )
+    /// .unwrap();
+    ///
+    /// // Returning an empty annotation keeps parent tokens to their `[level,index]` label.
+    /// assert_eq!(
+    ///     tree.pretty_print_bottom_top_with(
+    ///         |_ann: &&str| String::new(),
+    ///         |value: &&str| value.to_string(),
+    ///     ),
+    ///     concat!(
+    ///         "[0,0]:a [0,1]:b\n",
+    ///         "    \\     /\n",
+    ///         "     \\   /\n",
+    ///         "      \\ /\n",
+    ///         "     [1,0]",
+    ///     ),
+    /// );
+    /// ```
     pub fn pretty_print_bottom_top_with<FA, FV>(&self, fmt_ann: FA, fmt_val: FV) -> String
     where
         FA: Fn(&A) -> String,
