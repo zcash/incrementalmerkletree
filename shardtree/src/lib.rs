@@ -1047,6 +1047,21 @@ impl<
         Ok((root, Some(replacement)))
     }
 
+    /// Computes the root hash of the subtree at `address` from the persisted
+    /// shard data, treating leaves at positions `>= truncate_at` as empty.
+    ///
+    /// Depending on where `address` sits relative to the shard level (via
+    /// [`Address::context`](incrementalmerkletree::Address::context)):
+    ///
+    /// - At or below it, `address` is contained in a single shard, whose node
+    ///   at `address` is located and hashed.
+    /// - Above it, the subtree spans a contiguous range of shards whose
+    ///   truncated roots are folded together (a Merkle-mountain-range peak fold),
+    ///   padding the empty right-hand side with empty roots.
+    ///
+    /// Returns [`QueryError::TreeIncomplete`] if a shard required for the root is
+    /// missing or does not retain the node at `address`; the multi-shard case
+    /// lists every missing shard.
     fn root_from_shards(
         &self,
         address: Address,
@@ -1091,10 +1106,18 @@ impl<
                         .and_then(|s| s.root_hash(truncate_at));
 
                     match subtree_root {
+                        // `root_stack` holds the roots of the maximal complete subtrees
+                        // ("peaks") seen so far, bottom-to-top in strictly decreasing height.
                         Ok(mut cur_hash) => {
                             if subtree_addr.index() % 2 == 0 {
+                                // A left child cannot complete a larger subtree on its own; it
+                                // opens a new peak.
                                 root_stack.push((subtree_addr, cur_hash))
                             } else {
+                                // A right child completes its parent: merge with the peak above
+                                // it, and keep merging upward as long as the carry stays a right
+                                // child (its parent matches the next peak's parent), exactly like
+                                // incrementing a binary counter.
                                 let mut cur_addr = subtree_addr;
                                 while let Some((addr, hash)) = root_stack.pop() {
                                     if addr.parent() == cur_addr.parent() {
@@ -1122,7 +1145,11 @@ impl<
                     )));
                 }
 
-                // Now hash with empty roots to obtain the root at maximum height
+                // Fold the leftover peaks together, padding the truncated/empty right side
+                // with empty roots. Starting from the smallest (rightmost) peak on top of
+                // the stack, each lower peak is larger (higher level) and lies to its left:
+                // lift the running hash up to that peak's level with empty roots, then
+                // combine the peak (left) with the running hash (right).
                 if let Some((mut cur_addr, mut cur_hash)) = root_stack.pop() {
                     while let Some((addr, hash)) = root_stack.pop() {
                         while addr.level() > cur_addr.level() {
@@ -1137,6 +1164,8 @@ impl<
                         cur_addr = cur_addr.parent();
                     }
 
+                    // Finally lift the combined root the rest of the way to `address.level()`,
+                    // again padding the empty right-hand side.
                     while cur_addr.level() < address.level() {
                         cur_hash = H::combine(
                             cur_addr.level(),
@@ -2180,6 +2209,197 @@ mod tests {
             LocatedTree::from_parts(shifted_root_addr, cap).is_ok(),
             "Cap must not contain Parent nodes at or below shard level"
         );
+    }
+
+    #[test]
+    fn root_at_sub_shard_address() {
+        // Coverage: the public `root` / `root_caching` accept a `target_addr`
+        // below `SHARD_HEIGHT`. No in-crate caller exercises this (the
+        // checkpoint/witness paths only pass cap-level addresses), so drive it
+        // directly here. This reaches `root_from_shards`'s `Either::Left` arm
+        // resolving a node strictly inside a shard via `subtree(address)`, and
+        // the asymmetric `(Some, None)` descent branches of `root_internal`.
+        //
+        // DEPTH=4, SHARD_HEIGHT=2: shard 0 covers positions 0..=3. Leaves are
+        // marked so they are individually retained (an unmarked completed shard
+        // collapses its left ommers to hashes, leaving sub-shard nodes
+        // unresolvable).
+        let mut tree: ShardTree<MemoryShardStore<String, u32>, 4, 2> =
+            ShardTree::new(MemoryShardStore::empty(), 100);
+        for c in 'a'..='d' {
+            tree.append(c.to_string(), Retention::Marked).unwrap();
+        }
+
+        let big = Position::from(16);
+
+        // Level-0 leaves.
+        assert_eq!(
+            tree.root(Address::from_parts(0.into(), 0), big),
+            Ok("a".into())
+        );
+        assert_eq!(
+            tree.root(Address::from_parts(0.into(), 3), big),
+            Ok("d".into())
+        );
+
+        // Level-1 (sub-shard) internal nodes.
+        assert_eq!(
+            tree.root(Address::from_parts(1.into(), 0), big),
+            Ok("ab".into())
+        );
+        assert_eq!(
+            tree.root(Address::from_parts(1.into(), 1), big),
+            Ok("cd".into())
+        );
+
+        // Shard root, for reference.
+        assert_eq!(
+            tree.root(Address::from_parts(2.into(), 0), big),
+            Ok("abcd".into())
+        );
+
+        // Truncation within a sub-shard node: position 1 and beyond are treated
+        // as empty, so (1, 0) hashes "a" with the level-0 empty root "_".
+        assert_eq!(
+            tree.root(Address::from_parts(1.into(), 0), Position::from(1)),
+            Ok("a_".into())
+        );
+
+        // The caching variant must agree on every sub-shard query.
+        for addr in [
+            Address::from_parts(0.into(), 0),
+            Address::from_parts(1.into(), 0),
+            Address::from_parts(1.into(), 1),
+        ] {
+            assert_eq!(tree.root(addr, big), tree.root_caching(addr, big));
+        }
+
+        // `Either::Left` with the requested sub-shard node absent: insert only a
+        // shard root hash (a `Leaf` at the shard level), then ask for a node
+        // below it. `subtree(address)` returns `None`, surfacing as
+        // `TreeIncomplete(vec![address])`.
+        let mut sparse: ShardTree<MemoryShardStore<String, u32>, 4, 2> =
+            ShardTree::new(MemoryShardStore::empty(), 100);
+        sparse
+            .insert(Address::from_parts(2.into(), 0), "abcd".to_string())
+            .unwrap();
+        let missing = Address::from_parts(1.into(), 0);
+        assert_matches!(
+            sparse.root(missing, big),
+            Err(ShardTreeError::Query(QueryError::TreeIncomplete(v))) if v == vec![missing]
+        );
+    }
+
+    #[test]
+    fn root_at_cap_node_asymmetric_descent() {
+        // Coverage: the `(Some, None)` and `(None, Some)` descent branches of
+        // `root_internal`, which only trigger when `target_addr` is a proper
+        // sub-address of the cap (the checkpoint queries always pass the whole
+        // root, exercising only the symmetric combine). Assert pinned hashes
+        // for left-only and right-only cap nodes, with and without truncation.
+        //
+        // DEPTH=4, SHARD_HEIGHT=2: the cap covers levels 2..4.
+        //   (3, 0) = shards 0,1 = positions 0..=7  = "abcdefgh"
+        //   (3, 1) = shards 2,3 = positions 8..=15 = "ijklmnop"
+        let mut tree: ShardTree<MemoryShardStore<String, u32>, 4, 2> =
+            ShardTree::new(MemoryShardStore::empty(), 100);
+        for c in 'a'..='p' {
+            tree.append(c.to_string(), Retention::Ephemeral).unwrap();
+        }
+
+        let big = Position::from(16);
+
+        // Left-only descent: target in the left cap subtree.
+        assert_eq!(
+            tree.root(Address::from_parts(3.into(), 0), big),
+            Ok("abcdefgh".into())
+        );
+        // Right-only descent: target in the right cap subtree.
+        assert_eq!(
+            tree.root(Address::from_parts(3.into(), 1), big),
+            Ok("ijklmnop".into())
+        );
+        // Deeper asymmetric descent to a single shard root.
+        assert_eq!(
+            tree.root(Address::from_parts(2.into(), 1), big),
+            Ok("efgh".into())
+        );
+
+        // Right-only descent combined with truncation: positions 12..=15 are
+        // treated as empty, so shard 3 becomes the level-2 empty root "____".
+        assert_eq!(
+            tree.root(Address::from_parts(3.into(), 1), Position::from(12)),
+            Ok("ijkl____".into())
+        );
+
+        // Caching variant agrees for each cap-node target.
+        for addr in [
+            Address::from_parts(3.into(), 0),
+            Address::from_parts(3.into(), 1),
+            Address::from_parts(2.into(), 1),
+        ] {
+            assert_eq!(tree.root(addr, big), tree.root_caching(addr, big));
+        }
+    }
+
+    #[test]
+    fn root_multi_shard_either_right_partial_fill() {
+        // Coverage: `root_from_shards`'s `Either::Right` arm for a directly
+        // requested multi-shard address: the even/odd stack combination, the
+        // empty-root padding loops, the truncation `break`, and the
+        // incomplete-shard accumulation. Appending leaves leaves the cap sparse
+        // (`append` never writes the cap), so requesting a multi-shard root hits
+        // the base case in `root_internal` that hands off to `root_from_shards`.
+        //
+        // DEPTH=4, SHARD_HEIGHT=2: append positions 0..=11, filling shards 0,1,2
+        // and leaving shard 3 (positions 12..=15) empty.
+        let mut tree: ShardTree<MemoryShardStore<String, u32>, 4, 2> =
+            ShardTree::new(MemoryShardStore::empty(), 100);
+        for c in 'a'..='l' {
+            tree.append(c.to_string(), Retention::Ephemeral).unwrap();
+        }
+
+        let root_addr = ShardTree::<MemoryShardStore<String, u32>, 4, 2>::root_addr();
+
+        // Full root over three filled shards plus an empty fourth. Exercises the
+        // even(0)/odd(1)/even(2) stack combine, the non-sibling stack drain, and
+        // both empty-root padding loops; the empty shard 3 falls past
+        // `truncate_at`, hitting the loop `break` rather than an incompleteness
+        // error.
+        assert_eq!(
+            tree.root(root_addr, Position::from(12)),
+            Ok("abcdefghijkl____".into())
+        );
+
+        // Sub-root multi-shard address (shards 2,3) with truncation: shard 2 is
+        // present, shard 3 is padded with the level-2 empty root.
+        assert_eq!(
+            tree.root(Address::from_parts(3.into(), 1), Position::from(12)),
+            Ok("ijkl____".into())
+        );
+
+        // Clean two-shard combine with no truncation (shards 0,1).
+        assert_eq!(
+            tree.root(Address::from_parts(3.into(), 0), Position::from(12)),
+            Ok("abcdefgh".into())
+        );
+
+        // Requesting the full root with `truncate_at` past the missing shard 3
+        // accumulates it as incomplete rather than padding with empties.
+        assert_matches!(
+            tree.root(root_addr, Position::from(16)),
+            Err(ShardTreeError::Query(QueryError::TreeIncomplete(v)))
+                if v == vec![Address::from_parts(2.into(), 3)]
+        );
+
+        // Caching variant agrees on the partial-fill multi-shard roots.
+        for (addr, trunc) in [
+            (root_addr, Position::from(12)),
+            (Address::from_parts(3.into(), 1), Position::from(12)),
+            (Address::from_parts(3.into(), 0), Position::from(12)),
+        ] {
+            assert_eq!(tree.root(addr, trunc), tree.root_caching(addr, trunc));
+        }
     }
 
     #[test]
