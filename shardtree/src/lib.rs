@@ -2333,10 +2333,13 @@ mod tests {
             let expected_root_hash = "abcdefghijklmnop".to_string();
             let target_addr = addr(4, 0);
             let truncate_at = Position::from(16);
-            let (computed_root_hash, _) =
+            let (computed_root_hash, updated_cap) =
                 tree.root_internal(&cap, target_addr, truncate_at).unwrap();
 
             assert_eq!(computed_root_hash, expected_root_hash);
+            // The fast path serves an existing cached value; it never produces
+            // a write-back node.
+            assert!(updated_cap.is_none());
         }
 
         #[test]
@@ -2349,10 +2352,13 @@ mod tests {
             let expected_root_hash = "abcd".to_string();
             let target_addr = addr(2, 0);
             let truncate_at = Position::from(4);
-            let (computed_root_hash, _) =
+            let (computed_root_hash, updated_cap) =
                 tree.root_internal(&cap, target_addr, truncate_at).unwrap();
 
             assert_eq!(computed_root_hash, expected_root_hash);
+            // The fast path serves an existing cached value; it never produces
+            // a write-back node.
+            assert!(updated_cap.is_none());
         }
 
         // ---- Phase 2: base case via `root_from_shards` ----------------------
@@ -2368,10 +2374,12 @@ mod tests {
             let expected_root_hash = "abcd".to_string();
             let target_addr = addr(2, 0);
             let truncate_at = Position::from(4);
-            let (computed_root_hash, _) =
+            let (computed_root_hash, updated_cap) =
                 tree.root_internal(&cap, target_addr, truncate_at).unwrap();
 
             assert_eq!(computed_root_hash, expected_root_hash);
+            // The result is untruncated, so it is written back as a cached leaf.
+            assert_eq!(updated_cap, Some(pleaf(&expected_root_hash)));
         }
 
         #[test]
@@ -2385,10 +2393,12 @@ mod tests {
             let expected_root_hash = "____".to_string();
             let target_addr = addr(2, 0);
             let truncate_at = Position::from(0);
-            let (computed_root_hash, _) =
+            let (computed_root_hash, updated_cap) =
                 tree.root_internal(&cap, target_addr, truncate_at).unwrap();
 
             assert_eq!(computed_root_hash, expected_root_hash);
+            // A truncated root must never be cached.
+            assert!(updated_cap.is_none());
         }
 
         #[test]
@@ -2447,10 +2457,12 @@ mod tests {
             let expected_root_hash = "abcdefgh".to_string();
             let target_addr = addr(3, 0);
             let truncate_at = Position::from(8);
-            let (computed_root_hash, _) =
+            let (computed_root_hash, updated_cap) =
                 tree.root_internal(&cap, target_addr, truncate_at).unwrap();
 
             assert_eq!(computed_root_hash, expected_root_hash);
+            // The result is untruncated, so it is written back as a cached leaf.
+            assert_eq!(updated_cap, Some(pleaf(&expected_root_hash)));
         }
 
         #[test]
@@ -2482,11 +2494,13 @@ mod tests {
             // truncation. In the pre-#143 code this is the Leaf handler's
             // recurse-and-reannotate branch; in #143 it is the Phase 2
             // `root_addr == target && !Parent` clause (which the other `base_*`
-            // tests reach only with a Nil node). The two implementations agree
-            // on the truncated root hash but differ in the optional cap
-            // write-back (pre-#143 returns a reannotated Parent, #143 returns
-            // None because a truncated root is not cacheable), so only the hash
-            // is asserted here.
+            // tests reach only with a Nil node).
+            //
+            // Divergence tripwire: the two implementations agree on the
+            // truncated root hash, but the cap write-back differs. Pre-#143
+            // returns a reannotated Parent (asserted below); #143 returns None
+            // because a truncated root is not cacheable. This assertion is meant
+            // to fail under #143 so the behavior change is reviewed, not hidden.
             let shard0 = shard(0, "a", "b", "c", "d");
             let shard1 = shard(1, "e", "f", "g", "h");
             let tree = tree_with_shards(&[shard0, shard1]);
@@ -2496,10 +2510,16 @@ mod tests {
             let expected_root_hash = "abcd____".to_string();
             let target_addr = addr(3, 0);
             let truncate_at = Position::from(4);
-            let (computed_root_hash, _) =
+            let (computed_root_hash, updated_cap) =
                 tree.root_internal(&cap, target_addr, truncate_at).unwrap();
 
             assert_eq!(computed_root_hash, expected_root_hash);
+            // The expanded Parent keeps shard 0's cached leaf, an empty right
+            // child, and the original leaf hash as its annotation.
+            assert_eq!(
+                updated_cap,
+                Some(pparent(Some("abcdefgh"), pleaf("abcd"), pnil()))
+            );
         }
 
         #[test]
@@ -2516,10 +2536,12 @@ mod tests {
             let expected_root_hash = "ab".to_string();
             let target_addr = addr(1, 0);
             let truncate_at = Position::from(4);
-            let (computed_root_hash, _) =
+            let (computed_root_hash, updated_cap) =
                 tree.root_internal(&cap, target_addr, truncate_at).unwrap();
 
             assert_eq!(computed_root_hash, expected_root_hash);
+            // Untruncated, so the sub-shard root is written back as a cached leaf.
+            assert_eq!(updated_cap, Some(pleaf(&expected_root_hash)));
         }
 
         // ---- Phase 2: `root_from_shards` multi-shard peak fold --------------
@@ -2534,10 +2556,12 @@ mod tests {
             let expected_root_hash = "abcdefgh".to_string();
             let target_addr = addr(3, 0);
             let truncate_at = Position::from(8);
-            let (computed_root_hash, _) =
+            let (computed_root_hash, updated_cap) =
                 tree.root_internal(&cap, target_addr, truncate_at).unwrap();
 
             assert_eq!(computed_root_hash, expected_root_hash);
+            // Untruncated, so the folded root is written back as a cached leaf.
+            assert_eq!(updated_cap, Some(pleaf(&expected_root_hash)));
         }
 
         #[test]
@@ -2554,10 +2578,12 @@ mod tests {
             let expected_root_hash = "abcdefgh________".to_string();
             let target_addr = addr(4, 0);
             let truncate_at = Position::from(8);
-            let (computed_root_hash, _) =
+            let (computed_root_hash, updated_cap) =
                 tree.root_internal(&cap, target_addr, truncate_at).unwrap();
 
             assert_eq!(computed_root_hash, expected_root_hash);
+            // A truncated root must never be cached.
+            assert!(updated_cap.is_none());
         }
 
         #[test]
@@ -2578,10 +2604,12 @@ mod tests {
             let expected_root_hash = "abcdefghijkl____".to_string();
             let target_addr = addr(4, 0);
             let truncate_at = Position::from(12);
-            let (computed_root_hash, _) =
+            let (computed_root_hash, updated_cap) =
                 tree.root_internal(&cap, target_addr, truncate_at).unwrap();
 
             assert_eq!(computed_root_hash, expected_root_hash);
+            // A truncated root must never be cached.
+            assert!(updated_cap.is_none());
         }
 
         #[test]
@@ -2637,10 +2665,12 @@ mod tests {
             let expected_root_hash = "________________".to_string();
             let target_addr = addr(4, 0);
             let truncate_at = Position::from(0);
-            let (computed_root_hash, _) =
+            let (computed_root_hash, updated_cap) =
                 tree.root_internal(&cap, target_addr, truncate_at).unwrap();
 
             assert_eq!(computed_root_hash, expected_root_hash);
+            // A truncated root must never be cached.
+            assert!(updated_cap.is_none());
         }
 
         // ---- Phase 3: descent (recurse into children, combine) --------------
@@ -2655,10 +2685,17 @@ mod tests {
             let expected_root_hash = "abcdefgh".to_string();
             let target_addr = addr(3, 0);
             let truncate_at = Position::from(8);
-            let (computed_root_hash, _) =
+            let (computed_root_hash, updated_cap) =
                 tree.root_internal(&cap, target_addr, truncate_at).unwrap();
 
             assert_eq!(computed_root_hash, expected_root_hash);
+            // Both children hit the fast path and produce no write-back, so the
+            // rebuilt Parent keeps the original (cached) children and stays
+            // unannotated.
+            assert_eq!(
+                updated_cap,
+                Some(pparent(None, pleaf("abcd"), pleaf("efgh")))
+            );
         }
 
         #[test]
@@ -2671,10 +2708,16 @@ mod tests {
             let expected_root_hash = "abcd".to_string();
             let target_addr = addr(2, 0);
             let truncate_at = Position::from(8);
-            let (computed_root_hash, _) =
+            let (computed_root_hash, updated_cap) =
                 tree.root_internal(&cap, target_addr, truncate_at).unwrap();
 
             assert_eq!(computed_root_hash, expected_root_hash);
+            // The right subtree is skipped; the rebuilt Parent keeps both
+            // original children unchanged and stays unannotated.
+            assert_eq!(
+                updated_cap,
+                Some(pparent(None, pleaf("abcd"), pleaf("efgh")))
+            );
         }
 
         #[test]
@@ -2686,10 +2729,16 @@ mod tests {
             let expected_root_hash = "efgh".to_string();
             let target_addr = addr(2, 1);
             let truncate_at = Position::from(8);
-            let (computed_root_hash, _) =
+            let (computed_root_hash, updated_cap) =
                 tree.root_internal(&cap, target_addr, truncate_at).unwrap();
 
             assert_eq!(computed_root_hash, expected_root_hash);
+            // The left subtree is skipped; the rebuilt Parent keeps both
+            // original children unchanged and stays unannotated.
+            assert_eq!(
+                updated_cap,
+                Some(pparent(None, pleaf("abcd"), pleaf("efgh")))
+            );
         }
 
         #[test]
@@ -2708,10 +2757,11 @@ mod tests {
                 tree.root_internal(&cap, target_addr, truncate_at).unwrap();
 
             assert_eq!(computed_root_hash, expected_root_hash);
-            // The rebuilt node retains the original leaf hash as its annotation.
+            // The rebuilt node retains the original leaf hash as its annotation,
+            // with shard 0's cached leaf on the left and an empty right child.
             assert_eq!(
-                updated_cap.and_then(|t| t.node_value().cloned()),
-                Some("abcdefgh".to_string())
+                updated_cap,
+                Some(pparent(Some("abcdefgh"), pleaf("abcd"), pnil()))
             );
         }
 
@@ -2727,10 +2777,16 @@ mod tests {
             let expected_root_hash = "efgh".to_string();
             let target_addr = addr(2, 1);
             let truncate_at = Position::from(8);
-            let (computed_root_hash, _) =
+            let (computed_root_hash, updated_cap) =
                 tree.root_internal(&cap, target_addr, truncate_at).unwrap();
 
             assert_eq!(computed_root_hash, expected_root_hash);
+            // The left subtree is skipped (empty); the right child becomes
+            // shard 1's cached leaf. No annotation (left child not cacheable).
+            assert_eq!(
+                updated_cap,
+                Some(pparent(None, pnil(), pleaf(&expected_root_hash)))
+            );
         }
 
         // ---- Annotation propagation and caching write-back ------------------
@@ -2754,9 +2810,11 @@ mod tests {
                 tree.root_internal(&cap, target_addr, truncate_at).unwrap();
 
             assert_eq!(computed_root_hash, "abcdefgh".to_string());
+            // Both children are recomputed into cached leaves, so the rebuilt
+            // Parent is annotated with the combined hash.
             assert_eq!(
-                updated_cap.and_then(|t| t.node_value().cloned()),
-                Some("abcdefgh".to_string())
+                updated_cap,
+                Some(pparent(Some("abcdefgh"), pleaf("abcd"), pleaf("efgh")))
             );
         }
 
@@ -2777,7 +2835,10 @@ mod tests {
                 tree.root_internal(&cap, target_addr, truncate_at).unwrap();
 
             assert_eq!(computed_root_hash, expected_root_hash);
-            assert_eq!(updated_cap.and_then(|t| t.node_value().cloned()), None);
+            // Left child becomes a cached leaf; the truncated right child yields
+            // no write-back, so the rebuilt Parent keeps the empty right child
+            // and carries no annotation.
+            assert_eq!(updated_cap, Some(pparent(None, pleaf("abcd"), pnil())));
         }
 
         #[test]
@@ -2795,6 +2856,8 @@ mod tests {
             let (first_root_hash, updated_cap) =
                 tree.root_internal(&cap, target_addr, truncate_at).unwrap();
             assert_eq!(first_root_hash, "abcdefgh".to_string());
+            // The fold writes the untruncated root back as a cached leaf.
+            assert_eq!(updated_cap, Some(pleaf("abcdefgh")));
             let updated_cap = updated_cap.expect("a rebuilt node is returned");
 
             // Drop all shard data, then answer the same query from the rebuilt
@@ -2833,10 +2896,20 @@ mod tests {
             let expected_root_hash = SipHashable::combine(Level::from(2), &left, &right);
             let target_addr = addr(3, 0);
             let truncate_at = Position::from(8);
-            let (computed_root_hash, _) =
+            let (computed_root_hash, updated_cap) =
                 tree.root_internal(&cap, target_addr, truncate_at).unwrap();
 
             assert_eq!(computed_root_hash, expected_root_hash);
+            // Both children hit the fast path; the rebuilt Parent keeps the
+            // original cached leaves and stays unannotated.
+            assert_eq!(
+                updated_cap,
+                Some(Tree::parent(
+                    None,
+                    Tree::leaf((left, RetentionFlags::EPHEMERAL)),
+                    Tree::leaf((right, RetentionFlags::EPHEMERAL)),
+                ))
+            );
         }
     }
 }
