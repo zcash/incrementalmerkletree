@@ -913,168 +913,140 @@ impl<
         target_addr: Address,
         truncate_at: Position,
     ) -> Result<(H, Option<PrunableTree<H>>), ShardTreeError<S::Error>> {
-        match &cap.root.0 {
-            Node::Parent { ann, left, right } => {
-                match ann {
-                    Some(cached_root)
-                        if target_addr.contains(&cap.root_addr)
-                            && truncate_at >= cap.root_addr.position_range_end() =>
-                    {
-                        Ok((cached_root.as_ref().clone(), None))
-                    }
-                    _ => {
-                        // Compute the roots of the left and right children and hash them together.
-                        // We skip computation in any subtrees that will not have data included in
-                        // the final result.
-                        let (l_addr, r_addr) = cap
-                            .root_addr
-                            .children()
-                            .expect("has children because we checked `cap.root` is a parent");
-                        let l_result = if r_addr.contains(&target_addr) {
-                            None
-                        } else {
-                            Some(self.root_internal(
-                                &LocatedPrunableTree {
-                                    root_addr: l_addr,
-                                    root: left.as_ref().clone(),
-                                },
-                                if l_addr.contains(&target_addr) {
-                                    target_addr
-                                } else {
-                                    l_addr
-                                },
-                                truncate_at,
-                            )?)
-                        };
-                        let r_result = if l_addr.contains(&target_addr) {
-                            None
-                        } else {
-                            Some(self.root_internal(
-                                &LocatedPrunableTree {
-                                    root_addr: r_addr,
-                                    root: right.as_ref().clone(),
-                                },
-                                if r_addr.contains(&target_addr) {
-                                    target_addr
-                                } else {
-                                    r_addr
-                                },
-                                truncate_at,
-                            )?)
-                        };
+        let cacheable = truncate_at >= cap.root_addr.position_range_end();
+        let target_contains = target_addr.contains(&cap.root_addr);
 
-                        // Compute the root value based on the child roots; these may contain the
-                        // hashes of empty/truncated nodes.
-                        let (root, new_left, new_right) = match (l_result, r_result) {
-                            (Some((l_root, new_left)), Some((r_root, new_right))) => (
-                                S::H::combine(l_addr.level(), &l_root, &r_root),
-                                new_left,
-                                new_right,
-                            ),
-                            (Some((l_root, new_left)), None) => (l_root, new_left, None),
-                            (None, Some((r_root, new_right))) => (r_root, None, new_right),
-                            (None, None) => unreachable!(),
-                        };
-
-                        // We don't use the `Tree::parent` constructor here, because it
-                        // creates `Arc`s for the child nodes internally, but if we don't
-                        // have a new child then we want to use the `Arc` for the existing
-                        // child.
-                        let new_parent = Tree(Node::Parent {
-                            ann: new_left
-                                .as_ref()
-                                .and_then(|l| l.node_value())
-                                .zip(new_right.as_ref().and_then(|r| r.node_value()))
-                                .map(|(l, r)| {
-                                    // Child node values are guaranteed to be non-truncated:
-                                    // the Nil handler only caches a Leaf when
-                                    // `truncate_at >= range_end`, and Parent annotations
-                                    // are built from these leaves recursively via this
-                                    // same `.zip().map()` chain, so the invariant holds
-                                    // at every level.
-                                    Arc::new(S::H::combine(l_addr.level(), l, r))
-                                }),
-                            left: new_left.map_or_else(|| left.clone(), Arc::new),
-                            right: new_right.map_or_else(|| right.clone(), Arc::new),
-                        });
-
-                        Ok((root, Some(new_parent)))
-                    }
-                }
-            }
-            Node::Leaf { value } => {
-                if truncate_at >= cap.root_addr.position_range_end()
-                    && target_addr.contains(&cap.root_addr)
-                {
-                    // no truncation or computation of child subtrees of this leaf is necessary, just use
-                    // the cached leaf value
-                    Ok((value.0.clone(), None))
-                } else if cap.root_addr.level()
-                    == ShardTree::<S, DEPTH, SHARD_HEIGHT>::subtree_level()
-                {
-                    // We are at the shard level and need a truncated root. Compute it
-                    // directly from the shard data rather than splitting this leaf, which
-                    // would introduce Parent nodes below the shard level into the cap.
-                    let root = self.root_from_shards(
-                        if target_addr.contains(&cap.root_addr) {
-                            cap.root_addr
-                        } else {
-                            target_addr
-                        },
-                        truncate_at,
-                    )?;
-                    // The result incorporates truncation so must not be cached.
-                    Ok((root, None))
-                } else {
-                    // since the tree was truncated below this level, recursively call with an
-                    // empty parent node to trigger the continued traversal
-                    let (root, replacement) = self.root_internal(
-                        &LocatedPrunableTree {
-                            root_addr: cap.root_addr(),
-                            root: Tree::parent(None, Tree::empty(), Tree::empty()),
-                        },
-                        target_addr,
-                        truncate_at,
-                    )?;
-
-                    Ok((
-                        root,
-                        replacement.map(|r| r.reannotate_root(Some(Arc::new(value.0.clone())))),
-                    ))
-                }
-            }
-            Node::Nil => {
-                if cap.root_addr == target_addr
-                    || cap.root_addr.level() == ShardTree::<S, DEPTH, SHARD_HEIGHT>::subtree_level()
-                {
-                    // We are at the leaf level or the target address; compute the root hash and
-                    // return it as cacheable if it is not truncated.
-                    let root = self.root_from_shards(target_addr, truncate_at)?;
-                    Ok((
-                        root.clone(),
-                        if truncate_at >= cap.root_addr.position_range_end() {
-                            // return the computed root as a new leaf to be cached if it contains no
-                            // empty hashes due to truncation
-                            Some(Tree::leaf((root, RetentionFlags::EPHEMERAL)))
-                        } else {
-                            None
-                        },
-                    ))
-                } else {
-                    // Compute the result by recursively walking down the tree. By replacing
-                    // the current node with a parent node, the `Parent` handler will take care
-                    // of the branching recursive calls.
-                    self.root_internal(
-                        &LocatedPrunableTree {
-                            root_addr: cap.root_addr,
-                            root: Tree::parent(None, Tree::empty(), Tree::empty()),
-                        },
-                        target_addr,
-                        truncate_at,
-                    )
-                }
+        // Phase 1: Fast path — if a cached value is available and no truncation is needed,
+        // return it immediately. `node_value()` returns the annotation for Parent nodes or
+        // the hash for Leaf nodes.
+        if cacheable && target_contains {
+            if let Some(v) = cap.root.node_value() {
+                return Ok((v.clone(), None));
             }
         }
+
+        // Phase 2: Base case — at shard level, or a Nil node at the target address. In
+        // both cases there is no cached subtree to preserve, so compute the root directly
+        // from shard data. A Leaf at the target address is intentionally excluded here:
+        // when it needs truncation it is expanded and reannotated by the Phase 3 descent,
+        // preserving its cached hash as the replacement Parent's annotation (a cacheable
+        // Leaf at the target is already served by the Phase 1 fast path).
+        let at_shard_level =
+            cap.root_addr.level() == ShardTree::<S, DEPTH, SHARD_HEIGHT>::subtree_level();
+        if at_shard_level || (cap.root_addr == target_addr && matches!(&cap.root.0, Node::Nil)) {
+            let addr = if target_contains {
+                cap.root_addr
+            } else {
+                target_addr
+            };
+            let root = self.root_from_shards(addr, truncate_at)?;
+            return Ok((
+                root.clone(),
+                if cacheable {
+                    Some(Tree::leaf((root, RetentionFlags::EPHEMERAL)))
+                } else {
+                    None
+                },
+            ));
+        }
+
+        // Phase 3: Descent — recurse into children and combine results.
+
+        // Save the original leaf value so we can re-annotate the replacement Parent with it,
+        // preserving cached values when a Leaf is expanded.
+        let orig_leaf_value = match &cap.root.0 {
+            Node::Leaf { value } => Some(value.0.clone()),
+            _ => None,
+        };
+
+        // Get children: real children for Parent nodes, empty children for Leaf/Nil.
+        let (orig_left, orig_right) = match &cap.root.0 {
+            Node::Parent { left, right, .. } => (left.clone(), right.clone()),
+            _ => (Arc::new(Tree::empty()), Arc::new(Tree::empty())),
+        };
+
+        let (l_addr, r_addr) = cap
+            .root_addr
+            .children()
+            .expect("descent is only reached above shard level");
+
+        // Recurse into children. We skip computation in any subtree that will not
+        // contribute data to the final result based on target_addr containment.
+        let l_result = if r_addr.contains(&target_addr) {
+            None
+        } else {
+            Some(self.root_internal(
+                &LocatedPrunableTree {
+                    root_addr: l_addr,
+                    root: (*orig_left).clone(),
+                },
+                if l_addr.contains(&target_addr) {
+                    target_addr
+                } else {
+                    l_addr
+                },
+                truncate_at,
+            )?)
+        };
+        let r_result = if l_addr.contains(&target_addr) {
+            None
+        } else {
+            Some(self.root_internal(
+                &LocatedPrunableTree {
+                    root_addr: r_addr,
+                    root: (*orig_right).clone(),
+                },
+                if r_addr.contains(&target_addr) {
+                    target_addr
+                } else {
+                    r_addr
+                },
+                truncate_at,
+            )?)
+        };
+
+        // Compute the root value based on the child roots; these may contain the
+        // hashes of empty/truncated nodes.
+        let (root, new_left, new_right) = match (l_result, r_result) {
+            (Some((l_root, new_left)), Some((r_root, new_right))) => (
+                S::H::combine(l_addr.level(), &l_root, &r_root),
+                new_left,
+                new_right,
+            ),
+            (Some((l_root, new_left)), None) => (l_root, new_left, None),
+            (None, Some((r_root, new_right))) => (r_root, None, new_right),
+            (None, None) => unreachable!(),
+        };
+
+        // We don't use the `Tree::parent` constructor here, because it
+        // creates `Arc`s for the child nodes internally, but if we don't
+        // have a new child then we want to use the `Arc` for the existing
+        // child.
+        let new_parent = Tree(Node::Parent {
+            ann: new_left
+                .as_ref()
+                .and_then(|l| l.node_value())
+                .zip(new_right.as_ref().and_then(|r| r.node_value()))
+                .map(|(l, r)| {
+                    // Child node values are guaranteed to be non-truncated:
+                    // the base case only caches a Leaf when `cacheable` is true
+                    // (i.e. `truncate_at >= range_end`), and Parent annotations
+                    // are built from these leaves recursively via this same
+                    // `.zip().map()` chain, so the invariant holds at every level.
+                    Arc::new(S::H::combine(l_addr.level(), l, r))
+                }),
+            left: new_left.map_or_else(|| orig_left, Arc::new),
+            right: new_right.map_or_else(|| orig_right, Arc::new),
+        });
+
+        // If the original node was a Leaf, preserve its hash as the Parent annotation
+        // so that future non-truncated lookups can use it via the fast-path.
+        let replacement = match orig_leaf_value {
+            Some(h) => new_parent.reannotate_root(Some(Arc::new(h))),
+            None => new_parent,
+        };
+
+        Ok((root, Some(replacement)))
     }
 
     fn root_from_shards(
@@ -2491,16 +2463,17 @@ mod tests {
         #[test]
         fn base_leaf_at_target_truncated() {
             // A Leaf above the shard level, queried at its own address with
-            // truncation. In the pre-#143 code this is the Leaf handler's
-            // recurse-and-reannotate branch; in #143 it is the Phase 2
-            // `root_addr == target && !Parent` clause (which the other `base_*`
-            // tests reach only with a Nil node).
+            // truncation. Pre-#143 this is the Leaf handler's
+            // recurse-and-reannotate branch. #143 reproduces that branch by
+            // excluding a Leaf-at-target from the Phase 2 base case (which is
+            // restricted to Nil-at-target), so the Phase 3 descent expands the
+            // Leaf, computes the truncated root, and reannotates the resulting
+            // Parent with the original leaf value.
             //
-            // Divergence tripwire: the two implementations agree on the
-            // truncated root hash, but the cap write-back differs. Pre-#143
-            // returns a reannotated Parent (asserted below); #143 returns None
-            // because a truncated root is not cacheable. This assertion is meant
-            // to fail under #143 so the behavior change is reviewed, not hidden.
+            // The reannotated annotation is the original un-truncated hash
+            // ("abcdefgh"), never the truncated root, so the write-back stays a
+            // valid cache entry: a later non-truncated lookup served from it via
+            // the Phase 1 fast path returns the correct hash.
             let shard0 = shard(0, "a", "b", "c", "d");
             let shard1 = shard(1, "e", "f", "g", "h");
             let tree = tree_with_shards(&[shard0, shard1]);
