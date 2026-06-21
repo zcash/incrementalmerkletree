@@ -1585,30 +1585,38 @@ mod tests {
 
     #[test]
     fn shardtree_insertion() {
-        let tree: ShardTree<MemoryShardStore<String, u32>, 4, 3> =
-            ShardTree::new(MemoryShardStore::empty(), 100);
+        let tree = empty_tree::<String, 4, 3>();
 
         check_shardtree_insertion(tree)
     }
 
     #[test]
     fn shard_sizes() {
-        let tree: ShardTree<MemoryShardStore<String, u32>, 4, 2> =
-            ShardTree::new(MemoryShardStore::empty(), 100);
+        let tree = empty_tree::<String, 4, 2>();
 
         check_shard_sizes(tree)
     }
 
     #[test]
     fn witness_with_pruned_subtrees() {
-        let tree: ShardTree<MemoryShardStore<String, u32>, 6, 3> =
-            ShardTree::new(MemoryShardStore::empty(), 100);
+        let tree = empty_tree::<String, 6, 3>();
 
         check_witness_with_pruned_subtrees(tree)
     }
 
     fn new_tree(m: usize) -> ShardTree<MemoryShardStore<String, usize>, 4, 3> {
         ShardTree::new(MemoryShardStore::empty(), m)
+    }
+
+    /// An empty in-memory tree of the given depth and shard height, retaining up
+    /// to 100 checkpoints. Generic over the hash type so it serves both the
+    /// `String` and `SipHashable` test trees.
+    fn empty_tree<H, const DEPTH: u8, const SHARD_HEIGHT: u8>(
+    ) -> ShardTree<MemoryShardStore<H, u32>, DEPTH, SHARD_HEIGHT>
+    where
+        H: Hashable + Clone + PartialEq,
+    {
+        ShardTree::new(MemoryShardStore::empty(), 100)
     }
 
     #[test]
@@ -1648,15 +1656,13 @@ mod tests {
 
     #[test]
     fn frontier_empty_tree() {
-        let tree: ShardTree<MemoryShardStore<String, u32>, 4, 3> =
-            ShardTree::new(MemoryShardStore::empty(), 100);
+        let tree = empty_tree::<String, 4, 3>();
         assert_eq!(tree.frontier().unwrap(), Frontier::empty());
     }
 
     #[test]
     fn frontier_single_leaf() {
-        let mut tree: ShardTree<MemoryShardStore<String, u32>, 4, 3> =
-            ShardTree::new(MemoryShardStore::empty(), 100);
+        let mut tree = empty_tree::<String, 4, 3>();
         tree.append("a".to_string(), Retention::Ephemeral).unwrap();
 
         let frontier = tree.frontier().unwrap();
@@ -1677,8 +1683,7 @@ mod tests {
         )
         .unwrap();
 
-        let mut tree: ShardTree<MemoryShardStore<String, u32>, 4, 3> =
-            ShardTree::new(MemoryShardStore::empty(), 100);
+        let mut tree = empty_tree::<String, 4, 3>();
         tree.insert_frontier_nodes(original.clone(), Retention::Ephemeral)
             .unwrap();
 
@@ -1699,8 +1704,7 @@ mod tests {
         )
         .unwrap();
 
-        let mut tree: ShardTree<MemoryShardStore<String, u32>, 4, 3> =
-            ShardTree::new(MemoryShardStore::empty(), 100);
+        let mut tree = empty_tree::<String, 4, 3>();
         tree.insert_frontier_nodes(original.clone(), Retention::Ephemeral)
             .unwrap();
 
@@ -1711,8 +1715,7 @@ mod tests {
     #[test]
     fn frontier_from_appended_leaves() {
         // Append leaves with the last one marked, so it isn't pruned away.
-        let mut tree: ShardTree<MemoryShardStore<String, u32>, 4, 3> =
-            ShardTree::new(MemoryShardStore::empty(), 100);
+        let mut tree = empty_tree::<String, 4, 3>();
         for c in 'a'..='i' {
             tree.append(c.to_string(), Retention::Ephemeral).unwrap();
         }
@@ -1742,8 +1745,7 @@ mod tests {
         )
         .unwrap();
 
-        let mut tree: ShardTree<MemoryShardStore<String, u32>, 4, 3> =
-            ShardTree::new(MemoryShardStore::empty(), 100);
+        let mut tree = empty_tree::<String, 4, 3>();
         tree.insert_frontier_nodes(original, Retention::Ephemeral)
             .unwrap();
 
@@ -2088,8 +2090,7 @@ mod tests {
         //    and incorrectly returns full_hash instead of recomputing with truncation.
         //
         // DEPTH=4, SHARD_HEIGHT=2: 4 shards of 4 positions each, 16 total positions.
-        let mut tree: ShardTree<MemoryShardStore<String, u32>, 4, 2> =
-            ShardTree::new(MemoryShardStore::empty(), 100);
+        let mut tree = empty_tree::<String, 4, 2>();
 
         // Fill all 16 positions (shards 0-3).
         for (i, c) in ('a'..='p').enumerate() {
@@ -2136,8 +2137,7 @@ mod tests {
         //
         // DEPTH=4, SHARD_HEIGHT=2: 4 shards of 4 positions each.
         // The cap covers levels 2..4 (2 internal levels above the shard leaves).
-        let mut tree: ShardTree<MemoryShardStore<String, u32>, 4, 2> =
-            ShardTree::new(MemoryShardStore::empty(), 100);
+        let mut tree = empty_tree::<String, 4, 2>();
 
         // Fill shard 0 (positions 0-3) and start shard 1 (position 4).
         tree.append(
@@ -2229,6 +2229,686 @@ mod tests {
             assert_eq!(
                 t.root.root_hash(root_addr, Position::from(3)),
                 Ok("abc_____".to_string())
+            );
+        }
+    }
+
+    // -----------------------------------------------------------------------
+    // Regression tests for `root_internal`.
+    //
+    // These exercise every branch of the three-phase `root_internal` flow and
+    // its `root_from_shards` delegate, by calling `root_internal` directly with
+    // a hand-built cap node, a target address, and a `truncate_at` bound chosen
+    // to hit a specific branch. Each test compares a hand-written
+    // `expected_root_hash` against the `computed_root_hash` returned by the
+    // method.
+    //
+    // Fixture: `DEPTH = 4`, `SHARD_HEIGHT = 2`. With the `String` test hash,
+    // `combine` is concatenation and `empty_root(level n)` is `2^n`
+    // underscores: `_`, `__`, `____`, `________`, then 16 for level 4. Shards
+    // are rooted at level 2 (4 leaves each); the cap spans levels 2..=4.
+    // -----------------------------------------------------------------------
+    mod root_internal {
+        use std::sync::Arc;
+
+        use assert_matches::assert_matches;
+        use incrementalmerkletree::{Address, Hashable, Level, Position};
+        use incrementalmerkletree_testing::SipHashable;
+
+        use crate::{
+            error::{QueryError, ShardTreeError},
+            store::{memory::MemoryShardStore, ShardStore},
+            LocatedPrunableTree, LocatedTree, PrunableTree, RetentionFlags, ShardTree, Tree,
+        };
+
+        use super::empty_tree;
+
+        type TestTree = ShardTree<MemoryShardStore<String, u32>, 4, 2>;
+
+        fn addr(level: u8, index: u64) -> Address {
+            Address::from_parts(Level::from(level), index)
+        }
+
+        // A `String` leaf with the given content and EPHEMERAL retention.
+        fn pleaf(value: &str) -> PrunableTree<String> {
+            Tree::leaf((value.to_string(), RetentionFlags::EPHEMERAL))
+        }
+
+        // A `String` parent with an optional cached-hash annotation.
+        fn pparent(
+            ann: Option<&str>,
+            left: PrunableTree<String>,
+            right: PrunableTree<String>,
+        ) -> PrunableTree<String> {
+            Tree::parent(ann.map(|s| Arc::new(s.to_string())), left, right)
+        }
+
+        fn pnil() -> PrunableTree<String> {
+            Tree::empty()
+        }
+
+        // A located cap node: the tree paired with its absolute address.
+        fn cap_at(
+            level: u8,
+            index: u64,
+            root: PrunableTree<String>,
+        ) -> LocatedPrunableTree<String> {
+            LocatedTree {
+                root_addr: addr(level, index),
+                root,
+            }
+        }
+
+        // A complete shard at level 2 (root address `(2, index)`) holding the
+        // four given leaves. Its root hash is the concatenation `abcd`.
+        fn shard(index: u64, a: &str, b: &str, c: &str, d: &str) -> LocatedPrunableTree<String> {
+            LocatedTree {
+                root_addr: addr(2, index),
+                root: pparent(
+                    None,
+                    pparent(None, pleaf(a), pleaf(b)),
+                    pparent(None, pleaf(c), pleaf(d)),
+                ),
+            }
+        }
+
+        fn tree_with_shards(shards: &[LocatedPrunableTree<String>]) -> TestTree {
+            let mut tree = empty_tree::<String, 4, 2>();
+            for s in shards {
+                tree.store.put_shard(s.clone()).unwrap();
+            }
+            tree
+        }
+
+        // ---- Phase 1: fast path (cached value returned immediately) ---------
+
+        #[test]
+        fn fast_path_parent_cached() {
+            // A Parent carrying a cached annotation, queried at its own address
+            // with no truncation: the annotation is returned without touching
+            // any shard data (the store is empty on purpose).
+            let tree = empty_tree::<String, 4, 2>();
+            let cap = cap_at(4, 0, pparent(Some("abcdefghijklmnop"), pnil(), pnil()));
+
+            let expected_root_hash = "abcdefghijklmnop".to_string();
+            let target_addr = addr(4, 0);
+            let truncate_at = Position::from(16);
+            let (computed_root_hash, updated_cap) =
+                tree.root_internal(&cap, target_addr, truncate_at).unwrap();
+
+            assert_eq!(computed_root_hash, expected_root_hash);
+            // The fast path serves an existing cached value; it never produces
+            // a write-back node.
+            assert!(updated_cap.is_none());
+        }
+
+        #[test]
+        fn fast_path_leaf_cached() {
+            // A Leaf node carries its hash directly; querying it at its own
+            // address with no truncation returns that hash via the fast path.
+            let tree = empty_tree::<String, 4, 2>();
+            let cap = cap_at(2, 0, pleaf("abcd"));
+
+            let expected_root_hash = "abcd".to_string();
+            let target_addr = addr(2, 0);
+            let truncate_at = Position::from(4);
+            let (computed_root_hash, updated_cap) =
+                tree.root_internal(&cap, target_addr, truncate_at).unwrap();
+
+            assert_eq!(computed_root_hash, expected_root_hash);
+            // The fast path serves an existing cached value; it never produces
+            // a write-back node.
+            assert!(updated_cap.is_none());
+        }
+
+        // ---- Phase 2: base case via `root_from_shards` ----------------------
+
+        #[test]
+        fn base_shard_level_single_present() {
+            // Trigger C: the cap node sits at the shard level, so the root is
+            // read directly from the single backing shard.
+            let shard0 = shard(0, "a", "b", "c", "d");
+            let tree = tree_with_shards(&[shard0]);
+            let cap = cap_at(2, 0, pnil());
+
+            let expected_root_hash = "abcd".to_string();
+            let target_addr = addr(2, 0);
+            let truncate_at = Position::from(4);
+            let (computed_root_hash, updated_cap) =
+                tree.root_internal(&cap, target_addr, truncate_at).unwrap();
+
+            assert_eq!(computed_root_hash, expected_root_hash);
+            // The result is untruncated, so it is written back as a cached leaf.
+            assert_eq!(updated_cap, Some(pleaf(&expected_root_hash)));
+        }
+
+        #[test]
+        fn base_shard_truncated_to_empty() {
+            // `truncate_at` at the start of the shard's range makes the whole
+            // shard empty, so the empty root for level 2 is returned.
+            let shard0 = shard(0, "a", "b", "c", "d");
+            let tree = tree_with_shards(&[shard0]);
+            let cap = cap_at(2, 0, pnil());
+
+            let expected_root_hash = "____".to_string();
+            let target_addr = addr(2, 0);
+            let truncate_at = Position::from(0);
+            let (computed_root_hash, updated_cap) =
+                tree.root_internal(&cap, target_addr, truncate_at).unwrap();
+
+            assert_eq!(computed_root_hash, expected_root_hash);
+            // A truncated root must never be cached.
+            assert!(updated_cap.is_none());
+        }
+
+        #[test]
+        fn base_shard_missing_errors() {
+            // The requested shard was never stored: report it incomplete.
+            let shard0 = shard(0, "a", "b", "c", "d");
+            let tree = tree_with_shards(&[shard0]);
+            let cap = cap_at(2, 1, pnil());
+
+            let target_addr = addr(2, 1);
+            let truncate_at = Position::from(8);
+            let err = tree
+                .root_internal(&cap, target_addr, truncate_at)
+                .unwrap_err();
+
+            assert_matches!(
+                err,
+                ShardTreeError::Query(QueryError::TreeIncomplete(addrs))
+                    if addrs == vec![addr(2, 1)]
+            );
+        }
+
+        #[test]
+        fn base_shard_node_not_retained_errors() {
+            // The shard exists but a node required for the root was pruned
+            // away (its left child is Nil): report that node's address.
+            let pruned = LocatedTree {
+                root_addr: addr(2, 2),
+                root: pparent(None, pnil(), pparent(None, pleaf("k"), pleaf("l"))),
+            };
+            let tree = tree_with_shards(&[pruned]);
+            let cap = cap_at(2, 2, pnil());
+
+            let target_addr = addr(2, 2);
+            let truncate_at = Position::from(12);
+            let err = tree
+                .root_internal(&cap, target_addr, truncate_at)
+                .unwrap_err();
+
+            assert_matches!(
+                err,
+                ShardTreeError::Query(QueryError::TreeIncomplete(addrs))
+                    if addrs == vec![addr(1, 4)]
+            );
+        }
+
+        #[test]
+        fn base_target_nil_above_shard() {
+            // Trigger D: a non-Parent (Nil) cap node above the shard level,
+            // queried at its own address, folds the shards it spans.
+            let shard0 = shard(0, "a", "b", "c", "d");
+            let shard1 = shard(1, "e", "f", "g", "h");
+            let tree = tree_with_shards(&[shard0, shard1]);
+            let cap = cap_at(3, 0, pnil());
+
+            let expected_root_hash = "abcdefgh".to_string();
+            let target_addr = addr(3, 0);
+            let truncate_at = Position::from(8);
+            let (computed_root_hash, updated_cap) =
+                tree.root_internal(&cap, target_addr, truncate_at).unwrap();
+
+            assert_eq!(computed_root_hash, expected_root_hash);
+            // The result is untruncated, so it is written back as a cached leaf.
+            assert_eq!(updated_cap, Some(pleaf(&expected_root_hash)));
+        }
+
+        #[test]
+        fn base_shard_level_leaf_truncated() {
+            // A cached shard-level Leaf, queried with truncation, must not return
+            // its cached hash: the base case recomputes the (truncated) root from
+            // the backing shard and does not re-cache it. This is the shard-level
+            // Leaf entry into Phase 2, which the `base_shard_*` tests reach only
+            // with a Nil node.
+            let shard0 = shard(0, "a", "b", "c", "d");
+            let tree = tree_with_shards(&[shard0]);
+            let cap = cap_at(2, 0, pleaf("abcd"));
+
+            // truncate_at = 2 keeps positions 0,1 and empties 2,3.
+            let expected_root_hash = "ab__".to_string();
+            let target_addr = addr(2, 0);
+            let truncate_at = Position::from(2);
+            let (computed_root_hash, updated_cap) =
+                tree.root_internal(&cap, target_addr, truncate_at).unwrap();
+
+            assert_eq!(computed_root_hash, expected_root_hash);
+            // A truncated root must never be cached.
+            assert!(updated_cap.is_none());
+        }
+
+        #[test]
+        fn base_leaf_at_target_truncated() {
+            // A Leaf above the shard level, queried at its own address with
+            // truncation. In the pre-#143 code this is the Leaf handler's
+            // recurse-and-reannotate branch; in #143 it is the Phase 2
+            // `root_addr == target && !Parent` clause (which the other `base_*`
+            // tests reach only with a Nil node).
+            //
+            // Divergence tripwire: the two implementations agree on the
+            // truncated root hash, but the cap write-back differs. Pre-#143
+            // returns a reannotated Parent (asserted below); #143 returns None
+            // because a truncated root is not cacheable. This assertion is meant
+            // to fail under #143 so the behavior change is reviewed, not hidden.
+            let shard0 = shard(0, "a", "b", "c", "d");
+            let shard1 = shard(1, "e", "f", "g", "h");
+            let tree = tree_with_shards(&[shard0, shard1]);
+            let cap = cap_at(3, 0, pleaf("abcdefgh"));
+
+            // truncate_at = 4 keeps shard 0 and empties shard 1.
+            let expected_root_hash = "abcd____".to_string();
+            let target_addr = addr(3, 0);
+            let truncate_at = Position::from(4);
+            let (computed_root_hash, updated_cap) =
+                tree.root_internal(&cap, target_addr, truncate_at).unwrap();
+
+            assert_eq!(computed_root_hash, expected_root_hash);
+            // The expanded Parent keeps shard 0's cached leaf, an empty right
+            // child, and the original leaf hash as its annotation.
+            assert_eq!(
+                updated_cap,
+                Some(pparent(Some("abcdefgh"), pleaf("abcd"), pnil()))
+            );
+        }
+
+        #[test]
+        fn base_target_below_shard_level() {
+            // A target address strictly below the shard level: the base case uses
+            // `target_addr` (not `cap.root_addr`) for the shard lookup, and
+            // `root_from_shards` resolves it via the proper-descendant path
+            // `subtree.subtree(address)` rather than the whole-subtree root.
+            let shard0 = shard(0, "a", "b", "c", "d");
+            let tree = tree_with_shards(&[shard0]);
+            let cap = cap_at(2, 0, pnil());
+
+            // (1, 0) spans positions 0,1; its root is `combine(0, "a", "b")`.
+            let expected_root_hash = "ab".to_string();
+            let target_addr = addr(1, 0);
+            let truncate_at = Position::from(4);
+            let (computed_root_hash, updated_cap) =
+                tree.root_internal(&cap, target_addr, truncate_at).unwrap();
+
+            assert_eq!(computed_root_hash, expected_root_hash);
+            // Untruncated, so the sub-shard root is written back as a cached leaf.
+            assert_eq!(updated_cap, Some(pleaf(&expected_root_hash)));
+        }
+
+        // ---- Phase 2: `root_from_shards` multi-shard peak fold --------------
+
+        #[test]
+        fn shards_fold_two_present() {
+            let shard0 = shard(0, "a", "b", "c", "d");
+            let shard1 = shard(1, "e", "f", "g", "h");
+            let tree = tree_with_shards(&[shard0, shard1]);
+            let cap = cap_at(3, 0, pnil());
+
+            let expected_root_hash = "abcdefgh".to_string();
+            let target_addr = addr(3, 0);
+            let truncate_at = Position::from(8);
+            let (computed_root_hash, updated_cap) =
+                tree.root_internal(&cap, target_addr, truncate_at).unwrap();
+
+            assert_eq!(computed_root_hash, expected_root_hash);
+            // Untruncated, so the folded root is written back as a cached leaf.
+            assert_eq!(updated_cap, Some(pleaf(&expected_root_hash)));
+        }
+
+        #[test]
+        fn shards_fold_with_truncation() {
+            // The left half (shards 0,1) is present; everything from position 8
+            // on is truncated, so the right peak is padded with `empty_root(3)`.
+            let shard0 = shard(0, "a", "b", "c", "d");
+            let shard1 = shard(1, "e", "f", "g", "h");
+            let shard2 = shard(2, "i", "j", "k", "l");
+            let shard3 = shard(3, "m", "n", "o", "p");
+            let tree = tree_with_shards(&[shard0, shard1, shard2, shard3]);
+            let cap = cap_at(4, 0, pnil());
+
+            let expected_root_hash = "abcdefgh________".to_string();
+            let target_addr = addr(4, 0);
+            let truncate_at = Position::from(8);
+            let (computed_root_hash, updated_cap) =
+                tree.root_internal(&cap, target_addr, truncate_at).unwrap();
+
+            assert_eq!(computed_root_hash, expected_root_hash);
+            // A truncated root must never be cached.
+            assert!(updated_cap.is_none());
+        }
+
+        #[test]
+        fn shards_fold_unaligned_present_count() {
+            // Three shards present, the fourth truncated away. The peak stack
+            // holds two entries at different levels ((3,0) and (2,2)), so the
+            // final fold runs its inner `while addr.level() > cur_addr.level()`
+            // loop to pad the lone shard 2 up to level 3 with an empty sibling
+            // before combining. No single- or empty-stack fold reaches that loop.
+            let shard0 = shard(0, "a", "b", "c", "d");
+            let shard1 = shard(1, "e", "f", "g", "h");
+            let shard2 = shard(2, "i", "j", "k", "l");
+            let tree = tree_with_shards(&[shard0, shard1, shard2]);
+            let cap = cap_at(4, 0, pnil());
+
+            // shards 0,1 fold to "abcdefgh"; shard 2 is padded to "ijkl____";
+            // shard 3 (positions 12..16) is truncated.
+            let expected_root_hash = "abcdefghijkl____".to_string();
+            let target_addr = addr(4, 0);
+            let truncate_at = Position::from(12);
+            let (computed_root_hash, updated_cap) =
+                tree.root_internal(&cap, target_addr, truncate_at).unwrap();
+
+            assert_eq!(computed_root_hash, expected_root_hash);
+            // A truncated root must never be cached.
+            assert!(updated_cap.is_none());
+        }
+
+        #[test]
+        fn shards_fold_missing_errors() {
+            // A shard required for the multi-shard fold is missing.
+            let shard0 = shard(0, "a", "b", "c", "d");
+            let tree = tree_with_shards(&[shard0]);
+            let cap = cap_at(3, 0, pnil());
+
+            let target_addr = addr(3, 0);
+            let truncate_at = Position::from(8);
+            let err = tree
+                .root_internal(&cap, target_addr, truncate_at)
+                .unwrap_err();
+
+            assert_matches!(
+                err,
+                ShardTreeError::Query(QueryError::TreeIncomplete(addrs))
+                    if addrs == vec![addr(2, 1)]
+            );
+        }
+
+        #[test]
+        fn shards_fold_multiple_missing_errors() {
+            // Several shards required for the multi-shard fold are missing. The
+            // incomplete addresses accumulate (`incomplete.append`) and are all
+            // reported together, not just the first one.
+            let shard0 = shard(0, "a", "b", "c", "d");
+            let tree = tree_with_shards(&[shard0]);
+            let cap = cap_at(4, 0, pnil());
+
+            let target_addr = addr(4, 0);
+            let truncate_at = Position::from(16);
+            let err = tree
+                .root_internal(&cap, target_addr, truncate_at)
+                .unwrap_err();
+
+            assert_matches!(
+                err,
+                ShardTreeError::Query(QueryError::TreeIncomplete(addrs))
+                    if addrs == vec![addr(2, 1), addr(2, 2), addr(2, 3)]
+            );
+        }
+
+        #[test]
+        fn full_truncation_empty_root() {
+            // Truncating at position 0 empties the whole tree; the empty-stack
+            // branch of the fold returns `empty_root(4)` (16 underscores).
+            let shard0 = shard(0, "a", "b", "c", "d");
+            let tree = tree_with_shards(&[shard0]);
+            let cap = cap_at(4, 0, pnil());
+
+            let expected_root_hash = "________________".to_string();
+            let target_addr = addr(4, 0);
+            let truncate_at = Position::from(0);
+            let (computed_root_hash, updated_cap) =
+                tree.root_internal(&cap, target_addr, truncate_at).unwrap();
+
+            assert_eq!(computed_root_hash, expected_root_hash);
+            // A truncated root must never be cached.
+            assert!(updated_cap.is_none());
+        }
+
+        // ---- Phase 3: descent (recurse into children, combine) --------------
+
+        #[test]
+        fn descent_parent_both_children() {
+            // Querying a Parent at its own address recurses into both children
+            // (each a cached leaf) and combines them: the `(Some, Some)` arm.
+            let tree = empty_tree::<String, 4, 2>();
+            let cap = cap_at(3, 0, pparent(None, pleaf("abcd"), pleaf("efgh")));
+
+            let expected_root_hash = "abcdefgh".to_string();
+            let target_addr = addr(3, 0);
+            let truncate_at = Position::from(8);
+            let (computed_root_hash, updated_cap) =
+                tree.root_internal(&cap, target_addr, truncate_at).unwrap();
+
+            assert_eq!(computed_root_hash, expected_root_hash);
+            // Both children hit the fast path and produce no write-back, so the
+            // rebuilt Parent keeps the original (cached) children and stays
+            // unannotated.
+            assert_eq!(
+                updated_cap,
+                Some(pparent(None, pleaf("abcd"), pleaf("efgh")))
+            );
+        }
+
+        #[test]
+        fn descent_target_in_left_child() {
+            // Target is inside the left child only: the right subtree is
+            // skipped and the left root is returned (the `(Some, None)` arm).
+            let tree = empty_tree::<String, 4, 2>();
+            let cap = cap_at(3, 0, pparent(None, pleaf("abcd"), pleaf("efgh")));
+
+            let expected_root_hash = "abcd".to_string();
+            let target_addr = addr(2, 0);
+            let truncate_at = Position::from(8);
+            let (computed_root_hash, updated_cap) =
+                tree.root_internal(&cap, target_addr, truncate_at).unwrap();
+
+            assert_eq!(computed_root_hash, expected_root_hash);
+            // The right subtree is skipped; the rebuilt Parent keeps both
+            // original children unchanged and stays unannotated.
+            assert_eq!(
+                updated_cap,
+                Some(pparent(None, pleaf("abcd"), pleaf("efgh")))
+            );
+        }
+
+        #[test]
+        fn descent_target_in_right_child() {
+            // Target is inside the right child only: the `(None, Some)` arm.
+            let tree = empty_tree::<String, 4, 2>();
+            let cap = cap_at(3, 0, pparent(None, pleaf("abcd"), pleaf("efgh")));
+
+            let expected_root_hash = "efgh".to_string();
+            let target_addr = addr(2, 1);
+            let truncate_at = Position::from(8);
+            let (computed_root_hash, updated_cap) =
+                tree.root_internal(&cap, target_addr, truncate_at).unwrap();
+
+            assert_eq!(computed_root_hash, expected_root_hash);
+            // The left subtree is skipped; the rebuilt Parent keeps both
+            // original children unchanged and stays unannotated.
+            assert_eq!(
+                updated_cap,
+                Some(pparent(None, pleaf("abcd"), pleaf("efgh")))
+            );
+        }
+
+        #[test]
+        fn descent_expand_cached_leaf() {
+            // A cached Leaf above the shard level, queried below itself, is
+            // expanded: `orig_leaf_value` is `Some`, so the rebuilt Parent is
+            // re-annotated with the original leaf hash for future fast-paths.
+            let shard0 = shard(0, "a", "b", "c", "d");
+            let tree = tree_with_shards(&[shard0]);
+            let cap = cap_at(3, 0, pleaf("abcdefgh"));
+
+            let expected_root_hash = "abcd".to_string();
+            let target_addr = addr(2, 0);
+            let truncate_at = Position::from(8);
+            let (computed_root_hash, updated_cap) =
+                tree.root_internal(&cap, target_addr, truncate_at).unwrap();
+
+            assert_eq!(computed_root_hash, expected_root_hash);
+            // The rebuilt node retains the original leaf hash as its annotation,
+            // with shard 0's cached leaf on the left and an empty right child.
+            assert_eq!(
+                updated_cap,
+                Some(pparent(Some("abcdefgh"), pleaf("abcd"), pnil()))
+            );
+        }
+
+        #[test]
+        fn descent_through_nil() {
+            // A Nil cap node above the shard level, queried below itself,
+            // descends into empty children down to the backing shard.
+            let shard0 = shard(0, "a", "b", "c", "d");
+            let shard1 = shard(1, "e", "f", "g", "h");
+            let tree = tree_with_shards(&[shard0, shard1]);
+            let cap = cap_at(3, 0, pnil());
+
+            let expected_root_hash = "efgh".to_string();
+            let target_addr = addr(2, 1);
+            let truncate_at = Position::from(8);
+            let (computed_root_hash, updated_cap) =
+                tree.root_internal(&cap, target_addr, truncate_at).unwrap();
+
+            assert_eq!(computed_root_hash, expected_root_hash);
+            // The left subtree is skipped (empty); the right child becomes
+            // shard 1's cached leaf. No annotation (left child not cacheable).
+            assert_eq!(
+                updated_cap,
+                Some(pparent(None, pnil(), pleaf(&expected_root_hash)))
+            );
+        }
+
+        // ---- Annotation propagation and caching write-back ------------------
+
+        #[test]
+        fn descent_caches_annotation_when_untruncated() {
+            // When both children are recomputed from shards (not short-circuited
+            // by the fast path) and neither is truncated, each returns a cached
+            // leaf, so the rebuilt Parent gets a cached annotation equal to the
+            // combined hash. (Note: already-cached Leaf children hit the fast
+            // path, which returns no write-back node, so the parent would NOT
+            // be annotated in that case; see `descent_parent_both_children`.)
+            let shard0 = shard(0, "a", "b", "c", "d");
+            let shard1 = shard(1, "e", "f", "g", "h");
+            let tree = tree_with_shards(&[shard0, shard1]);
+            let cap = cap_at(3, 0, pparent(None, pnil(), pnil()));
+
+            let target_addr = addr(3, 0);
+            let truncate_at = Position::from(8);
+            let (computed_root_hash, updated_cap) =
+                tree.root_internal(&cap, target_addr, truncate_at).unwrap();
+
+            assert_eq!(computed_root_hash, "abcdefgh".to_string());
+            // Both children are recomputed into cached leaves, so the rebuilt
+            // Parent is annotated with the combined hash.
+            assert_eq!(
+                updated_cap,
+                Some(pparent(Some("abcdefgh"), pleaf("abcd"), pleaf("efgh")))
+            );
+        }
+
+        #[test]
+        fn descent_no_annotation_when_child_truncated() {
+            // Left child is fully present (and cached), the right child is
+            // truncated to empty. The hash still combines, but the rebuilt
+            // Parent carries no annotation because the right child was not
+            // cacheable.
+            let shard0 = shard(0, "a", "b", "c", "d");
+            let tree = tree_with_shards(&[shard0]);
+            let cap = cap_at(3, 0, pparent(None, pnil(), pnil()));
+
+            let expected_root_hash = "abcd____".to_string();
+            let target_addr = addr(3, 0);
+            let truncate_at = Position::from(4);
+            let (computed_root_hash, updated_cap) =
+                tree.root_internal(&cap, target_addr, truncate_at).unwrap();
+
+            assert_eq!(computed_root_hash, expected_root_hash);
+            // Left child becomes a cached leaf; the truncated right child yields
+            // no write-back, so the rebuilt Parent keeps the empty right child
+            // and carries no annotation.
+            assert_eq!(updated_cap, Some(pparent(None, pleaf("abcd"), pnil())));
+        }
+
+        #[test]
+        fn caching_then_fast_path() {
+            // First compute folds the shards and returns a cacheable rebuilt
+            // node; feeding that node back lets a second query answer from the
+            // cache via the fast path, even after the shards are dropped.
+            let shard0 = shard(0, "a", "b", "c", "d");
+            let shard1 = shard(1, "e", "f", "g", "h");
+            let mut tree = tree_with_shards(&[shard0, shard1]);
+            let cap = cap_at(3, 0, pnil());
+
+            let target_addr = addr(3, 0);
+            let truncate_at = Position::from(8);
+            let (first_root_hash, updated_cap) =
+                tree.root_internal(&cap, target_addr, truncate_at).unwrap();
+            assert_eq!(first_root_hash, "abcdefgh".to_string());
+            // The fold writes the untruncated root back as a cached leaf.
+            assert_eq!(updated_cap, Some(pleaf("abcdefgh")));
+            let updated_cap = updated_cap.expect("a rebuilt node is returned");
+
+            // Drop all shard data, then answer the same query from the rebuilt
+            // (cached) node, reusing `target_addr` and `truncate_at`.
+            tree.store.truncate_shards(0).unwrap();
+            let cached_cap = cap_at(3, 0, updated_cap);
+            let (computed_root_hash, _) = tree
+                .root_internal(&cached_cap, target_addr, truncate_at)
+                .unwrap();
+
+            assert_eq!(computed_root_hash, "abcdefgh".to_string());
+        }
+
+        // ---- Sanity check with a non-concatenating hash ---------------------
+
+        #[test]
+        fn descent_parent_both_children_siphash() {
+            // Same descent as `descent_parent_both_children`, but with the
+            // SipHash test hash, to confirm the result is not an artifact of
+            // string concatenation. `expected_root_hash` is built directly from
+            // the hash primitive; `computed_root_hash` comes from the method.
+            let tree = empty_tree::<SipHashable, 4, 2>();
+
+            let left = SipHashable(0xAA);
+            let right = SipHashable(0xBB);
+            let cap = LocatedTree {
+                root_addr: addr(3, 0),
+                root: Tree::parent(
+                    None,
+                    Tree::leaf((left.clone(), RetentionFlags::EPHEMERAL)),
+                    Tree::leaf((right.clone(), RetentionFlags::EPHEMERAL)),
+                ),
+            };
+
+            // Children sit at level 2; the combine happens at that level.
+            let expected_root_hash = SipHashable::combine(Level::from(2), &left, &right);
+            let target_addr = addr(3, 0);
+            let truncate_at = Position::from(8);
+            let (computed_root_hash, updated_cap) =
+                tree.root_internal(&cap, target_addr, truncate_at).unwrap();
+
+            assert_eq!(computed_root_hash, expected_root_hash);
+            // Both children hit the fast path; the rebuilt Parent keeps the
+            // original cached leaves and stays unannotated.
+            assert_eq!(
+                updated_cap,
+                Some(Tree::parent(
+                    None,
+                    Tree::leaf((left, RetentionFlags::EPHEMERAL)),
+                    Tree::leaf((right, RetentionFlags::EPHEMERAL)),
+                ))
             );
         }
     }
