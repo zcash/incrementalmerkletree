@@ -14,6 +14,16 @@ and this project adheres to Rust's notion of
 - `shardtree::LocatedPrunableTree::pretty_print_indented`
 - `shardtree::LocatedPrunableTree::pretty_print_bottom_top`
 
+### Changed
+- `shardtree::store::memory::MemoryShardStore` now stores shards sparsely in a
+  `BTreeMap` keyed by shard index, rather than a dense `Vec`. Observable
+  behaviour through the `ShardStore` interface is unchanged, except that a shard
+  index that has never been inserted now reads back from `get_shard` as `None`
+  rather than as a materialized empty shard (matching the persistent backends),
+  and `get_shard_roots` returns only populated indices. This avoids allocating
+  the run of empty shards below a high starting shard index — e.g. for a wallet
+  synced from a recent birthday, whose first populated shard index is large.
+
 ## [0.6.2] - 2026-02-20
 
 ### Added

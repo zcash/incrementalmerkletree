@@ -2292,6 +2292,45 @@ mod tests {
             tree
         }
 
+        #[test]
+        fn non_contiguous_shards_are_sparse_and_root_correctly() {
+            // Shards 2 and 3 are present; shards 0 and 1 are absent (a gap below the
+            // populated range — e.g. a wallet synced from a recent birthday). The
+            // `MemoryShardStore` must NOT back-fill empty shards for the gap, and the
+            // cap/frontier logic must tolerate non-contiguous shard roots.
+            let tree =
+                tree_with_shards(&[shard(2, "i", "j", "k", "l"), shard(3, "m", "n", "o", "p")]);
+
+            // The store is sparse: only the two populated shard roots, NOT a
+            // back-filled contiguous `0..=3`.
+            assert_eq!(
+                tree.store.get_shard_roots().unwrap(),
+                vec![addr(2, 2), addr(2, 3)],
+            );
+            // A gap index reads back as absent (`None`), never as an empty shard.
+            assert!(tree.store.get_shard(addr(2, 0)).unwrap().is_none());
+            assert!(tree.store.get_shard(addr(2, 1)).unwrap().is_none());
+            // `last_shard` is the highest populated shard.
+            assert_eq!(
+                tree.store.last_shard().unwrap().map(|s| s.root_addr),
+                Some(addr(2, 3)),
+            );
+
+            // The cap/frontier logic folds the two non-contiguous present shards into
+            // the `(3, 1)` subtree root, exactly as a dense store would.
+            assert_eq!(
+                tree.root(addr(3, 1), Position::from(16)).unwrap(),
+                "ijklmnop".to_string(),
+            );
+
+            // A root that spans the gap reports the tree as incomplete (it does not
+            // panic, and does not fabricate a value from absent shards).
+            assert!(matches!(
+                tree.root(addr(3, 0), Position::from(8)),
+                Err(ShardTreeError::Query(QueryError::TreeIncomplete(_))),
+            ));
+        }
+
         // ---- Phase 1: fast path (cached value returned immediately) ---------
 
         #[test]
