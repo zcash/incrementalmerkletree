@@ -7,6 +7,13 @@ and this project adheres to Rust's notion of
 
 ## Unreleased
 
+### Added
+- `impl Display for shardtree::RetentionFlags`
+- `shardtree::LocatedTree::pretty_print_indented_with`
+- `shardtree::LocatedTree::pretty_print_bottom_top_with`
+- `shardtree::LocatedPrunableTree::pretty_print_indented`
+- `shardtree::LocatedPrunableTree::pretty_print_bottom_top`
+
 ## [0.6.2] - 2026-02-20
 
 ### Added
