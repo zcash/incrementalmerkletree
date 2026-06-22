@@ -1,5 +1,6 @@
 //! Implementation of an in-memory shard store with persistence.
 
+use std::collections::{BTreeMap, BTreeSet};
 use std::convert::Infallible;
 
 use incrementalmerkletree::Address;
@@ -28,6 +29,12 @@ where
     backend: S,
     cache: MemoryShardStore<S::H, S::CheckpointId>,
     deferred_actions: Vec<Action<S::CheckpointId>>,
+    /// Root addresses of shards written since load / the last flush, keyed by shard index.
+    dirty_shards: BTreeMap<u64, Address>,
+    /// Whether the cap has been written since load / the last flush.
+    cap_dirty: bool,
+    /// Identifiers of checkpoints added or updated since load / the last flush.
+    dirty_checkpoints: BTreeSet<S::CheckpointId>,
 }
 
 impl<S> CachingShardStore<S>
@@ -58,60 +65,69 @@ where
             backend,
             cache,
             deferred_actions: vec![],
+            dirty_shards: BTreeMap::new(),
+            cap_dirty: false,
+            dirty_checkpoints: BTreeSet::new(),
         })
     }
 
-    /// Flushes the current cache state to the backend and returns it.
+    /// Flushes the accumulated changes to the backend and returns it.
+    ///
+    /// Only the delta accumulated since the store was loaded is written; see
+    /// [`Self::flush_delta`] for the details and for an incremental, non-consuming variant.
     pub fn flush(mut self) -> Result<S, S::Error> {
-        for action in &self.deferred_actions {
+        self.flush_delta()?;
+        Ok(self.backend)
+    }
+
+    /// Flushes the changes accumulated since load (or the previous `flush_delta`) to the
+    /// backend, leaving `self` usable for further operations.
+    ///
+    /// Only the delta is written: the deferred truncations/removals are applied in order, then
+    /// every shard and checkpoint that was modified and still exists in the cache is written
+    /// (along with the cap, if it changed). State that was not modified is left untouched in the
+    /// backend rather than being rewritten, and a modification that was subsequently truncated
+    /// away is skipped (the deferred truncation already removed it from the backend).
+    pub fn flush_delta(&mut self) -> Result<(), S::Error> {
+        for action in std::mem::take(&mut self.deferred_actions) {
             match action {
-                Action::TruncateShards(index) => self.backend.truncate_shards(*index),
+                Action::TruncateShards(index) => self.backend.truncate_shards(index),
                 Action::RemoveCheckpoint(checkpoint_id) => {
-                    self.backend.remove_checkpoint(checkpoint_id)
+                    self.backend.remove_checkpoint(&checkpoint_id)
                 }
                 Action::TruncateCheckpointsRetaining(checkpoint_id) => {
-                    self.backend.truncate_checkpoints_retaining(checkpoint_id)
+                    self.backend.truncate_checkpoints_retaining(&checkpoint_id)
                 }
             }?;
         }
-        self.deferred_actions.clear();
 
-        for shard_root in self
-            .cache
-            .get_shard_roots()
-            .expect("error type is Infallible")
-        {
-            self.backend.put_shard(
-                self.cache
-                    .get_shard(shard_root)
-                    .expect("error type is Infallible")
-                    .expect("known address"),
-            )?;
-        }
-        self.backend
-            .put_cap(self.cache.get_cap().expect("error type is Infallible"))?;
-
-        let mut checkpoints = Vec::with_capacity(
-            self.cache
-                .checkpoint_count()
-                .expect("error type is Infallible"),
-        );
-        self.cache
-            .with_checkpoints(
-                self.cache
-                    .checkpoint_count()
-                    .expect("error type is Infallible"),
-                |checkpoint_id, checkpoint| {
-                    checkpoints.push((checkpoint_id.clone(), checkpoint.clone()));
-                    Ok(())
-                },
-            )
-            .expect("error type is Infallible");
-        for (checkpoint_id, checkpoint) in checkpoints {
-            self.backend.add_checkpoint(checkpoint_id, checkpoint)?;
+        for shard_root in std::mem::take(&mut self.dirty_shards).into_values() {
+            if let Some(shard) = self
+                .cache
+                .get_shard(shard_root)
+                .expect("error type is Infallible")
+            {
+                self.backend.put_shard(shard)?;
+            }
         }
 
-        Ok(self.backend)
+        if self.cap_dirty {
+            self.backend
+                .put_cap(self.cache.get_cap().expect("error type is Infallible"))?;
+            self.cap_dirty = false;
+        }
+
+        for checkpoint_id in std::mem::take(&mut self.dirty_checkpoints) {
+            if let Some(checkpoint) = self
+                .cache
+                .get_checkpoint(&checkpoint_id)
+                .expect("error type is Infallible")
+            {
+                self.backend.add_checkpoint(checkpoint_id, checkpoint)?;
+            }
+        }
+
+        Ok(())
     }
 }
 
@@ -137,6 +153,8 @@ where
     }
 
     fn put_shard(&mut self, subtree: LocatedPrunableTree<Self::H>) -> Result<(), Self::Error> {
+        self.dirty_shards
+            .insert(subtree.root_addr.index(), subtree.root_addr);
         self.cache.put_shard(subtree)
     }
 
@@ -155,6 +173,7 @@ where
     }
 
     fn put_cap(&mut self, cap: PrunableTree<Self::H>) -> Result<(), Self::Error> {
+        self.cap_dirty = true;
         self.cache.put_cap(cap)
     }
 
@@ -163,6 +182,7 @@ where
         checkpoint_id: Self::CheckpointId,
         checkpoint: Checkpoint,
     ) -> Result<(), Self::Error> {
+        self.dirty_checkpoints.insert(checkpoint_id.clone());
         self.cache.add_checkpoint(checkpoint_id, checkpoint)
     }
 
@@ -213,7 +233,11 @@ where
     where
         F: Fn(&mut Checkpoint) -> Result<(), Self::Error>,
     {
-        self.cache.update_checkpoint_with(checkpoint_id, update)
+        let updated = self.cache.update_checkpoint_with(checkpoint_id, update)?;
+        if updated {
+            self.dirty_checkpoints.insert(checkpoint_id.clone());
+        }
+        Ok(updated)
     }
 
     fn remove_checkpoint(&mut self, checkpoint_id: &Self::CheckpointId) -> Result<(), Self::Error> {
@@ -330,6 +354,62 @@ mod tests {
 
             check_equal(lhs, rhs);
         }
+    }
+
+    #[test]
+    fn flush_delta_composes_across_incremental_flushes() {
+        use Retention::*;
+
+        let mut lhs = MemoryShardStore::<_, u64>::empty();
+        let mut rhs = CachingShardStore::load(MemoryShardStore::empty()).unwrap();
+
+        // Batch 1: a few leaves plus a checkpoint.
+        {
+            let mut tree = CombinedTree::<String, _, _, _>::new(
+                ShardTree::<_, 4, 3>::new(&mut lhs, 100),
+                ShardTree::<_, 4, 3>::new(&mut rhs, 100),
+            );
+            assert!(tree.append(
+                String::from_u64(0),
+                Checkpoint {
+                    id: 1,
+                    marking: Marking::Marked,
+                },
+            ));
+            for i in 1..5 {
+                assert!(tree.append(String::from_u64(i), Ephemeral));
+            }
+        }
+
+        // An intermediate delta flush writes batch 1 and leaves `rhs` usable; the dirty
+        // state must be fully reset so the next flush writes only what changes afterwards.
+        rhs.flush_delta().unwrap();
+        assert!(rhs.dirty_shards.is_empty());
+        assert!(!rhs.cap_dirty);
+        assert!(rhs.dirty_checkpoints.is_empty());
+
+        // Batch 2: more leaves (re-touching shard 0 and crossing into shard 1) plus another
+        // checkpoint — mutating after a flush exercises the dirty-state reset.
+        {
+            let mut tree = CombinedTree::<String, _, _, _>::new(
+                ShardTree::<_, 4, 3>::new(&mut lhs, 100),
+                ShardTree::<_, 4, 3>::new(&mut rhs, 100),
+            );
+            for i in 5..12 {
+                assert!(tree.append(String::from_u64(i), Ephemeral));
+            }
+            assert!(tree.append(
+                String::from_u64(12),
+                Checkpoint {
+                    id: 2,
+                    marking: Marking::Marked,
+                },
+            ));
+        }
+
+        // The final flush (inside `check_equal`) writes only batch 2's delta; the backend
+        // must still match the directly-mutated reference, proving the flushes compose.
+        check_equal(lhs, rhs);
     }
 
     #[test]

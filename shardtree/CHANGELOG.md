@@ -13,6 +13,13 @@ and this project adheres to Rust's notion of
 - `shardtree::LocatedTree::pretty_print_bottom_top_with`
 - `shardtree::LocatedPrunableTree::pretty_print_indented`
 - `shardtree::LocatedPrunableTree::pretty_print_bottom_top`
+- `shardtree::store::caching::CachingShardStore::flush_delta`
+
+### Changed
+- `shardtree::store::caching::CachingShardStore` now tracks which shards and
+  checkpoints (and the cap) have been modified since it was loaded, and
+  `CachingShardStore::flush` writes only that delta to the backend instead of
+  rewriting the entire cached tree. The resulting backend state is unchanged.
 
 ## [0.6.2] - 2026-02-20
 
