@@ -64,7 +64,12 @@ impl<C, A, V> Node<C, A, V> {
     }
 }
 
-impl<'a, C: Clone, A: Clone, V: Clone> Node<C, &'a A, &'a V> {
+impl<'a, C, A, V> Node<C, &'a A, &'a V>
+where
+    C: Clone,
+    A: Clone,
+    V: Clone,
+{
     /// Maps a `Node<C, &A, &V>` to a `Node<C, A, V>` by cloning the contents of the node.
     pub fn cloned(&self) -> Node<C, A, V> {
         match self {
@@ -171,8 +176,9 @@ impl<A, V> Tree<A, V> {
 
     /// Applies the provided function to each leaf of the tree and returns
     /// a new tree having the same structure as the original.
-    pub fn map<B, F: Fn(&V) -> B>(&self, f: &F) -> Tree<A, B>
+    pub fn map<B, F>(&self, f: &F) -> Tree<A, B>
     where
+        F: Fn(&V) -> B,
         A: Clone,
     {
         Tree(match &self.0 {
@@ -189,8 +195,9 @@ impl<A, V> Tree<A, V> {
     /// Applies the provided function to each leaf of the tree and returns
     /// a new tree having the same structure as the original, or an error
     /// if any transformation of the leaf fails.
-    pub fn try_map<B, E, F: Fn(&V) -> Result<B, E>>(&self, f: &F) -> Result<Tree<A, B>, E>
+    pub fn try_map<B, E, F>(&self, f: &F) -> Result<Tree<A, B>, E>
     where
+        F: Fn(&V) -> Result<B, E>,
         A: Clone,
     {
         Ok(Tree(match &self.0 {
@@ -588,8 +595,9 @@ impl<A, V> LocatedTree<A, V> {
 
     /// Applies the provided function to each leaf of the tree and returns
     /// a new tree having the same structure as the original.
-    pub fn map<B, F: Fn(&V) -> B>(&self, f: &F) -> LocatedTree<A, B>
+    pub fn map<B, F>(&self, f: &F) -> LocatedTree<A, B>
     where
+        F: Fn(&V) -> B,
         A: Clone,
     {
         LocatedTree {
@@ -601,8 +609,9 @@ impl<A, V> LocatedTree<A, V> {
     /// Applies the provided function to each leaf of the tree and returns
     /// a new tree having the same structure as the original, or an error
     /// if any transformation of the leaf fails.
-    pub fn try_map<B, E, F: Fn(&V) -> Result<B, E>>(&self, f: &F) -> Result<LocatedTree<A, B>, E>
+    pub fn try_map<B, E, F>(&self, f: &F) -> Result<LocatedTree<A, B>, E>
     where
+        F: Fn(&V) -> Result<B, E>,
         A: Clone,
     {
         Ok(LocatedTree {
@@ -612,7 +621,11 @@ impl<A, V> LocatedTree<A, V> {
     }
 }
 
-impl<A: Default + Clone, V: Clone> LocatedTree<A, V> {
+impl<A, V> LocatedTree<A, V>
+where
+    A: Default + Clone,
+    V: Clone,
+{
     /// Constructs a new empty tree with its root at the provided address.
     pub fn empty(root_addr: Address) -> Self {
         Self {
@@ -637,11 +650,15 @@ impl<A: Default + Clone, V: Clone> LocatedTree<A, V> {
     /// be reached.
     pub fn subtree(&self, addr: Address) -> Option<Self> {
         /// Pre-condition: `root_addr` must be the address of `root`.
-        fn go<A: Clone, V: Clone>(
+        fn go<A, V>(
             root_addr: Address,
             root: &Tree<A, V>,
             addr: Address,
-        ) -> Option<LocatedTree<A, V>> {
+        ) -> Option<LocatedTree<A, V>>
+        where
+            A: Clone,
+            V: Clone,
+        {
             if root_addr == addr {
                 Some(LocatedTree {
                     root_addr,
@@ -677,11 +694,11 @@ impl<A: Default + Clone, V: Clone> LocatedTree<A, V> {
     /// the entire tree is returned as the sole element of the result vector.
     pub fn decompose_to_level(self, level: Level) -> Vec<Self> {
         /// Pre-condition: `root_addr` must be the address of `root`.
-        fn go<A: Clone, V: Clone>(
-            level: Level,
-            root_addr: Address,
-            root: Tree<A, V>,
-        ) -> Vec<LocatedTree<A, V>> {
+        fn go<A, V>(level: Level, root_addr: Address, root: Tree<A, V>) -> Vec<LocatedTree<A, V>>
+        where
+            A: Clone,
+            V: Clone,
+        {
             if root_addr.level() == level {
                 vec![LocatedTree { root_addr, root }]
             } else {
@@ -734,7 +751,10 @@ pub(crate) mod tests {
         Tree::leaf(value)
     }
 
-    pub(crate) fn parent<A: Default, B>(left: Tree<A, B>, right: Tree<A, B>) -> Tree<A, B> {
+    pub(crate) fn parent<A, B>(left: Tree<A, B>, right: Tree<A, B>) -> Tree<A, B>
+    where
+        A: Default,
+    {
         Tree::parent(A::default(), left, right)
     }
 

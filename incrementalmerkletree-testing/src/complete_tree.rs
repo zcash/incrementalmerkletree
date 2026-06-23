@@ -7,7 +7,10 @@ use incrementalmerkletree::{Hashable, Level, Marking, Position, Retention};
 
 const MAX_COMPLETE_SIZE_ERROR: &str = "Positions of a `CompleteTree` must fit into the platform word size, because larger complete trees are not representable.";
 
-pub(crate) fn root<H: Hashable + Clone>(leaves: &[H], depth: u8) -> H {
+pub(crate) fn root<H>(leaves: &[H], depth: u8) -> H
+where
+    H: Hashable + Clone,
+{
     let empty_leaf = H::empty_leaf();
     let mut leaves = leaves
         .iter()
@@ -63,14 +66,21 @@ impl Checkpoint {
 }
 
 #[derive(Clone, Debug)]
-pub struct CompleteTree<H, C: Ord, const DEPTH: u8> {
+pub struct CompleteTree<H, C, const DEPTH: u8>
+where
+    C: Ord,
+{
     leaves: Vec<Option<H>>,
     marks: BTreeSet<Position>,
     checkpoints: BTreeMap<C, Checkpoint>,
     max_checkpoints: usize,
 }
 
-impl<H: Hashable, C: Clone + Ord + core::fmt::Debug, const DEPTH: u8> CompleteTree<H, C, DEPTH> {
+impl<H, C, const DEPTH: u8> CompleteTree<H, C, DEPTH>
+where
+    H: Hashable,
+    C: Clone + Ord + core::fmt::Debug,
+{
     /// Creates a new, empty binary tree
     pub fn new(max_checkpoints: usize) -> Self {
         Self {
@@ -207,8 +217,10 @@ enum AppendError<C> {
     },
 }
 
-impl<H: Hashable + PartialEq + Clone, C: Ord + Clone + core::fmt::Debug, const DEPTH: u8> Tree<H, C>
-    for CompleteTree<H, C, DEPTH>
+impl<H, C, const DEPTH: u8> Tree<H, C> for CompleteTree<H, C, DEPTH>
+where
+    H: Hashable + PartialEq + Clone,
+    C: Ord + Clone + core::fmt::Debug,
 {
     fn depth(&self) -> u8 {
         DEPTH

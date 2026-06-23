@@ -19,13 +19,15 @@ pub fn arb_retention_flags() -> impl Strategy<Value = RetentionFlags> + Clone {
     ])
 }
 
-pub fn arb_tree<A: Strategy + Clone + 'static, V: Strategy + 'static>(
+pub fn arb_tree<A, V>(
     arb_annotation: A,
     arb_leaf: V,
     depth: u32,
     size: u32,
 ) -> impl Strategy<Value = Tree<A::Value, V::Value>> + Clone
 where
+    A: Strategy + Clone + 'static,
+    V: Strategy + 'static,
     A::Value: Clone + 'static,
     V::Value: Clone + 'static,
 {
@@ -42,12 +44,13 @@ where
     })
 }
 
-pub fn arb_prunable_tree<H: Strategy + Clone + 'static>(
+pub fn arb_prunable_tree<H>(
     arb_leaf: H,
     depth: u32,
     size: u32,
 ) -> impl Strategy<Value = PrunableTree<H::Value>> + Clone
 where
+    H: Strategy + Clone + 'static,
     H::Value: Clone + 'static,
 {
     arb_tree(
@@ -59,10 +62,9 @@ where
 }
 
 /// Constructs a random sequence of leaves that form a tree of size up to 2^6.
-pub fn arb_leaves<H: Strategy + Clone>(
-    arb_leaf: H,
-) -> impl Strategy<Value = Vec<(H::Value, Retention<usize>)>>
+pub fn arb_leaves<H>(arb_leaf: H) -> impl Strategy<Value = Vec<(H::Value, Retention<usize>)>>
 where
+    H: Strategy + Clone,
     H::Value: Hashable + Clone + PartialEq,
 {
     vec(
@@ -104,10 +106,9 @@ type ArbShardtreeParts<H> = (
 
 /// Constructs a random shardtree of size up to 2^6 with shards of size 2^3. Returns the tree,
 /// along with vectors of the checkpointed and marked positions.
-pub fn arb_shardtree<H: Strategy + Clone>(
-    arb_leaf: H,
-) -> impl Strategy<Value = ArbShardtreeParts<H>>
+pub fn arb_shardtree<H>(arb_leaf: H) -> impl Strategy<Value = ArbShardtreeParts<H>>
 where
+    H: Strategy + Clone,
     H::Value: Hashable + Clone + PartialEq,
 {
     arb_leaves(arb_leaf).prop_map(|leaves| {
@@ -344,9 +345,11 @@ pub fn check_shardtree_insertion<
     );
 }
 
-pub fn check_shard_sizes<E: Debug, S: ShardStore<H = String, CheckpointId = u32, Error = E>>(
-    mut tree: ShardTree<S, 4, 2>,
-) {
+pub fn check_shard_sizes<E, S>(mut tree: ShardTree<S, 4, 2>)
+where
+    E: Debug,
+    S: ShardStore<H = String, CheckpointId = u32, Error = E>,
+{
     for c in 'a'..'p' {
         tree.append(c.to_string(), Retention::Ephemeral).unwrap();
     }

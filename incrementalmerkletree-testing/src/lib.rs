@@ -149,8 +149,15 @@ pub fn witness<H, C>(pos: u64, depth: usize) -> Operation<H, C> {
     Operation::Witness(Position::from(pos), depth)
 }
 
-impl<H: Hashable + Clone, C: Clone> Operation<H, C> {
-    pub fn apply<T: Tree<H, C>>(&self, tree: &mut T) -> Option<(Position, Vec<H>)> {
+impl<H, C> Operation<H, C>
+where
+    H: Hashable + Clone,
+    C: Clone,
+{
+    pub fn apply<T>(&self, tree: &mut T) -> Option<(Position, Vec<H>)>
+    where
+        T: Tree<H, C>,
+    {
         match self {
             Append(a, r) => {
                 assert!(tree.append(a.clone(), r.clone()), "append failed");
@@ -176,10 +183,10 @@ impl<H: Hashable + Clone, C: Clone> Operation<H, C> {
         }
     }
 
-    pub fn apply_all<T: Tree<H, C>>(
-        ops: &[Operation<H, C>],
-        tree: &mut T,
-    ) -> Option<(Position, Vec<H>)> {
+    pub fn apply_all<T>(ops: &[Operation<H, C>], tree: &mut T) -> Option<(Position, Vec<H>)>
+    where
+        T: Tree<H, C>,
+    {
         let mut result = None;
         for op in ops {
             result = op.apply(tree);
@@ -187,7 +194,10 @@ impl<H: Hashable + Clone, C: Clone> Operation<H, C> {
         result
     }
 
-    pub fn map_checkpoint_id<D, F: Fn(&C) -> D>(&self, f: F) -> Operation<H, D> {
+    pub fn map_checkpoint_id<D, F>(&self, f: F) -> Operation<H, D>
+    where
+        F: Fn(&C) -> D,
+    {
         match self {
             Append(a, r) => Append(a.clone(), r.map(f)),
             CurrentPosition => CurrentPosition,
@@ -222,11 +232,12 @@ pub fn arb_retention() -> impl Strategy<Value = Retention<()>> {
     ]
 }
 
-pub fn arb_operation<G: Strategy + Clone>(
+pub fn arb_operation<G>(
     item_gen: G,
     pos_gen: impl Strategy<Value = Position> + Clone,
 ) -> impl Strategy<Value = Operation<G::Value, ()>>
 where
+    G: Strategy + Clone,
     G::Value: Clone + 'static,
 {
     prop_oneof![
@@ -244,7 +255,10 @@ where
     ]
 }
 
-pub fn apply_operation<H, C, T: Tree<H, C>>(tree: &mut T, op: Operation<H, C>) {
+pub fn apply_operation<H, C, T>(tree: &mut T, op: Operation<H, C>)
+where
+    T: Tree<H, C>,
+{
     match op {
         Append(value, r) => {
             tree.append(value, r);
@@ -266,10 +280,12 @@ pub fn apply_operation<H, C, T: Tree<H, C>>(tree: &mut T, op: Operation<H, C>) {
     }
 }
 
-pub fn check_operations<H: Hashable + Ord + Clone + Debug, C: Clone, T: Tree<H, C>>(
-    mut tree: T,
-    ops: &[Operation<H, C>],
-) -> Result<(), TestCaseError> {
+pub fn check_operations<H, C, T>(mut tree: T, ops: &[Operation<H, C>]) -> Result<(), TestCaseError>
+where
+    H: Hashable + Ord + Clone + Debug,
+    C: Clone,
+    T: Tree<H, C>,
+{
     let mut tree_size = 0;
     let mut tree_values: Vec<H> = vec![];
     // the number of leaves in the tree at the time that a checkpoint is made
@@ -359,7 +375,10 @@ pub fn check_operations<H: Hashable + Ord + Clone + Debug, C: Clone, T: Tree<H, 
     Ok(())
 }
 
-pub fn compute_root_from_witness<H: Hashable>(value: H, position: Position, path: &[H]) -> H {
+pub fn compute_root_from_witness<H>(value: H, position: Position, path: &[H]) -> H
+where
+    H: Hashable,
+{
     let mut cur = value;
     let mut lvl = 0.into();
     for (i, v) in path
@@ -382,14 +401,23 @@ pub fn compute_root_from_witness<H: Hashable>(value: H, position: Position, path
 //
 
 #[derive(Clone, Debug)]
-pub struct CombinedTree<H, C, I: Tree<H, C>, E: Tree<H, C>> {
+pub struct CombinedTree<H, C, I, E>
+where
+    I: Tree<H, C>,
+    E: Tree<H, C>,
+{
     inefficient: I,
     efficient: E,
     _phantom_h: PhantomData<H>,
     _phantom_c: PhantomData<C>,
 }
 
-impl<H: Hashable + Ord + Clone + Debug, C, I: Tree<H, C>, E: Tree<H, C>> CombinedTree<H, C, I, E> {
+impl<H, C, I, E> CombinedTree<H, C, I, E>
+where
+    H: Hashable + Ord + Clone + Debug,
+    I: Tree<H, C>,
+    E: Tree<H, C>,
+{
     pub fn new(inefficient: I, efficient: E) -> Self {
         assert_eq!(inefficient.depth(), efficient.depth());
         CombinedTree {
@@ -401,8 +429,12 @@ impl<H: Hashable + Ord + Clone + Debug, C, I: Tree<H, C>, E: Tree<H, C>> Combine
     }
 }
 
-impl<H: Hashable + Ord + Clone + Debug, C: Clone, I: Tree<H, C>, E: Tree<H, C>> Tree<H, C>
-    for CombinedTree<H, C, I, E>
+impl<H, C, I, E> Tree<H, C> for CombinedTree<H, C, I, E>
+where
+    H: Hashable + Ord + Clone + Debug,
+    C: Clone,
+    I: Tree<H, C>,
+    E: Tree<H, C>,
 {
     fn depth(&self) -> u8 {
         self.inefficient.depth()
@@ -517,7 +549,11 @@ impl TestCheckpoint for usize {
     }
 }
 
-trait TestTree<H: TestHashable, C: TestCheckpoint> {
+trait TestTree<H, C>
+where
+    H: TestHashable,
+    C: TestCheckpoint,
+{
     fn assert_root(&self, checkpoint_depth: Option<usize>, values: &[u64]);
 
     fn assert_append(&mut self, value: u64, retention: Retention<u64>);
@@ -525,7 +561,12 @@ trait TestTree<H: TestHashable, C: TestCheckpoint> {
     fn assert_checkpoint(&mut self, value: u64);
 }
 
-impl<H: TestHashable, C: TestCheckpoint, T: Tree<H, C>> TestTree<H, C> for T {
+impl<H, C, T> TestTree<H, C> for T
+where
+    H: TestHashable,
+    C: TestCheckpoint,
+    T: Tree<H, C>,
+{
     fn assert_root(&self, checkpoint_depth: Option<usize>, values: &[u64]) {
         assert_eq!(
             self.root(checkpoint_depth).unwrap(),
@@ -551,9 +592,13 @@ impl<H: TestHashable, C: TestCheckpoint, T: Tree<H, C>> TestTree<H, C> for T {
 }
 
 /// This checks basic append and root computation functionality
-pub fn check_root_hashes<H: TestHashable, C: TestCheckpoint, T: Tree<H, C>, F: Fn(usize) -> T>(
-    new_tree: F,
-) {
+pub fn check_root_hashes<H, C, T, F>(new_tree: F)
+where
+    H: TestHashable,
+    C: TestCheckpoint,
+    T: Tree<H, C>,
+    F: Fn(usize) -> T,
+{
     use Retention::*;
 
     {
@@ -585,9 +630,13 @@ pub fn check_root_hashes<H: TestHashable, C: TestCheckpoint, T: Tree<H, C>, F: F
 
 /// This test expects a depth-4 tree and verifies that the tree reports itself as full after 2^4
 /// appends.
-pub fn check_append<H: TestHashable, C: TestCheckpoint, T: Tree<H, C>, F: Fn(usize) -> T>(
-    new_tree: F,
-) {
+pub fn check_append<H, C, T, F>(new_tree: F)
+where
+    H: TestHashable,
+    C: TestCheckpoint,
+    T: Tree<H, C>,
+    F: Fn(usize) -> T,
+{
     use Retention::*;
 
     {
@@ -615,9 +664,13 @@ pub fn check_append<H: TestHashable, C: TestCheckpoint, T: Tree<H, C>, F: Fn(usi
     }
 }
 
-pub fn check_witnesses<H: TestHashable, C: TestCheckpoint, T: Tree<H, C>, F: Fn(usize) -> T>(
-    new_tree: F,
-) {
+pub fn check_witnesses<H, C, T, F>(new_tree: F)
+where
+    H: TestHashable,
+    C: TestCheckpoint,
+    T: Tree<H, C>,
+    F: Fn(usize) -> T,
+{
     use Retention::*;
 
     {
@@ -1018,9 +1071,12 @@ pub fn check_witnesses<H: TestHashable, C: TestCheckpoint, T: Tree<H, C>, F: Fn(
     }
 }
 
-pub fn check_checkpoint_rewind<C: TestCheckpoint, T: Tree<String, C>, F: Fn(usize) -> T>(
-    new_tree: F,
-) {
+pub fn check_checkpoint_rewind<C, T, F>(new_tree: F)
+where
+    C: TestCheckpoint,
+    T: Tree<String, C>,
+    F: Fn(usize) -> T,
+{
     let mut t = new_tree(100);
     assert!(!t.rewind(0));
 
@@ -1061,7 +1117,12 @@ pub fn check_checkpoint_rewind<C: TestCheckpoint, T: Tree<String, C>, F: Fn(usiz
     assert_eq!(t.root(None).unwrap(), "ab______________");
 }
 
-pub fn check_remove_mark<C: TestCheckpoint, T: Tree<String, C>, F: Fn(usize) -> T>(new_tree: F) {
+pub fn check_remove_mark<C, T, F>(new_tree: F)
+where
+    C: TestCheckpoint,
+    T: Tree<String, C>,
+    F: Fn(usize) -> T,
+{
     let samples = [
         vec![
             append_str("a", Retention::Ephemeral),
@@ -1096,9 +1157,12 @@ pub fn check_remove_mark<C: TestCheckpoint, T: Tree<String, C>, F: Fn(usize) -> 
     }
 }
 
-pub fn check_rewind_remove_mark<C: TestCheckpoint, T: Tree<String, C>, F: Fn(usize) -> T>(
-    new_tree: F,
-) {
+pub fn check_rewind_remove_mark<C, T, F>(new_tree: F)
+where
+    C: TestCheckpoint,
+    T: Tree<String, C>,
+    F: Fn(usize) -> T,
+{
     // rewinding doesn't remove a mark
     let mut tree = new_tree(100);
     tree.append("e".to_string(), Retention::Marked);
@@ -1176,9 +1240,12 @@ pub fn check_rewind_remove_mark<C: TestCheckpoint, T: Tree<String, C>, F: Fn(usi
     }
 }
 
-pub fn check_witness_consistency<C: TestCheckpoint, T: Tree<String, C>, F: Fn(usize) -> T>(
-    new_tree: F,
-) {
+pub fn check_witness_consistency<C, T, F>(new_tree: F)
+where
+    C: TestCheckpoint,
+    T: Tree<String, C>,
+    F: Fn(usize) -> T,
+{
     let samples = vec![
         // Reduced examples
         vec![

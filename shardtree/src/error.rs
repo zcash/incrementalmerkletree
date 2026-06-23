@@ -30,7 +30,10 @@ impl<S> From<InsertionError> for ShardTreeError<S> {
     }
 }
 
-impl<S: fmt::Display> fmt::Display for ShardTreeError<S> {
+impl<S> fmt::Display for ShardTreeError<S>
+where
+    S: fmt::Display,
+{
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match &self {
             ShardTreeError::Query(q) => q.fmt(f),

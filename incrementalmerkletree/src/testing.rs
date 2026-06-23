@@ -24,7 +24,10 @@ impl Hashable for String {
     }
 }
 
-impl<H: Hashable> Hashable for Option<H> {
+impl<H> Hashable for Option<H>
+where
+    H: Hashable,
+{
     fn empty_leaf() -> Self {
         Some(H::empty_leaf())
     }

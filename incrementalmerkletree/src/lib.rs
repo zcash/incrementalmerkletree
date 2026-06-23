@@ -128,7 +128,10 @@ impl<C> Retention<C> {
     /// Applies the provided function to the checkpoint identifier, if any, and returns a new
     /// `Retention` value having the same structure with the resulting value used as the checkpoint
     /// identifier.
-    pub fn map<'a, D, F: Fn(&'a C) -> D>(&'a self, f: F) -> Retention<D> {
+    pub fn map<'a, D, F>(&'a self, f: F) -> Retention<D>
+    where
+        F: Fn(&'a C) -> D,
+    {
         match self {
             Retention::Ephemeral => Retention::Ephemeral,
             Retention::Checkpoint { id, marking } => Retention::Checkpoint {
@@ -639,7 +642,10 @@ impl<H, const DEPTH: u8> MerklePath<H, DEPTH> {
     }
 }
 
-impl<H: Hashable, const DEPTH: u8> MerklePath<H, DEPTH> {
+impl<H, const DEPTH: u8> MerklePath<H, DEPTH>
+where
+    H: Hashable,
+{
     /// Returns the root of the tree corresponding to this path applied to `leaf`.
     pub fn root(&self, leaf: H) -> H {
         self.path_elems

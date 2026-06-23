@@ -39,11 +39,14 @@ impl<
     ///
     /// [`Node::Nil`]: crate::tree::Node::Nil
     #[allow(clippy::type_complexity)]
-    pub fn batch_insert<I: Iterator<Item = (H, Retention<C>)>>(
+    pub fn batch_insert<I>(
         &mut self,
         mut start: Position,
         values: I,
-    ) -> Result<Option<(Position, Vec<IncompleteAt>)>, ShardTreeError<S::Error>> {
+    ) -> Result<Option<(Position, Vec<IncompleteAt>)>, ShardTreeError<S::Error>>
+    where
+        I: Iterator<Item = (H, Retention<C>)>,
+    {
         trace!("Batch inserting from {:?}", start);
         let mut values = values.peekable();
         let mut subtree_root_addr = Self::subtree_addr(start);
@@ -90,7 +93,11 @@ impl<
 /// nodes within that tree that were introduced as a consequence of that insertion, and the
 /// remainder of the iterator that provided the inserted values.
 #[derive(Debug)]
-pub struct BatchInsertionResult<H, C: Ord, I: Iterator<Item = (H, Retention<C>)>> {
+pub struct BatchInsertionResult<H, C, I>
+where
+    C: Ord,
+    I: Iterator<Item = (H, Retention<C>)>,
+{
     /// The updated tree after all insertions have been performed.
     pub subtree: LocatedPrunableTree<H>,
     /// A flag identifying whether the constructed subtree contains a marked node.
@@ -110,16 +117,23 @@ pub struct BatchInsertionResult<H, C: Ord, I: Iterator<Item = (H, Retention<C>)>
     pub remainder: I,
 }
 
-impl<H: Hashable + Clone + PartialEq> LocatedPrunableTree<H> {
+impl<H> LocatedPrunableTree<H>
+where
+    H: Hashable + Clone + PartialEq,
+{
     /// Append a values from an iterator, beginning at the first available position in the tree.
     ///
     /// Returns an error if the tree is full. If the position at the end of the iterator is outside
     /// of the subtree's range, the unconsumed part of the iterator will be returned as part of
     /// the result.
-    pub fn batch_append<C: Clone + Ord, I: Iterator<Item = (H, Retention<C>)>>(
+    pub fn batch_append<C, I>(
         &self,
         values: I,
-    ) -> Result<Option<BatchInsertionResult<H, C, I>>, InsertionError> {
+    ) -> Result<Option<BatchInsertionResult<H, C, I>>, InsertionError>
+    where
+        C: Clone + Ord,
+        I: Iterator<Item = (H, Retention<C>)>,
+    {
         let append_position = self
             .max_position()
             .map(|p| p + 1)
@@ -137,11 +151,15 @@ impl<H: Hashable + Clone + PartialEq> LocatedPrunableTree<H> {
     /// Returns `Ok(None)` if the provided iterator is empty, `Ok(Some(BatchInsertionResult))` if
     /// values were successfully inserted, or an error if the start position provided is outside
     /// of this tree's position range or if a conflict with an existing subtree root is detected.
-    pub fn batch_insert<C: Clone + Ord, I: Iterator<Item = (H, Retention<C>)>>(
+    pub fn batch_insert<C, I>(
         &self,
         start: Position,
         values: I,
-    ) -> Result<Option<BatchInsertionResult<H, C, I>>, InsertionError> {
+    ) -> Result<Option<BatchInsertionResult<H, C, I>>, InsertionError>
+    where
+        C: Clone + Ord,
+        I: Iterator<Item = (H, Retention<C>)>,
+    {
         trace!("Batch inserting into {:?} from {:?}", self.root_addr, start);
         let subtree_range = self.root_addr.position_range();
         let contains_start = subtree_range.contains(&start);
@@ -182,11 +200,15 @@ impl<H: Hashable + Clone + PartialEq> LocatedPrunableTree<H> {
     ///   checkpointed node may be pruned so long as their address is at less than the specified
     ///   level.
     /// * `values` - The iterator of `(H, Retention)` pairs from which to construct the tree.
-    pub fn from_iter<C: Clone + Ord, I: Iterator<Item = (H, Retention<C>)>>(
+    pub fn from_iter<C, I>(
         position_range: Range<Position>,
         prune_below: Level,
         mut values: I,
-    ) -> Option<BatchInsertionResult<H, C, I>> {
+    ) -> Option<BatchInsertionResult<H, C, I>>
+    where
+        C: Clone + Ord,
+        I: Iterator<Item = (H, Retention<C>)>,
+    {
         trace!(
             position_range = ?position_range,
             prune_below = ?prune_below,
@@ -259,11 +281,14 @@ impl<H: Hashable + Clone + PartialEq> LocatedPrunableTree<H> {
 //
 // `unite` is only called when both root addrs have the same parent.  `batch_insert` never
 // constructs Nil nodes, so we don't create any incomplete root information here.
-fn unite<H: Hashable + Clone + PartialEq>(
+fn unite<H>(
     lroot: LocatedPrunableTree<H>,
     rroot: LocatedPrunableTree<H>,
     prune_below: Level,
-) -> LocatedPrunableTree<H> {
+) -> LocatedPrunableTree<H>
+where
+    H: Hashable + Clone + PartialEq,
+{
     assert_eq!(lroot.root_addr.parent(), rroot.root_addr.parent());
     LocatedTree {
         root_addr: lroot.root_addr.parent(),
@@ -280,13 +305,16 @@ fn unite<H: Hashable + Clone + PartialEq>(
 ///
 /// `expect_left_child` is set to a constant at each callsite, to ensure that this
 /// function is only called on either the left-most or right-most subtree.
-fn combine_with_empty<H: Hashable + Clone + PartialEq>(
+fn combine_with_empty<H>(
     root: LocatedPrunableTree<H>,
     expect_left_child: bool,
     incomplete: &mut Vec<IncompleteAt>,
     contains_marked: bool,
     prune_below: Level,
-) -> LocatedPrunableTree<H> {
+) -> LocatedPrunableTree<H>
+where
+    H: Hashable + Clone + PartialEq,
+{
     assert_eq!(expect_left_child, root.root_addr.is_left_child());
     let sibling_addr = root.root_addr.sibling();
     incomplete.push(IncompleteAt {
@@ -309,11 +337,14 @@ fn combine_with_empty<H: Hashable + Clone + PartialEq>(
 // and in position order. Returns the resulting tree, a flag indicating whether the
 // resulting tree contains a `MARKED` node, and the vector of [`IncompleteAt`] values for
 // [`Node::Nil`] nodes that were introduced in the process of constructing the tree.
-fn build_minimal_tree<H: Hashable + Clone + PartialEq>(
+fn build_minimal_tree<H>(
     mut xs: Vec<(LocatedPrunableTree<H>, bool)>,
     root_addr: Address,
     prune_below: Level,
-) -> Option<(LocatedPrunableTree<H>, bool, Vec<IncompleteAt>)> {
+) -> Option<(LocatedPrunableTree<H>, bool, Vec<IncompleteAt>)>
+where
+    H: Hashable + Clone + PartialEq,
+{
     // First, consume the stack from the right, building up a single tree
     // until we can't combine any more.
     if let Some((mut cur, mut contains_marked)) = xs.pop() {

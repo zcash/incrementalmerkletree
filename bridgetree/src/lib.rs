@@ -186,7 +186,10 @@ impl<H> MerkleBridge<H> {
     }
 }
 
-impl<'a, H: Hashable + Clone + Ord + 'a> MerkleBridge<H> {
+impl<'a, H> MerkleBridge<H>
+where
+    H: Hashable + Clone + Ord + 'a,
+{
     /// Constructs a new bridge to follow this one. If `mark_current_leaf` is true, the successor
     /// will track the information necessary to create a witness for the leaf most
     /// recently appended to this bridge's frontier.
@@ -270,9 +273,10 @@ impl<'a, H: Hashable + Clone + Ord + 'a> MerkleBridge<H> {
     /// of all the provided bridges (discarding internal frontiers) or None
     /// if the provided iterator is empty. Returns a continuity error if
     /// any of the bridges are not valid successors to one another.
-    fn fuse_all<T: Iterator<Item = &'a Self>>(
-        mut iter: T,
-    ) -> Result<Option<Self>, ContinuityError> {
+    fn fuse_all<T>(mut iter: T) -> Result<Option<Self>, ContinuityError>
+    where
+        T: Iterator<Item = &'a Self>,
+    {
         let mut fused = iter.next().cloned();
         for next in iter {
             fused = Some(fused.unwrap().fuse(next)?);
@@ -406,7 +410,10 @@ impl<C> Checkpoint<C> {
 
     // A private convenience method that returns the position of the bridge corresponding
     // to this checkpoint, if the checkpoint is not for the empty bridge.
-    fn position<H: Ord>(&self, bridges: &[MerkleBridge<H>]) -> Option<Position> {
+    fn position<H>(&self, bridges: &[MerkleBridge<H>]) -> Option<Position>
+    where
+        H: Ord,
+    {
         if self.bridges_len == 0 {
             None
         } else {
@@ -416,7 +423,10 @@ impl<C> Checkpoint<C> {
 
     // A private method that rewrites the indices of each forgotten marked record
     // using the specified rewrite function. Used during garbage collection.
-    fn rewrite_indices<F: Fn(usize) -> usize>(&mut self, f: F) {
+    fn rewrite_indices<F>(&mut self, f: F)
+    where
+        F: Fn(usize) -> usize,
+    {
         self.bridges_len = f(self.bridges_len);
     }
 }
@@ -454,7 +464,11 @@ pub struct BridgeTree<H, C, const DEPTH: u8> {
     current_root: OnceLock<H>,
 }
 
-impl<H: PartialEq, C: PartialEq, const DEPTH: u8> PartialEq for BridgeTree<H, C, DEPTH> {
+impl<H, C, const DEPTH: u8> PartialEq for BridgeTree<H, C, DEPTH>
+where
+    H: PartialEq,
+    C: PartialEq,
+{
     fn eq(&self, other: &Self) -> bool {
         // `current_root` is a derived cache and is deliberately not compared.
         self.prior_bridges == other.prior_bridges
@@ -465,9 +479,18 @@ impl<H: PartialEq, C: PartialEq, const DEPTH: u8> PartialEq for BridgeTree<H, C,
     }
 }
 
-impl<H: Eq, C: Eq, const DEPTH: u8> Eq for BridgeTree<H, C, DEPTH> {}
+impl<H, C, const DEPTH: u8> Eq for BridgeTree<H, C, DEPTH>
+where
+    H: Eq,
+    C: Eq,
+{
+}
 
-impl<H: Debug, C: Debug, const DEPTH: u8> Debug for BridgeTree<H, C, DEPTH> {
+impl<H, C, const DEPTH: u8> Debug for BridgeTree<H, C, DEPTH>
+where
+    H: Debug,
+    C: Debug,
+{
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> Result<(), std::fmt::Error> {
         write!(
             f,
@@ -557,7 +580,11 @@ impl<H, C, const DEPTH: u8> BridgeTree<H, C, DEPTH> {
     }
 }
 
-impl<H: Hashable + Clone + Ord, C: Clone + Ord, const DEPTH: u8> BridgeTree<H, C, DEPTH> {
+impl<H, C, const DEPTH: u8> BridgeTree<H, C, DEPTH>
+where
+    H: Hashable + Clone + Ord,
+    C: Clone + Ord,
+{
     /// Construct a new BridgeTree that will start recording changes from the state of
     /// the specified frontier.
     pub fn from_frontier(max_checkpoints: usize, frontier: NonEmptyFrontier<H>) -> Self {
@@ -1023,8 +1050,9 @@ mod tests {
         complete_tree::CompleteTree, CombinedTree, SipHashable,
     };
 
-    impl<H: Hashable + Clone + Ord, const DEPTH: u8> testing::Tree<H, usize>
-        for BridgeTree<H, usize, DEPTH>
+    impl<H, const DEPTH: u8> testing::Tree<H, usize> for BridgeTree<H, usize, DEPTH>
+    where
+        H: Hashable + Clone + Ord,
     {
         fn append(&mut self, value: H, retention: Retention<usize>) -> bool {
             let appended = BridgeTree::append(self, value);
@@ -1089,13 +1117,18 @@ mod tests {
     fn bridgetree_is_send_and_sync() {
         // The memoized root cache must keep `BridgeTree` both `Send` and `Sync`;
         // a `RefCell`/`Cell` cache would silently make it `!Sync`.
-        fn assert_send_sync<T: Send + Sync>() {}
+        fn assert_send_sync<T>()
+        where
+            T: Send + Sync,
+        {
+        }
         assert_send_sync::<BridgeTree<String, usize, 8>>();
     }
 
-    fn check_garbage_collect<H: Hashable + Clone + Ord + Debug, const DEPTH: u8>(
-        mut tree: BridgeTree<H, usize, DEPTH>,
-    ) {
+    fn check_garbage_collect<H, const DEPTH: u8>(mut tree: BridgeTree<H, usize, DEPTH>)
+    where
+        H: Hashable + Clone + Ord + Debug,
+    {
         // Add checkpoints until we're sure everything that can be gc'ed will be gc'ed
         for i in 0..tree.max_checkpoints {
             tree.checkpoint(i + 1);
@@ -1109,11 +1142,12 @@ mod tests {
         }
     }
 
-    fn arb_bridgetree<G: Strategy + Clone>(
+    fn arb_bridgetree<G>(
         item_gen: G,
         max_count: usize,
     ) -> impl Strategy<Value = BridgeTree<G::Value, usize, 8>>
     where
+        G: Strategy + Clone,
         G::Value: Hashable + Clone + Ord + Debug + 'static,
     {
         let pos_gen = (0..max_count).prop_map(|p| Position::try_from(p).unwrap());
@@ -1230,9 +1264,12 @@ mod tests {
     }
 
     // Combined tree tests
-    fn new_combined_tree<H: Hashable + Clone + Ord + Debug>(
+    fn new_combined_tree<H>(
         max_checkpoints: usize,
-    ) -> CombinedTree<H, usize, CompleteTree<H, usize, 4>, BridgeTree<H, usize, 4>> {
+    ) -> CombinedTree<H, usize, CompleteTree<H, usize, 4>, BridgeTree<H, usize, 4>>
+    where
+        H: Hashable + Clone + Ord + Debug,
+    {
         CombinedTree::new(
             CompleteTree::<H, usize, 4>::new(max_checkpoints),
             BridgeTree::<H, usize, 4>::new(max_checkpoints),
