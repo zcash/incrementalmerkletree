@@ -271,6 +271,68 @@ mod tests {
     }
 
     #[test]
+    fn load_flush_roundtrip_preserves_sparse_shards() {
+        use incrementalmerkletree::{Address, Level};
+
+        use crate::{LocatedPrunableTree, LocatedTree, RetentionFlags, Tree};
+
+        // Regression test for the consumers of `get_shard_roots` in
+        // `CachingShardStore::{load, flush}`. Both iterate `get_shard_roots`
+        // and resolve each reported root via `get_shard(...).expect("known
+        // address")`, so they rely on `get_shard_roots` and `get_shard` staying
+        // consistent. When `MemoryShardStore` started storing shards sparsely,
+        // `get_shard_roots` stopped reporting the back-filled empty placeholder
+        // shards below the first populated index; this exercises a sparse
+        // backend (a gap below the populated range, as for a wallet synced from
+        // a recent birthday) end to end through load and flush, asserting the
+        // exact sparse set round-trips with no panic and no materialized gap.
+
+        // A minimal shard rooted at the shard level (3) and the given index.
+        // The store keys shards by index and does not inspect their shape, so a
+        // single-leaf root is sufficient for this storage-layer round trip.
+        fn shard(index: u64) -> LocatedPrunableTree<String> {
+            LocatedTree {
+                root_addr: Address::from_parts(Level::from(3), index),
+                root: Tree::leaf((format!("shard{index}"), RetentionFlags::EPHEMERAL)),
+            }
+        }
+
+        // Indices 2 and 3 are populated; 0 and 1 are absent.
+        let mut backend = MemoryShardStore::<String, u64>::empty();
+        backend.put_shard(shard(2)).unwrap();
+        backend.put_shard(shard(3)).unwrap();
+
+        let expected_roots = vec![
+            Address::from_parts(Level::from(3), 2),
+            Address::from_parts(Level::from(3), 3),
+        ];
+        assert_eq!(backend.get_shard_roots().unwrap(), expected_roots);
+
+        // `load` copies the sparse shards into the cache: every root reported by
+        // the backend resolves to a present shard (no panic on the
+        // `.expect("known address")`), and the gap is not back-filled.
+        let caching = CachingShardStore::load(backend).unwrap();
+        assert_eq!(caching.get_shard_roots().unwrap(), expected_roots);
+
+        // `flush` writes the cache back to the backend, round-tripping exactly
+        // the sparse set.
+        let restored = caching.flush().unwrap();
+        assert_eq!(restored.get_shard_roots().unwrap(), expected_roots);
+        for root in &expected_roots {
+            assert!(restored.get_shard(*root).unwrap().is_some());
+        }
+        // The gap below the populated range stays absent after the round trip.
+        assert!(restored
+            .get_shard(Address::from_parts(Level::from(3), 0))
+            .unwrap()
+            .is_none());
+        assert!(restored
+            .get_shard(Address::from_parts(Level::from(3), 1))
+            .unwrap()
+            .is_none());
+    }
+
+    #[test]
     fn root_hashes() {
         use Retention::*;
 
