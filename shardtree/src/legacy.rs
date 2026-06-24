@@ -101,7 +101,7 @@ impl<H: Hashable + Clone + PartialEq> LocatedPrunableTree<H> {
         leaf_addr: Address,
         mut filled: impl Iterator<Item = H>,
         split_at: Level,
-    ) -> (Self, Option<Self>) {
+    ) -> Result<(Self, Option<Self>), Address> {
         // add filled nodes to the subtree; here, we do not need to worry about
         // whether or not these nodes can be invalidated by a rewind
         let mut addr = leaf_addr;
@@ -113,17 +113,19 @@ impl<H: Hashable + Clone + PartialEq> LocatedPrunableTree<H> {
                 if let Some(right) = filled.next() {
                     // once we have a right-hand node, add a parent with the current tree
                     // as the left-hand sibling
-                    subtree = Tree::parent(
+                    subtree = PrunableTree::parent_checked(
                         None,
                         subtree,
                         Tree::leaf((right.clone(), RetentionFlags::EPHEMERAL)),
-                    );
+                    )
+                    .map_err(|_| addr)?;
                 } else {
                     break;
                 }
             } else {
                 // the current address is for a right child, so add an empty left sibling
-                subtree = Tree::parent(None, Tree::empty(), subtree);
+                subtree =
+                    PrunableTree::parent_checked(None, Tree::empty(), subtree).map_err(|_| addr)?;
             }
 
             addr = addr.parent();
@@ -140,16 +142,22 @@ impl<H: Hashable + Clone + PartialEq> LocatedPrunableTree<H> {
             for right in filled {
                 // build up the right-biased tree until we get a left-hand node
                 while addr.is_right_child() {
-                    supertree = supertree.map(|t| Tree::parent(None, Tree::empty(), t));
+                    supertree = supertree
+                        .map(|t| PrunableTree::parent_checked(None, Tree::empty(), t))
+                        .transpose()
+                        .map_err(|_| addr)?;
                     addr = addr.parent();
                 }
 
                 // once we have a left-hand root, add a parent with the current ommer as the right-hand sibling
-                supertree = Some(Tree::parent(
-                    None,
-                    supertree.unwrap_or_else(PrunableTree::empty),
-                    Tree::leaf((right.clone(), RetentionFlags::EPHEMERAL)),
-                ));
+                supertree = Some(
+                    PrunableTree::parent_checked(
+                        None,
+                        supertree.unwrap_or_else(PrunableTree::empty),
+                        Tree::leaf((right.clone(), RetentionFlags::EPHEMERAL)),
+                    )
+                    .map_err(|_| addr)?,
+                );
                 addr = addr.parent();
             }
 
@@ -161,7 +169,7 @@ impl<H: Hashable + Clone + PartialEq> LocatedPrunableTree<H> {
             None
         };
 
-        (subtree, supertree)
+        Ok((subtree, supertree))
     }
 
     /// Insert the nodes belonging to the given incremental witness to this tree, truncating the
@@ -196,23 +204,30 @@ impl<H: Hashable + Clone + PartialEq> LocatedPrunableTree<H> {
                 Address::from(witness.witnessed_position()),
                 witness.filled().iter().cloned(),
                 self.root_addr.level(),
-            );
+            )
+            .map_err(InsertionError::InputMalformed)?;
 
             // construct subtrees from the `cursor` part of the witness
-            let cursor_trees = witness.cursor().as_ref().filter(|c| c.size() > 0).map(|c| {
-                Self::from_frontier_parts(
-                    witness.tip_position(),
-                    c.leaf()
-                        .cloned()
-                        .expect("Cannot have an empty leaf for a non-empty tree"),
-                    c.ommers_iter().cloned(),
-                    &Retention::Checkpoint {
-                        id: checkpoint_id,
-                        marking: Marking::None,
-                    },
-                    self.root_addr.level(),
-                )
-            });
+            let cursor_trees = witness
+                .cursor()
+                .as_ref()
+                .filter(|c| c.size() > 0)
+                .map(|c| {
+                    Self::from_frontier_parts(
+                        witness.tip_position(),
+                        c.leaf()
+                            .cloned()
+                            .expect("Cannot have an empty leaf for a non-empty tree"),
+                        c.ommers_iter().cloned(),
+                        &Retention::Checkpoint {
+                            id: checkpoint_id,
+                            marking: Marking::None,
+                        },
+                        self.root_addr.level(),
+                    )
+                })
+                .transpose()
+                .map_err(InsertionError::InputMalformed)?;
 
             let (subtree, _) = past_subtree.insert_subtree(future_subtree, true)?;
 
@@ -253,7 +268,7 @@ mod tests {
         frontier::CommitmentTree, witness::IncrementalWitness, Address, Level, Position,
     };
 
-    use crate::{LocatedPrunableTree, RetentionFlags, Tree};
+    use crate::{LocatedPrunableTree, PrunableTree, RetentionFlags, Tree};
 
     #[test]
     fn insert_witness_nodes() {
@@ -280,19 +295,22 @@ mod tests {
 
             assert_eq!(
                 c.root,
-                Tree::parent(
+                PrunableTree::parent_checked(
                     None,
-                    Tree::parent(
+                    PrunableTree::parent_checked(
                         None,
                         Tree::empty(),
                         Tree::leaf(("ijklmnop".to_string(), RetentionFlags::EPHEMERAL)),
-                    ),
-                    Tree::parent(
+                    )
+                    .unwrap(),
+                    PrunableTree::parent_checked(
                         None,
                         Tree::leaf(("qrstuvwx".to_string(), RetentionFlags::EPHEMERAL)),
                         Tree::empty()
                     )
+                    .unwrap()
                 )
+                .unwrap()
             );
 
             assert_eq!(
