@@ -1,26 +1,19 @@
 //! Implementation of an in-memory shard store with no persistence.
 
 use std::collections::BTreeMap;
-use std::convert::Infallible;
+use std::convert::{Infallible, TryFrom};
 
 use incrementalmerkletree::Address;
 
 use super::{Checkpoint, ShardStore};
-use crate::{LocatedPrunableTree, PrunableTree};
+use crate::{LocatedPrunableTree, LocatedTree, PrunableTree, Tree};
 
 /// An implementation of [`ShardStore`] that stores all state in memory.
 ///
 /// State is not persisted anywhere, and will be lost when the struct is dropped.
-///
-/// Shards are stored sparsely in a [`BTreeMap`] keyed by shard index: only shards explicitly
-/// inserted via [`ShardStore::put_shard`] are retained, and an index with no inserted shard reads
-/// back as `None` (never as an empty shard). This matches the behaviour of persistent backends such
-/// as the SQLite-backed store, and avoids materializing the run of empty shards below a high
-/// starting index — e.g. for a wallet synced from a recent birthday, whose first populated shard
-/// index is large.
 #[derive(Debug)]
 pub struct MemoryShardStore<H, C: Ord> {
-    shards: BTreeMap<u64, LocatedPrunableTree<H>>,
+    shards: Vec<LocatedPrunableTree<H>>,
     checkpoints: BTreeMap<C, Checkpoint>,
     cap: PrunableTree<H>,
 }
@@ -29,7 +22,7 @@ impl<H, C: Ord> MemoryShardStore<H, C> {
     /// Constructs a new empty `MemoryShardStore`.
     pub fn empty() -> Self {
         Self {
-            shards: BTreeMap::new(),
+            shards: vec![],
             checkpoints: BTreeMap::new(),
             cap: PrunableTree::empty(),
         }
@@ -45,25 +38,39 @@ impl<H: Clone, C: Clone + Ord> ShardStore for MemoryShardStore<H, C> {
         &self,
         shard_root: Address,
     ) -> Result<Option<LocatedPrunableTree<H>>, Self::Error> {
-        Ok(self.shards.get(&shard_root.index()).cloned())
+        let shard_idx =
+            usize::try_from(shard_root.index()).expect("SHARD_HEIGHT > 64 is unsupported");
+        Ok(self.shards.get(shard_idx).cloned())
     }
 
     fn last_shard(&self) -> Result<Option<LocatedPrunableTree<H>>, Self::Error> {
-        Ok(self.shards.values().next_back().cloned())
+        Ok(self.shards.last().cloned())
     }
 
     fn put_shard(&mut self, subtree: LocatedPrunableTree<H>) -> Result<(), Self::Error> {
-        self.shards.insert(subtree.root_addr.index(), subtree);
+        let subtree_addr = subtree.root_addr;
+        for subtree_idx in
+            self.shards.last().map_or(0, |s| s.root_addr.index() + 1)..=subtree_addr.index()
+        {
+            self.shards.push(LocatedTree {
+                root_addr: Address::from_parts(subtree_addr.level(), subtree_idx),
+                root: Tree::empty(),
+            })
+        }
+
+        let shard_idx =
+            usize::try_from(subtree_addr.index()).expect("SHARD_HEIGHT > 64 is unsupported");
+        self.shards[shard_idx] = subtree;
         Ok(())
     }
 
     fn get_shard_roots(&self) -> Result<Vec<Address>, Self::Error> {
-        Ok(self.shards.values().map(|s| s.root_addr).collect())
+        Ok(self.shards.iter().map(|s| s.root_addr).collect())
     }
 
     fn truncate_shards(&mut self, shard_index: u64) -> Result<(), Self::Error> {
-        // Drop every shard with index >= `shard_index`.
-        self.shards.split_off(&shard_index);
+        let shard_idx = usize::try_from(shard_index).expect("SHARD_HEIGHT > 64 is unsupported");
+        self.shards.truncate(shard_idx);
         Ok(())
     }
 
