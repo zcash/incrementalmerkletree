@@ -8,6 +8,7 @@ and this project adheres to Rust's notion of
 ## Unreleased
 
 ### Added
+- `shardtree::LevelShifter`
 - `impl Display for shardtree::RetentionFlags`
 - `shardtree::LocatedTree::pretty_print_indented_with`
 - `shardtree::LocatedTree::pretty_print_bottom_top_with`
