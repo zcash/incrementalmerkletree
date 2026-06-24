@@ -2221,6 +2221,7 @@ mod tests {
     // are rooted at level 2 (4 leaves each); the cap spans levels 2..=4.
     // -----------------------------------------------------------------------
     mod root_internal {
+        use std::collections::BTreeSet;
         use std::sync::Arc;
 
         use assert_matches::assert_matches;
@@ -2292,6 +2293,34 @@ mod tests {
             tree
         }
 
+        // A complete shard at level 2 (root address `(2, index)`) holding the
+        // four given leaves, with the leaves at the listed slot indices (`0..4`)
+        // carrying the `MARKED` retention flag instead of `EPHEMERAL`. The leaf
+        // in slot `s` is at absolute position `index * 4 + s`. Used to exercise
+        // consumers of `get_shard_roots` that care about per-leaf retention.
+        fn shard_with_marks(
+            index: u64,
+            leaves: [&str; 4],
+            marked_slots: &[usize],
+        ) -> LocatedPrunableTree<String> {
+            let leaf = |slot: usize| {
+                let flags = if marked_slots.contains(&slot) {
+                    RetentionFlags::MARKED
+                } else {
+                    RetentionFlags::EPHEMERAL
+                };
+                Tree::leaf((leaves[slot].to_string(), flags))
+            };
+            LocatedTree {
+                root_addr: addr(2, index),
+                root: pparent(
+                    None,
+                    pparent(None, leaf(0), leaf(1)),
+                    pparent(None, leaf(2), leaf(3)),
+                ),
+            }
+        }
+
         #[test]
         fn non_contiguous_shards_are_sparse_and_root_correctly() {
             // Shards 2 and 3 are present; shards 0 and 1 are absent (a gap below the
@@ -2329,6 +2358,44 @@ mod tests {
                 tree.root(addr(3, 0), Position::from(8)),
                 Err(ShardTreeError::Query(QueryError::TreeIncomplete(_))),
             ));
+        }
+
+        #[test]
+        fn marked_positions_consumer_tolerates_sparse_shard_roots() {
+            // Regression test for the consumers of `ShardStore::get_shard_roots`.
+            //
+            // `ShardTree::marked_positions` iterates the shard roots reported by
+            // the store, fetches each shard, and unions their marked positions.
+            // With the sparse `MemoryShardStore`, `get_shard_roots` reports only
+            // the populated shards (no back-filled empties), so the consumer
+            // must:
+            //   - report the marks from every populated shard, and
+            //   - never fabricate positions for the absent gap below the
+            //     populated range (and never panic walking it).
+            //
+            // Shards 2 and 3 are populated (positions 8..16); shards 0 and 1
+            // (the gap, positions 0..8) are absent.
+            let tree = tree_with_shards(&[
+                // shard 2 (positions 8..12): mark position 10 (slot 2).
+                shard_with_marks(2, ["i", "j", "k", "l"], &[2]),
+                // shard 3 (positions 12..16): mark positions 13 and 15
+                // (slots 1 and 3).
+                shard_with_marks(3, ["m", "n", "o", "p"], &[1, 3]),
+            ]);
+
+            // The store reports only the two populated shard roots ...
+            assert_eq!(
+                tree.store.get_shard_roots().unwrap(),
+                vec![addr(2, 2), addr(2, 3)],
+            );
+
+            // ... and `marked_positions` reports exactly the marks from those
+            // shards, with no phantom positions contributed by the absent
+            // `0..8` gap.
+            assert_eq!(
+                tree.marked_positions().unwrap(),
+                BTreeSet::from([Position::from(10), Position::from(13), Position::from(15),]),
+            );
         }
 
         // ---- Phase 1: fast path (cached value returned immediately) ---------
