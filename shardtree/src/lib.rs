@@ -2035,6 +2035,24 @@ mod tests {
             }
             prop_assert_eq!(tree.marked_positions().unwrap(), layout.marked_positions);
         }
+
+        // Regression test: the dense MemoryShardStore back-fills empty
+        // placeholder shards, so get_shard_roots reports a contiguous
+        // 0..=max_populated_index range of roots.
+        #[test]
+        fn get_shard_roots_is_dense_up_to_max_index(
+            layout in arb_shard_layout(arb_char_str(), 2, 8, 4)
+        ) {
+            let mut tree = empty_tree::<String, 4, 2>();
+            for shard in &layout.shards {
+                tree.store.put_shard(shard.clone()).unwrap();
+            }
+            let max_index = layout.shards.iter().map(|s| s.root_addr.index()).max().unwrap();
+            let expected: Vec<Address> = (0..=max_index)
+                .map(|i| Address::from_parts(Level::from(2), i))
+                .collect();
+            prop_assert_eq!(tree.store.get_shard_roots().unwrap(), expected);
+        }
     }
 
     #[test]
