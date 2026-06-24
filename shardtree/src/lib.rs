@@ -1549,8 +1549,8 @@ mod tests {
         error::{QueryError, ShardTreeError},
         store::{memory::MemoryShardStore, ShardStore},
         testing::{
-            arb_char_str, arb_shardtree, check_shard_sizes, check_shardtree_insertion,
-            check_witness_with_pruned_subtrees,
+            arb_char_str, arb_shard_layout, arb_shardtree_sized, check_shard_sizes,
+            check_shardtree_insertion, check_witness_with_pruned_subtrees,
         },
         InsertionError, LocatedPrunableTree, LocatedTree, ShardTree,
     };
@@ -1981,31 +1981,77 @@ mod tests {
         }
     }
 
+    fn check_caching<const DEPTH: u8, const SHARD_HEIGHT: u8>(
+        mut tree: ShardTree<MemoryShardStore<String, usize>, DEPTH, SHARD_HEIGHT>,
+        marked_positions: Vec<Position>,
+    ) {
+        if let Some(max_leaf_pos) = tree.max_leaf_position(None).unwrap() {
+            let max_complete_addr =
+                Address::above_position(max_leaf_pos.root_level(), max_leaf_pos);
+            let root = tree.root(max_complete_addr, max_leaf_pos + 1);
+            let caching_root = tree.root_caching(max_complete_addr, max_leaf_pos + 1);
+            assert_matches!(root, Ok(_));
+            assert_eq!(root, caching_root);
+        }
+
+        if let Ok(Some(checkpoint_position)) = tree.max_leaf_position(Some(0)) {
+            for pos in marked_positions {
+                let witness = tree.witness_at_checkpoint_depth(pos, 0);
+                let caching_witness = tree.witness_at_checkpoint_depth_caching(pos, 0);
+                if pos <= checkpoint_position {
+                    assert_matches!(witness, Ok(_));
+                }
+                assert_eq!(witness, caching_witness);
+            }
+        }
+    }
+
     proptest! {
         #![proptest_config(ProptestConfig::with_cases(100))]
 
         #[test]
         fn check_shardtree_caching(
-            (mut tree, _, marked_positions) in arb_shardtree(arb_char_str())
+            (tree, _, marked_positions) in arb_shardtree_sized::<_, 6, 3>(arb_char_str())
         ) {
-            if let Some(max_leaf_pos) = tree.max_leaf_position(None).unwrap() {
-                let max_complete_addr = Address::above_position(max_leaf_pos.root_level(), max_leaf_pos);
-                let root = tree.root(max_complete_addr, max_leaf_pos + 1);
-                let caching_root = tree.root_caching(max_complete_addr, max_leaf_pos + 1);
-                assert_matches!(root, Ok(_));
-                assert_eq!(root, caching_root);
-            }
+            check_caching(tree, marked_positions);
+        }
 
-            if let Ok(Some(checkpoint_position)) = tree.max_leaf_position(Some(0)) {
-                for pos in marked_positions {
-                    let witness = tree.witness_at_checkpoint_depth(pos, 0);
-                    let caching_witness = tree.witness_at_checkpoint_depth_caching(pos, 0);
-                    if pos <= checkpoint_position {
-                        assert_matches!(witness, Ok(_));
-                    }
-                    assert_eq!(witness, caching_witness);
-                }
+        #[test]
+        fn check_shardtree_caching_small_shards(
+            (tree, _, marked_positions) in arb_shardtree_sized::<_, 4, 2>(arb_char_str())
+        ) {
+            check_caching(tree, marked_positions);
+        }
+    }
+
+    proptest! {
+        #[test]
+        fn marked_positions_matches_shard_layout(
+            layout in arb_shard_layout(arb_char_str(), 2, 8, 4)
+        ) {
+            let mut tree = empty_tree::<String, 4, 2>();
+            for shard in &layout.shards {
+                tree.store.put_shard(shard.clone()).unwrap();
             }
+            prop_assert_eq!(tree.marked_positions().unwrap(), layout.marked_positions);
+        }
+
+        // Regression test: the dense MemoryShardStore back-fills empty
+        // placeholder shards, so get_shard_roots reports a contiguous
+        // 0..=max_populated_index range of roots.
+        #[test]
+        fn get_shard_roots_is_dense_up_to_max_index(
+            layout in arb_shard_layout(arb_char_str(), 2, 8, 4)
+        ) {
+            let mut tree = empty_tree::<String, 4, 2>();
+            for shard in &layout.shards {
+                tree.store.put_shard(shard.clone()).unwrap();
+            }
+            let max_index = layout.shards.iter().map(|s| s.root_addr.index()).max().unwrap();
+            let expected: Vec<Address> = (0..=max_index)
+                .map(|i| Address::from_parts(Level::from(2), i))
+                .collect();
+            prop_assert_eq!(tree.store.get_shard_roots().unwrap(), expected);
         }
     }
 
