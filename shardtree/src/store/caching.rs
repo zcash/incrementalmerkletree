@@ -4,7 +4,7 @@ use std::convert::Infallible;
 
 use incrementalmerkletree::Address;
 
-use super::{memory::MemoryShardStore, Checkpoint, ShardStore};
+use super::{memory::MemoryShardStore, Checkpoint, ShardStore, TruncableShardStore};
 use crate::{LocatedPrunableTree, PrunableTree};
 
 #[derive(Debug)]
@@ -60,7 +60,14 @@ where
             deferred_actions: vec![],
         })
     }
+}
 
+impl<S> CachingShardStore<S>
+where
+    S: TruncableShardStore,
+    S::H: Clone,
+    S::CheckpointId: Clone + Ord,
+{
     /// Flushes the current cache state to the backend and returns it.
     pub fn flush(mut self) -> Result<S, S::Error> {
         for action in &self.deferred_actions {
@@ -144,12 +151,6 @@ where
         self.cache.get_shard_roots()
     }
 
-    fn truncate_shards(&mut self, shard_index: u64) -> Result<(), Self::Error> {
-        self.deferred_actions
-            .push(Action::TruncateShards(shard_index));
-        self.cache.truncate_shards(shard_index)
-    }
-
     fn get_cap(&self) -> Result<PrunableTree<Self::H>, Self::Error> {
         self.cache.get_cap()
     }
@@ -220,6 +221,19 @@ where
         self.deferred_actions
             .push(Action::RemoveCheckpoint(checkpoint_id.clone()));
         self.cache.remove_checkpoint(checkpoint_id)
+    }
+}
+
+impl<S> TruncableShardStore for CachingShardStore<S>
+where
+    S: TruncableShardStore,
+    S::H: Clone,
+    S::CheckpointId: Clone + Ord,
+{
+    fn truncate_shards(&mut self, shard_index: u64) -> Result<(), Self::Error> {
+        self.deferred_actions
+            .push(Action::TruncateShards(shard_index));
+        self.cache.truncate_shards(shard_index)
     }
 
     fn truncate_checkpoints_retaining(

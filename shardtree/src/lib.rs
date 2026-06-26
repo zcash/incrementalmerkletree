@@ -67,7 +67,7 @@ use incrementalmerkletree::{
 
 use self::{
     error::{InsertionError, QueryError, ShardTreeError},
-    store::{Checkpoint, ShardStore, TreeState},
+    store::{Checkpoint, ShardStore, TreeState, TruncableShardStore},
 };
 
 mod batch;
@@ -689,7 +689,16 @@ impl<
 
         Ok(())
     }
+}
 
+impl<
+        H: Hashable + Clone + PartialEq,
+        C: Clone + Debug + Ord,
+        S: TruncableShardStore<H = H, CheckpointId = C>,
+        const DEPTH: u8,
+        const SHARD_HEIGHT: u8,
+    > ShardTree<S, DEPTH, SHARD_HEIGHT>
+{
     /// Truncates the tree, discarding all information after the checkpoint at the specified
     /// checkpoint depth.
     ///
@@ -787,7 +796,16 @@ impl<
 
         Ok(())
     }
+}
 
+impl<
+        H: Hashable + Clone + PartialEq,
+        C: Clone + Debug + Ord,
+        S: ShardStore<H = H, CheckpointId = C>,
+        const DEPTH: u8,
+        const SHARD_HEIGHT: u8,
+    > ShardTree<S, DEPTH, SHARD_HEIGHT>
+{
     /// Computes the Merkle root of the subtree rooted at `address`, as if the
     /// tree were truncated at `truncate_at`.
     ///
@@ -2275,7 +2293,7 @@ mod tests {
 
         use crate::{
             error::{QueryError, ShardTreeError},
-            store::{memory::MemoryShardStore, ShardStore},
+            store::{memory::MemoryShardStore, ShardStore, TruncableShardStore},
             LocatedPrunableTree, LocatedTree, PrunableTree, RetentionFlags, ShardTree, Tree,
         };
 

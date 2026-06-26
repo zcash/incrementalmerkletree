@@ -64,10 +64,6 @@ pub trait ShardStore {
     /// store.
     fn get_shard_roots(&self) -> Result<Vec<Address>, Self::Error>;
 
-    /// Removes subtrees from the underlying store having root addresses at indices greater
-    /// than or equal to that of the specified index.
-    fn truncate_shards(&mut self, shard_index: u64) -> Result<(), Self::Error>;
-
     /// A tree that is used to cache the known roots of subtrees in the "cap" - the top part of the
     /// tree, which contains parent nodes produced by hashing the roots of the individual shards.
     /// Nodes in the cap have levels in the range `SHARD_HEIGHT..DEPTH`. Note that the cap may be
@@ -138,6 +134,18 @@ pub trait ShardStore {
     ///
     /// If no checkpoint exists with the given ID, this does nothing.
     fn remove_checkpoint(&mut self, checkpoint_id: &Self::CheckpointId) -> Result<(), Self::Error>;
+}
+
+/// A [`ShardStore`] that additionally supports truncation of its contents.
+///
+/// Truncation is used to roll the tree back to the state at an earlier checkpoint, discarding all
+/// information about the tree to the right of the checkpointed position.
+///
+/// [`ShardTree`]: crate::ShardTree
+pub trait TruncableShardStore: ShardStore {
+    /// Removes subtrees from the underlying store having root addresses at indices greater
+    /// than or equal to that of the specified index.
+    fn truncate_shards(&mut self, shard_index: u64) -> Result<(), Self::Error>;
 
     /// Removes checkpoints with identifiers greater than to the given identifier, and removes mark
     /// removal metadata from the specified checkpoint.
@@ -177,10 +185,6 @@ impl<S: ShardStore> ShardStore for &mut S {
 
     fn put_cap(&mut self, cap: PrunableTree<Self::H>) -> Result<(), Self::Error> {
         S::put_cap(*self, cap)
-    }
-
-    fn truncate_shards(&mut self, shard_index: u64) -> Result<(), Self::Error> {
-        S::truncate_shards(*self, shard_index)
     }
 
     fn min_checkpoint_id(&self) -> Result<Option<Self::CheckpointId>, Self::Error> {
@@ -244,6 +248,12 @@ impl<S: ShardStore> ShardStore for &mut S {
 
     fn remove_checkpoint(&mut self, checkpoint_id: &Self::CheckpointId) -> Result<(), Self::Error> {
         S::remove_checkpoint(self, checkpoint_id)
+    }
+}
+
+impl<S: TruncableShardStore> TruncableShardStore for &mut S {
+    fn truncate_shards(&mut self, shard_index: u64) -> Result<(), Self::Error> {
+        S::truncate_shards(*self, shard_index)
     }
 
     fn truncate_checkpoints_retaining(

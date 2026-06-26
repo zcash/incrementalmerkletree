@@ -8,11 +8,21 @@ and this project adheres to Rust's notion of
 ## Unreleased
 
 ### Added
+- `shardtree::store::TruncableShardStore`
 - `impl Display for shardtree::RetentionFlags`
 - `shardtree::LocatedTree::pretty_print_indented_with`
 - `shardtree::LocatedTree::pretty_print_bottom_top_with`
 - `shardtree::LocatedPrunableTree::pretty_print_indented`
 - `shardtree::LocatedPrunableTree::pretty_print_bottom_top`
+
+### Changed
+- The truncation methods `truncate_shards` and `truncate_checkpoints_retaining`
+  have been moved out of `shardtree::store::ShardStore` and into the new
+  `shardtree::store::TruncableShardStore: ShardStore` trait. A `ShardStore` is
+  no longer required to support truncation; stores that do must additionally
+  implement `TruncableShardStore`. The `ShardTree::truncate_to_checkpoint` and
+  `ShardTree::truncate_to_checkpoint_depth` methods now require the underlying
+  store to implement `TruncableShardStore`.
 
 ## [0.6.2] - 2026-02-20
 
