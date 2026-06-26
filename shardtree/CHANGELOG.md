@@ -13,6 +13,12 @@ and this project adheres to Rust's notion of
 - `shardtree::LocatedTree::pretty_print_bottom_top_with`
 - `shardtree::LocatedPrunableTree::pretty_print_indented`
 - `shardtree::LocatedPrunableTree::pretty_print_bottom_top`
+- `shardtree::store::caching::SparseCachingShardStore`, a preload-based variant of
+  `CachingShardStore` that caches only an explicitly provided working set of shards (rather than
+  eagerly copying the entire backend) and writes back only the delta accumulated since preload.
+  This makes the in-memory overlay `O(working set)` rather than `O(tree)` per checkpoint. Reads
+  for a shard that exists in the backend but was not preloaded return the new
+  `shardtree::store::caching::SparseStoreError::NotPreloaded` rather than `None`.
 
 ## [0.6.2] - 2026-02-20
 
