@@ -5,7 +5,7 @@ use std::convert::{Infallible, TryFrom};
 
 use incrementalmerkletree::Address;
 
-use super::{Checkpoint, ShardStore};
+use super::{Checkpoint, ShardStore, TruncableShardStore};
 use crate::{LocatedPrunableTree, LocatedTree, PrunableTree, Tree};
 
 /// An implementation of [`ShardStore`] that stores all state in memory.
@@ -66,12 +66,6 @@ impl<H: Clone, C: Clone + Ord> ShardStore for MemoryShardStore<H, C> {
 
     fn get_shard_roots(&self) -> Result<Vec<Address>, Self::Error> {
         Ok(self.shards.iter().map(|s| s.root_addr).collect())
-    }
-
-    fn truncate_shards(&mut self, shard_index: u64) -> Result<(), Self::Error> {
-        let shard_idx = usize::try_from(shard_index).expect("SHARD_HEIGHT > 64 is unsupported");
-        self.shards.truncate(shard_idx);
-        Ok(())
     }
 
     fn get_cap(&self) -> Result<PrunableTree<H>, Self::Error> {
@@ -163,6 +157,14 @@ impl<H: Clone, C: Clone + Ord> ShardStore for MemoryShardStore<H, C> {
 
     fn remove_checkpoint(&mut self, checkpoint_id: &C) -> Result<(), Self::Error> {
         self.checkpoints.remove(checkpoint_id);
+        Ok(())
+    }
+}
+
+impl<H: Clone, C: Clone + Ord> TruncableShardStore for MemoryShardStore<H, C> {
+    fn truncate_shards(&mut self, shard_index: u64) -> Result<(), Self::Error> {
+        let shard_idx = usize::try_from(shard_index).expect("SHARD_HEIGHT > 64 is unsupported");
+        self.shards.truncate(shard_idx);
         Ok(())
     }
 
