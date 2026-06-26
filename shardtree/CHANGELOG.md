@@ -16,6 +16,12 @@ and this project adheres to Rust's notion of
 - `shardtree::LocatedPrunableTree::pretty_print_bottom_top`
 - `shardtree::ShardTree::ensure_retained`
 - `shardtree::ShardTree::remove_retained_checkpoint`
+- `shardtree::store::caching::SparseCachingShardStore`, a preload-based variant of
+  `CachingShardStore` that caches only an explicitly provided working set of shards (rather than
+  eagerly copying the entire backend) and writes back only the delta accumulated since preload.
+  This makes the in-memory overlay `O(working set)` rather than `O(tree)` per checkpoint. Reads
+  for a shard that exists in the backend but was not preloaded return the new
+  `shardtree::store::caching::SparseStoreError::NotPreloaded` rather than `None`.
 
 ### Changed
 - A checkpoint that has been explicitly retained via
