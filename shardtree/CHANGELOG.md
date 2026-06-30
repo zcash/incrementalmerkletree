@@ -13,6 +13,20 @@ and this project adheres to Rust's notion of
 - `shardtree::LocatedTree::pretty_print_bottom_top_with`
 - `shardtree::LocatedPrunableTree::pretty_print_indented`
 - `shardtree::LocatedPrunableTree::pretty_print_bottom_top`
+- `shardtree::ShardTree::ensure_retained`
+- `shardtree::ShardTree::remove_retained_checkpoint`
+- `shardtree::store::ShardStore::add_retained_checkpoint`
+- `shardtree::store::ShardStore::remove_retained_checkpoint`
+- `shardtree::store::ShardStore::retained_checkpoints`
+
+### Changed
+- A checkpoint that has been explicitly retained via
+  `ShardTree::ensure_retained` is treated as a durable "anchor":
+  `ShardTree::prune_excess_checkpoints` excludes retained checkpoints from the
+  `max_checkpoints` budget and never removes them, so their root and the
+  witnesses for marked leaves at or before them remain computable even after
+  they have aged more than `max_checkpoints` behind the tip of the tree.
+  Retention is released with `ShardTree::remove_retained_checkpoint`.
 
 ## [0.6.2] - 2026-02-20
 

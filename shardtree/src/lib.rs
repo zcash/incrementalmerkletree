@@ -577,6 +577,32 @@ impl<
         Ok(true)
     }
 
+    /// Marks the checkpoint having the given identifier for retention, exempting it from automatic
+    /// pruning of excess checkpoints.
+    ///
+    /// A retained checkpoint is excluded from the `max_checkpoints` budget and is never removed by
+    /// [`Self::prune_excess_checkpoints`]; it persists until it is released via
+    /// [`Self::remove_retained_checkpoint`]. As a result, its root, and witnesses for marked leaves
+    /// at or before it, remain computable even after it has aged more than `max_checkpoints` behind
+    /// the tip of the tree. The identifier may be recorded even if no checkpoint with that
+    /// identifier currently exists.
+    pub fn ensure_retained(&mut self, checkpoint_id: C) -> Result<(), ShardTreeError<S::Error>> {
+        self.store
+            .add_retained_checkpoint(checkpoint_id)
+            .map_err(ShardTreeError::Storage)
+    }
+
+    /// Releases a checkpoint previously retained via [`Self::ensure_retained`], allowing it to be
+    /// pruned normally. Has no effect if the checkpoint was not retained.
+    pub fn remove_retained_checkpoint(
+        &mut self,
+        checkpoint_id: &C,
+    ) -> Result<(), ShardTreeError<S::Error>> {
+        self.store
+            .remove_retained_checkpoint(checkpoint_id)
+            .map_err(ShardTreeError::Storage)
+    }
+
     /// Removes the oldest checkpoints until at most `max_checkpoints` remain,
     /// clearing the `CHECKPOINT` and `MARKED` retention flags they were keeping
     /// alive so the affected leaves become prunable.
@@ -590,15 +616,35 @@ impl<
             .store
             .checkpoint_count()
             .map_err(ShardTreeError::Storage)?;
+
+        // Checkpoints in the explicit retention set are pinned: they are excluded from the
+        // `max_checkpoints` budget and are never removed by automatic pruning. The budget therefore
+        // applies only to the non-retained checkpoints.
+        let retained = self
+            .store
+            .retained_checkpoints()
+            .map_err(ShardTreeError::Storage)?;
+        let mut retained_existing = 0usize;
+        self.store
+            .for_each_checkpoint(checkpoint_count, |cid, _| {
+                if retained.contains(cid) {
+                    retained_existing += 1;
+                }
+                Ok(())
+            })
+            .map_err(ShardTreeError::Storage)?;
+        let prunable_count = checkpoint_count - retained_existing;
+
         trace!(
-            "Tree has {} checkpoints, max is {}",
+            "Tree has {} checkpoints ({} retained), max is {}",
             checkpoint_count,
+            retained_existing,
             self.max_checkpoints,
         );
-        if checkpoint_count > self.max_checkpoints {
+        if prunable_count > self.max_checkpoints {
             // Batch removals by subtree & create a list of the checkpoint identifiers that
             // will be removed from the checkpoints map.
-            let remove_count = checkpoint_count - self.max_checkpoints;
+            let remove_count = prunable_count - self.max_checkpoints;
             let mut checkpoints_to_delete = vec![];
             let mut clear_positions: BTreeMap<Address, BTreeMap<Position, RetentionFlags>> =
                 BTreeMap::new();
@@ -607,8 +653,9 @@ impl<
                     // When removing is true, we are iterating through the range of
                     // checkpoints being removed. When remove is false, we are
                     // iterating through the range of checkpoints that are being
-                    // retained.
-                    let removing = checkpoints_to_delete.len() < remove_count;
+                    // retained. Checkpoints in the retention set are always retained.
+                    let removing =
+                        !retained.contains(cid) && checkpoints_to_delete.len() < remove_count;
 
                     if removing {
                         checkpoints_to_delete.push(cid.clone());
@@ -1542,7 +1589,7 @@ mod tests {
     use incrementalmerkletree_testing::{
         arb_operation, check_append, check_checkpoint_rewind, check_operations, check_remove_mark,
         check_rewind_remove_mark, check_root_hashes, check_witness_consistency, check_witnesses,
-        complete_tree::CompleteTree, CombinedTree, SipHashable,
+        complete_tree::CompleteTree, compute_root_from_witness, CombinedTree, SipHashable,
     };
 
     use crate::{
@@ -1919,6 +1966,126 @@ mod tests {
 
         let witness = test_with_marking(Marking::Reference).unwrap();
         assert_eq!(witness, Some(expected_witness));
+    }
+
+    /// Builds a tree (`max_checkpoints == 3`) containing a `Marked` leaf at position 2 and an
+    /// explicitly-retained "anchor" checkpoint (id 1) at position 5, then advances the tree across
+    /// the shard boundary while adding more than `max_checkpoints` additional checkpoints, so that
+    /// checkpoint 1 would ordinarily be pruned were it not retained.
+    fn anchor_checkpoint_tree() -> ShardTree<MemoryShardStore<String, usize>, 6, 3> {
+        let mut tree = ShardTree::new(MemoryShardStore::empty(), 3);
+
+        // Append an initial series of leaves, marking the leaf at position 2 so that we can
+        // later compute a witness for it.
+        for c in 'a'..='e' {
+            let retention = if c == 'c' {
+                Retention::Marked
+            } else {
+                Retention::Ephemeral
+            };
+            tree.append(c.to_string(), retention).unwrap();
+        }
+
+        // Create a checkpoint (id 1) at position 5 and retain it explicitly so it becomes a
+        // durable anchor.
+        tree.append(
+            "f".to_string(),
+            Retention::Checkpoint {
+                id: 1,
+                marking: Marking::None,
+            },
+        )
+        .unwrap();
+        tree.ensure_retained(1).unwrap();
+
+        // Advance the tree across the shard boundary, adding ordinary checkpoints (ids 2..=5)
+        // such that checkpoint 1 ages more than `max_checkpoints` behind the tip.
+        let mut next_id = 2;
+        for c in 'g'..='n' {
+            let retention = if matches!(c, 'h' | 'j' | 'l' | 'n') {
+                let id = next_id;
+                next_id += 1;
+                Retention::Checkpoint {
+                    id,
+                    marking: Marking::None,
+                }
+            } else {
+                Retention::Ephemeral
+            };
+            tree.append(c.to_string(), retention).unwrap();
+        }
+
+        tree
+    }
+
+    #[test]
+    fn anchor_checkpoint_survives_pruning() {
+        let tree = anchor_checkpoint_tree();
+
+        // Three more recent ordinary checkpoints exist and `max_checkpoints` is 3, so an
+        // un-retained checkpoint in checkpoint 1's position would have been pruned. Because
+        // checkpoint 1 was explicitly retained, its record must be preserved.
+        assert_matches!(tree.store().get_checkpoint(&1), Ok(Some(_)));
+    }
+
+    #[test]
+    fn witness_marked_leaf_as_of_anchor_checkpoint() {
+        let tree = anchor_checkpoint_tree();
+
+        // The witness for the `Marked` leaf at position 2, as of the anchor checkpoint (id 1) at
+        // position 5, must remain computable even though checkpoint 1 has aged more than
+        // `max_checkpoints` behind the tip of the tree.
+        let expected_path: Vec<String> = [
+            "d",
+            "ab",
+            "ef__",
+            "________",
+            "________________",
+            "________________________________",
+        ]
+        .iter()
+        .map(|s| s.to_string())
+        .collect();
+
+        let witness = tree
+            .witness_at_checkpoint_id(Position::from(2), &1)
+            .unwrap()
+            .expect("a witness can be computed as of the anchored checkpoint");
+        assert_eq!(witness.path_elems(), expected_path.as_slice());
+
+        // The root as of the anchor checkpoint must also be computable, and must be consistent
+        // with the witness for the marked leaf.
+        let root = tree
+            .root_at_checkpoint_id(&1)
+            .unwrap()
+            .expect("a root can be computed as of the anchored checkpoint");
+        assert_eq!(
+            root,
+            compute_root_from_witness("c".to_string(), Position::from(2), &expected_path)
+        );
+    }
+
+    #[test]
+    fn released_anchor_checkpoint_is_pruned() {
+        let mut tree = anchor_checkpoint_tree();
+
+        // The anchor is retained, so it survives so far.
+        assert_matches!(tree.store().get_checkpoint(&1), Ok(Some(_)));
+
+        // Release the retention, then trigger pruning by adding another checkpoint. Checkpoint 1
+        // is now an ordinary checkpoint well beyond the `max_checkpoints` window, so it must be
+        // pruned.
+        tree.remove_retained_checkpoint(&1).unwrap();
+        tree.append(
+            "o".to_string(),
+            Retention::Checkpoint {
+                id: 6,
+                marking: Marking::None,
+            },
+        )
+        .unwrap();
+
+        assert_matches!(tree.store().get_checkpoint(&1), Ok(None));
     }
 
     // Combined tree tests
