@@ -7,6 +7,11 @@ and this project adheres to Rust's notion of
 
 ## Unreleased
 
+### Changed
+- MSRV is now 1.85.
+- Many public methods and associated functions that return a value are now
+  annotated with `#[must_use]`.
+
 ## [0.8.2] - 2025-01-31
 
 ### Added

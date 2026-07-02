@@ -7,6 +7,11 @@ and this project adheres to Rust's notion of
 
 ## [0.7.0] - PLANNED
 
+### Changed (tooling)
+- MSRV is now 1.85.
+- Many public methods and associated functions that return a value are now
+  annotated with `#[must_use]`.
+
 ### Added
 - `impl Display for shardtree::RetentionFlags`
 - `shardtree::LocatedTree::pretty_print_indented_with`
