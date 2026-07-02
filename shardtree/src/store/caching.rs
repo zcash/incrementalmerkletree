@@ -1,5 +1,6 @@
 //! Implementation of an in-memory shard store with persistence.
 
+use std::collections::BTreeSet;
 use std::convert::Infallible;
 
 use incrementalmerkletree::Address;
@@ -7,10 +8,29 @@ use incrementalmerkletree::Address;
 use super::{memory::MemoryShardStore, Checkpoint, ShardStore};
 use crate::{LocatedPrunableTree, PrunableTree};
 
+/// A destructive backend mutation that a [`CachingShardStore`] applies to its
+/// cache immediately but defers against the backend until [`flush`].
+///
+/// Only removals are deferred; additive writes need no entry because the flush
+/// re-writes the full cached state. Each variant names the [`ShardStore`]
+/// removal method it replays.
+///
+/// [`flush`]: CachingShardStore::flush
 #[derive(Debug)]
 enum Action<C> {
+    /// Replays [`ShardStore::truncate_shards`]: remove all shards at or beyond
+    /// the given shard index from the backend.
     TruncateShards(u64),
+    /// Replays [`ShardStore::remove_checkpoint`]: remove the checkpoint with
+    /// this identifier from the backend.
     RemoveCheckpoint(C),
+    /// Replays [`ShardStore::remove_retained_checkpoint`]: drop the explicit
+    /// retention ("anchor") of the checkpoint with this identifier in the
+    /// backend.
+    RemoveRetainedCheckpoint(C),
+    /// Replays [`ShardStore::truncate_checkpoints_retaining`]: remove every
+    /// checkpoint after this identifier from the backend while retaining the
+    /// checkpoint itself.
     TruncateCheckpointsRetaining(C),
 }
 
@@ -62,12 +82,39 @@ where
     }
 
     /// Flushes the current cache state to the backend and returns it.
+    ///
+    /// A `CachingShardStore` serves every read and every additive write from
+    /// its in-memory cache. Reconstructing the backend on flush is a two-phase
+    /// process:
+    ///
+    /// 1. **Removals first.** The deferred-action log (a list of `Action`s) is
+    ///    replayed against the backend in the order the operations were
+    ///    requested, deleting the shards and checkpoints that were dropped from
+    ///    the cache. These cannot be captured by phase 2: re-writing the cache
+    ///    only reproduces *additions*, so data removed from the cache would
+    ///    otherwise linger in the backend.
+    /// 2. **Additive state second.** The full cached state (all shards, the
+    ///    cap, every checkpoint, and the retained-checkpoint set) is written
+    ///    back from the cache, bringing the backend into agreement with it.
+    ///
+    /// If the store is instead dropped without calling `flush` (for example it
+    /// goes out of scope at the end of a block, or is otherwise destroyed
+    /// before `flush` is called), its cache and deferred-action log are
+    /// discarded along with it and the backend is left untouched: every
+    /// mutation made since [`load`] is lost. `flush` takes `self` by value, so
+    /// persisting requires explicitly calling it and using the returned
+    /// backend.
+    ///
+    /// [`load`]: Self::load
     pub fn flush(mut self) -> Result<S, S::Error> {
         for action in &self.deferred_actions {
             match action {
                 Action::TruncateShards(index) => self.backend.truncate_shards(*index),
                 Action::RemoveCheckpoint(checkpoint_id) => {
                     self.backend.remove_checkpoint(checkpoint_id)
+                }
+                Action::RemoveRetainedCheckpoint(checkpoint_id) => {
+                    self.backend.remove_retained_checkpoint(checkpoint_id)
                 }
                 Action::TruncateCheckpointsRetaining(checkpoint_id) => {
                     self.backend.truncate_checkpoints_retaining(checkpoint_id)
@@ -109,6 +156,14 @@ where
             .expect("error type is Infallible");
         for (checkpoint_id, checkpoint) in checkpoints {
             self.backend.add_checkpoint(checkpoint_id, checkpoint)?;
+        }
+
+        for checkpoint_id in self
+            .cache
+            .retained_checkpoints()
+            .expect("error type is Infallible")
+        {
+            self.backend.add_retained_checkpoint(checkpoint_id)?;
         }
 
         Ok(self.backend)
@@ -222,6 +277,26 @@ where
         self.cache.remove_checkpoint(checkpoint_id)
     }
 
+    fn add_retained_checkpoint(
+        &mut self,
+        checkpoint_id: Self::CheckpointId,
+    ) -> Result<(), Self::Error> {
+        self.cache.add_retained_checkpoint(checkpoint_id)
+    }
+
+    fn remove_retained_checkpoint(
+        &mut self,
+        checkpoint_id: &Self::CheckpointId,
+    ) -> Result<(), Self::Error> {
+        self.deferred_actions
+            .push(Action::RemoveRetainedCheckpoint(checkpoint_id.clone()));
+        self.cache.remove_retained_checkpoint(checkpoint_id)
+    }
+
+    fn retained_checkpoints(&self) -> Result<BTreeSet<Self::CheckpointId>, Self::Error> {
+        self.cache.retained_checkpoints()
+    }
+
     fn truncate_checkpoints_retaining(
         &mut self,
         checkpoint_id: &Self::CheckpointId,
@@ -244,6 +319,70 @@ mod tests {
         store::{memory::MemoryShardStore, ShardStore},
         ShardTree,
     };
+
+    /// Calling [`CachingShardStore::flush`] writes the cached mutations through
+    /// to the backend.
+    ///
+    /// The backend is passed to the store as `&mut` (via the blanket
+    /// `ShardStore for &mut S` impl), so it stays owned by this function and
+    /// can be inspected once the store, and its borrow, are gone.
+    #[test]
+    fn flush_persists_to_backend() {
+        let mut backend = MemoryShardStore::<String, u64>::empty();
+        assert!(backend.get_shard_roots().unwrap().is_empty());
+        assert_eq!(backend.checkpoint_count().unwrap(), 0);
+
+        {
+            let mut store = CachingShardStore::load(&mut backend).unwrap();
+            {
+                let mut tree = ShardTree::<_, 4, 3>::new(&mut store, 100);
+                tree.append(
+                    String::from("a"),
+                    Retention::Checkpoint {
+                        id: 1,
+                        marking: Marking::None,
+                    },
+                )
+                .unwrap();
+            }
+
+            // `flush` consumes the store and writes the cache through to the
+            // borrowed backend.
+            store.flush().unwrap();
+        }
+
+        // After the explicit flush, the backend reflects the mutations.
+        assert!(!backend.get_shard_roots().unwrap().is_empty());
+        assert_eq!(backend.checkpoint_count().unwrap(), 1);
+    }
+
+    /// Dropping a `CachingShardStore` without calling
+    /// [`CachingShardStore::flush`] (here, by letting it go out of scope)
+    /// discards the cache and never writes to the backend.
+    #[test]
+    fn drop_without_flush_does_not_persist() {
+        let mut backend = MemoryShardStore::<String, u64>::empty();
+
+        {
+            let mut store = CachingShardStore::load(&mut backend).unwrap();
+            let mut tree = ShardTree::<_, 4, 3>::new(&mut store, 100);
+            tree.append(
+                String::from("a"),
+                Retention::Checkpoint {
+                    id: 1,
+                    marking: Marking::None,
+                },
+            )
+            .unwrap();
+
+            // `tree`, then `store` (with its cache), go out of scope here. No
+            // `flush` is called, so the backend is never written.
+        }
+
+        // The borrow of `backend` has ended and it was never written.
+        assert!(backend.get_shard_roots().unwrap().is_empty());
+        assert_eq!(backend.checkpoint_count().unwrap(), 0);
+    }
 
     fn check_equal(
         mut lhs: MemoryShardStore<String, u64>,
