@@ -103,26 +103,24 @@ where
     arb_leaves_sized(arb_leaf, 2usize.pow(6))
 }
 
-/// A random shardtree of size up to 2^6 with shards of size 2^3, along with vectors of the
+/// A random shardtree of `DEPTH` and `SHARD_HEIGHT`, along with vectors of the
 /// checkpointed and marked positions within the tree.
-type ArbShardtreeParts<H> = (
-    ShardTree<MemoryShardStore<<H as Strategy>::Value, usize>, 6, 3>,
+type ArbShardtreePartsSized<H, const DEPTH: u8, const SHARD_HEIGHT: u8> = (
+    ShardTree<MemoryShardStore<<H as Strategy>::Value, usize>, DEPTH, SHARD_HEIGHT>,
     Vec<Position>,
     Vec<Position>,
 );
+
+/// A random shardtree of size up to 2^6 with shards of size 2^3, along with vectors of the
+/// checkpointed and marked positions within the tree.
+type ArbShardtreeParts<H> = ArbShardtreePartsSized<H, 6, 3>;
 
 /// Constructs a random shardtree of `DEPTH` and `SHARD_HEIGHT`, of size up to
 /// 2^`DEPTH`. Returns the tree, along with vectors of the checkpointed and
 /// marked positions.
 pub fn arb_shardtree_sized<H, const DEPTH: u8, const SHARD_HEIGHT: u8>(
     arb_leaf: H,
-) -> impl Strategy<
-    Value = (
-        ShardTree<MemoryShardStore<H::Value, usize>, DEPTH, SHARD_HEIGHT>,
-        Vec<Position>,
-        Vec<Position>,
-    ),
->
+) -> impl Strategy<Value = ArbShardtreePartsSized<H, DEPTH, SHARD_HEIGHT>>
 where
     H: Strategy + Clone,
     H::Value: Hashable + Clone + PartialEq,
