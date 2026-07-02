@@ -173,7 +173,7 @@ impl<H: Hashable + Clone + PartialEq> PrunableTree<H> {
     pub fn is_marked_leaf(&self) -> bool {
         self.0
             .leaf_value()
-            .map_or(false, |(_, retention)| retention.is_marked())
+            .is_some_and(|(_, retention)| retention.is_marked())
     }
 
     /// Returns `true` if it is possible to compute or retrieve the Merkle root of this
