@@ -8,11 +8,29 @@ use incrementalmerkletree::Address;
 use super::{memory::MemoryShardStore, Checkpoint, ShardStore};
 use crate::{LocatedPrunableTree, PrunableTree};
 
+/// A destructive backend mutation that a [`CachingShardStore`] applies to its
+/// cache immediately but defers against the backend until [`flush`].
+///
+/// Only removals are deferred; additive writes need no entry because the flush
+/// re-writes the full cached state. Each variant names the [`ShardStore`]
+/// removal method it replays.
+///
+/// [`flush`]: CachingShardStore::flush
 #[derive(Debug)]
 enum Action<C> {
+    /// Replays [`ShardStore::truncate_shards`]: remove all shards at or beyond
+    /// the given shard index from the backend.
     TruncateShards(u64),
+    /// Replays [`ShardStore::remove_checkpoint`]: remove the checkpoint with
+    /// this identifier from the backend.
     RemoveCheckpoint(C),
+    /// Replays [`ShardStore::remove_retained_checkpoint`]: drop the explicit
+    /// retention ("anchor") of the checkpoint with this identifier in the
+    /// backend.
     RemoveRetainedCheckpoint(C),
+    /// Replays [`ShardStore::truncate_checkpoints_retaining`]: remove every
+    /// checkpoint after this identifier from the backend while retaining the
+    /// checkpoint itself.
     TruncateCheckpointsRetaining(C),
 }
 
@@ -64,6 +82,30 @@ where
     }
 
     /// Flushes the current cache state to the backend and returns it.
+    ///
+    /// A `CachingShardStore` serves every read and every additive write from
+    /// its in-memory cache. Reconstructing the backend on flush is a two-phase
+    /// process:
+    ///
+    /// 1. **Removals first.** The deferred-action log (a list of `Action`s) is
+    ///    replayed against the backend in the order the operations were
+    ///    requested, deleting the shards and checkpoints that were dropped from
+    ///    the cache. These cannot be captured by phase 2: re-writing the cache
+    ///    only reproduces *additions*, so data removed from the cache would
+    ///    otherwise linger in the backend.
+    /// 2. **Additive state second.** The full cached state (all shards, the
+    ///    cap, every checkpoint, and the retained-checkpoint set) is written
+    ///    back from the cache, bringing the backend into agreement with it.
+    ///
+    /// If the store is instead dropped without calling `flush` (for example it
+    /// goes out of scope at the end of a block, or is otherwise destroyed
+    /// before `flush` is called), its cache and deferred-action log are
+    /// discarded along with it and the backend is left untouched: every
+    /// mutation made since [`load`] is lost. `flush` takes `self` by value, so
+    /// persisting requires explicitly calling it and using the returned
+    /// backend.
+    ///
+    /// [`load`]: Self::load
     pub fn flush(mut self) -> Result<S, S::Error> {
         for action in &self.deferred_actions {
             match action {
