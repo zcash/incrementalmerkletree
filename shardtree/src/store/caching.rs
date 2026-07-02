@@ -320,6 +320,70 @@ mod tests {
         ShardTree,
     };
 
+    /// Calling [`CachingShardStore::flush`] writes the cached mutations through
+    /// to the backend.
+    ///
+    /// The backend is passed to the store as `&mut` (via the blanket
+    /// `ShardStore for &mut S` impl), so it stays owned by this function and
+    /// can be inspected once the store, and its borrow, are gone.
+    #[test]
+    fn flush_persists_to_backend() {
+        let mut backend = MemoryShardStore::<String, u64>::empty();
+        assert!(backend.get_shard_roots().unwrap().is_empty());
+        assert_eq!(backend.checkpoint_count().unwrap(), 0);
+
+        {
+            let mut store = CachingShardStore::load(&mut backend).unwrap();
+            {
+                let mut tree = ShardTree::<_, 4, 3>::new(&mut store, 100);
+                tree.append(
+                    String::from("a"),
+                    Retention::Checkpoint {
+                        id: 1,
+                        marking: Marking::None,
+                    },
+                )
+                .unwrap();
+            }
+
+            // `flush` consumes the store and writes the cache through to the
+            // borrowed backend.
+            store.flush().unwrap();
+        }
+
+        // After the explicit flush, the backend reflects the mutations.
+        assert!(!backend.get_shard_roots().unwrap().is_empty());
+        assert_eq!(backend.checkpoint_count().unwrap(), 1);
+    }
+
+    /// Dropping a `CachingShardStore` without calling
+    /// [`CachingShardStore::flush`] (here, by letting it go out of scope)
+    /// discards the cache and never writes to the backend.
+    #[test]
+    fn drop_without_flush_does_not_persist() {
+        let mut backend = MemoryShardStore::<String, u64>::empty();
+
+        {
+            let mut store = CachingShardStore::load(&mut backend).unwrap();
+            let mut tree = ShardTree::<_, 4, 3>::new(&mut store, 100);
+            tree.append(
+                String::from("a"),
+                Retention::Checkpoint {
+                    id: 1,
+                    marking: Marking::None,
+                },
+            )
+            .unwrap();
+
+            // `tree`, then `store` (with its cache), go out of scope here. No
+            // `flush` is called, so the backend is never written.
+        }
+
+        // The borrow of `backend` has ended and it was never written.
+        assert!(backend.get_shard_roots().unwrap().is_empty());
+        assert_eq!(backend.checkpoint_count().unwrap(), 0);
+    }
+
     fn check_equal(
         mut lhs: MemoryShardStore<String, u64>,
         rhs: CachingShardStore<MemoryShardStore<String, u64>>,
