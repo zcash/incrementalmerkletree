@@ -17,6 +17,9 @@ homepage = "https://github.com/zcash/incrementalmerkletree"
 license = "MIT OR Apache-2.0"
 categories = ["algorithms", "data-structures"]
 
+[workspace.lints.clippy]
+must_use_candidate = "deny"
+
 [workspace.dependencies]
 # Intra-workspace dependencies
 incrementalmerkletree = { version = "0.8.1", path = "incrementalmerkletree" }

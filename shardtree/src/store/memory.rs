@@ -21,6 +21,7 @@ pub struct MemoryShardStore<H, C: Ord> {
 
 impl<H, C: Ord> MemoryShardStore<H, C> {
     /// Constructs a new empty `MemoryShardStore`.
+    #[must_use]
     pub fn empty() -> Self {
         Self {
             shards: vec![],

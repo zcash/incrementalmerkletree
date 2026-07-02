@@ -42,10 +42,12 @@ bitflags! {
 }
 
 impl RetentionFlags {
+    #[must_use]
     pub fn is_checkpoint(&self) -> bool {
         (*self & RetentionFlags::CHECKPOINT) == RetentionFlags::CHECKPOINT
     }
 
+    #[must_use]
     pub fn is_marked(&self) -> bool {
         (*self & RetentionFlags::MARKED) == RetentionFlags::MARKED
     }

@@ -141,10 +141,12 @@ pub fn append_str<C>(x: &str, retention: Retention<C>) -> Operation<String, C> {
     Operation::Append(x.to_string(), retention)
 }
 
+#[must_use]
 pub fn unmark<H, C>(pos: u64) -> Operation<H, C> {
     Operation::Unmark(Position::from(pos))
 }
 
+#[must_use]
 pub fn witness<H, C>(pos: u64, depth: usize) -> Operation<H, C> {
     Operation::Witness(Position::from(pos), depth)
 }
@@ -486,6 +488,7 @@ impl<H: Hashable + Ord + Clone + Debug, C: Clone, I: Tree<H, C>, E: Tree<H, C>> 
 pub trait TestHashable: Hashable + Ord + Clone + Debug {
     fn from_u64(value: u64) -> Self;
 
+    #[must_use]
     fn combine_all(depth: u8, values: &[u64]) -> Self {
         let values: Vec<Self> = values.iter().map(|v| Self::from_u64(*v)).collect();
         complete_tree::root(&values, depth)

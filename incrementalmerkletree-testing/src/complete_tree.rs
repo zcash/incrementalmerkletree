@@ -72,6 +72,7 @@ pub struct CompleteTree<H, C: Ord, const DEPTH: u8> {
 
 impl<H: Hashable, C: Clone + Ord + core::fmt::Debug, const DEPTH: u8> CompleteTree<H, C, DEPTH> {
     /// Creates a new, empty binary tree
+    #[must_use]
     pub fn new(max_checkpoints: usize) -> Self {
         Self {
             leaves: vec![],

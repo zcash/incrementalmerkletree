@@ -614,6 +614,7 @@ impl<A, V> LocatedTree<A, V> {
 
 impl<A: Default + Clone, V: Clone> LocatedTree<A, V> {
     /// Constructs a new empty tree with its root at the provided address.
+    #[must_use]
     pub fn empty(root_addr: Address) -> Self {
         Self {
             root_addr,

@@ -291,6 +291,7 @@ impl<H, const DEPTH: u8> TryFrom<NonEmptyFrontier<H>> for Frontier<H, DEPTH> {
 
 impl<H, const DEPTH: u8> Frontier<H, DEPTH> {
     /// Constructs a new empty frontier.
+    #[must_use]
     pub fn empty() -> Self {
         Self { frontier: None }
     }
@@ -422,12 +423,14 @@ pub struct PathFiller<H> {
 
 #[cfg(feature = "legacy-api")]
 impl<H: Hashable> PathFiller<H> {
+    #[must_use]
     pub fn empty() -> Self {
         PathFiller {
             queue: VecDeque::new(),
         }
     }
 
+    #[must_use]
     pub fn new(queue: VecDeque<H>) -> Self {
         Self { queue }
     }
@@ -452,6 +455,7 @@ pub struct CommitmentTree<H, const DEPTH: u8> {
 #[cfg(feature = "legacy-api")]
 impl<H, const DEPTH: u8> CommitmentTree<H, DEPTH> {
     /// Creates an empty tree.
+    #[must_use]
     pub fn empty() -> Self {
         CommitmentTree {
             left: None,

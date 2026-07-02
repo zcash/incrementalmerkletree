@@ -64,6 +64,7 @@ impl<H, const DEPTH: u8> IncrementalWitness<H, DEPTH> {
     /// produced by `zcashd` (and which we must reproduce in order to demonstrate interoperability
     /// with `zcashd` test vectors.) This should not be used except in a testing context.
     #[cfg(feature = "test-dependencies")]
+    #[must_use]
     pub fn invalid_empty_witness() -> Self {
         Self {
             tree: CommitmentTree::empty(),

@@ -314,6 +314,7 @@ pub struct Checkpoint {
 }
 
 impl Checkpoint {
+    #[must_use]
     pub fn tree_empty() -> Self {
         Checkpoint {
             tree_state: TreeState::Empty,
@@ -321,6 +322,7 @@ impl Checkpoint {
         }
     }
 
+    #[must_use]
     pub fn at_position(position: Position) -> Self {
         Checkpoint {
             tree_state: TreeState::AtPosition(position),
@@ -328,6 +330,7 @@ impl Checkpoint {
         }
     }
 
+    #[must_use]
     pub fn from_parts(tree_state: TreeState, marks_removed: BTreeSet<Position>) -> Self {
         Checkpoint {
             tree_state,
@@ -335,18 +338,22 @@ impl Checkpoint {
         }
     }
 
+    #[must_use]
     pub fn tree_state(&self) -> TreeState {
         self.tree_state
     }
 
+    #[must_use]
     pub fn marks_removed(&self) -> &BTreeSet<Position> {
         &self.marks_removed
     }
 
+    #[must_use]
     pub fn is_tree_empty(&self) -> bool {
         matches!(self.tree_state, TreeState::Empty)
     }
 
+    #[must_use]
     pub fn position(&self) -> Option<Position> {
         match self.tree_state {
             TreeState::Empty => None,

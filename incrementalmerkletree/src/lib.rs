@@ -190,18 +190,21 @@ pub struct Position(u64);
 impl Position {
     /// Return whether the position refers to the right-hand child of a subtree with
     /// its root at level 1.
+    #[must_use]
     pub fn is_right_child(&self) -> bool {
         self.0 & 0x1 == 1
     }
 
     /// Returns the minimum possible level of the root of a binary tree containing at least
     /// `self + 1` leaves.
+    #[must_use]
     pub fn root_level(&self) -> Level {
         Level((u64::BITS - self.0.leading_zeros()) as u8)
     }
 
     /// Returns the number of cousins and/or ommers required to construct an authentication
     /// path to the root of a merkle tree that has `self + 1` leaves.
+    #[must_use]
     pub fn past_ommer_count(&self) -> u8 {
         (0..self.root_level().0)
             .filter(|i| (self.0 >> i) & 0x1 == 1)
@@ -213,6 +216,7 @@ impl Position {
     /// Returns whether the binary tree having `self` as the position of the rightmost leaf
     /// contains a perfect balanced tree with a root at level `root_level` that contains the
     /// aforesaid leaf.
+    #[must_use]
     pub fn is_complete_subtree(&self, root_level: Level) -> bool {
         !(0..(root_level.0)).any(|l| self.0 & (1 << l) == 0)
     }
@@ -291,6 +295,7 @@ impl Level {
     /// Level 0 corresponds to a leaf of the tree.
     pub const ZERO: Self = Level(0);
 
+    #[must_use]
     pub const fn new(value: u8) -> Self {
         Self(value)
     }
@@ -368,11 +373,13 @@ pub struct Address {
 
 impl Address {
     /// Construct a new address from its constituent parts.
+    #[must_use]
     pub fn from_parts(level: Level, index: u64) -> Self {
         Address { level, index }
     }
 
     /// Returns the address at the given level that contains the specified leaf position.
+    #[must_use]
     pub fn above_position(level: Level, position: Position) -> Self {
         Address {
             level,
@@ -381,6 +388,7 @@ impl Address {
     }
 
     /// Returns the level of the root of the tree having its root at this address.
+    #[must_use]
     pub fn level(&self) -> Level {
         self.level
     }
@@ -390,12 +398,14 @@ impl Address {
     /// The index of an address is defined as the number of subtrees with their roots
     /// at the address's level that appear to the left of this address in a binary
     /// tree of arbitrary height > level * 2 + 1.
+    #[must_use]
     pub fn index(&self) -> u64 {
         self.index
     }
 
     /// The address of the node one level higher than this in a binary tree that contains
     /// this address as either its left or right child.
+    #[must_use]
     pub fn parent(&self) -> Address {
         Address {
             level: self.level + 1,
@@ -404,6 +414,7 @@ impl Address {
     }
 
     /// Returns the address that shares the same parent as this address.
+    #[must_use]
     pub fn sibling(&self) -> Address {
         Address {
             level: self.level,
@@ -412,6 +423,7 @@ impl Address {
     }
 
     /// Returns the immediate children of this address.
+    #[must_use]
     pub fn children(&self) -> Option<(Address, Address)> {
         if self.level == Level::from(0) {
             None
@@ -431,11 +443,13 @@ impl Address {
     }
 
     /// Returns whether this address is an ancestor of the specified address.
+    #[must_use]
     pub fn is_ancestor_of(&self, addr: &Self) -> bool {
         self.level > addr.level && { addr.index >> (self.level.0 - addr.level.0) == self.index }
     }
 
     /// Returns the common ancestor of `self` and `other` having the smallest level value.
+    #[must_use]
     pub fn common_ancestor(&self, other: &Self) -> Self {
         // We can leverage the symmetry of a binary tree to share the calculation logic,
         // by ordering the nodes.
@@ -459,30 +473,35 @@ impl Address {
 
     /// Returns whether this address is an ancestor of, or is equal to,
     /// the specified address.
+    #[must_use]
     pub fn contains(&self, addr: &Self) -> bool {
         self == addr || self.is_ancestor_of(addr)
     }
 
     /// Returns the minimum value among the range of leaf positions that are contained within the
     /// tree with its root at this address.
+    #[must_use]
     pub fn position_range_start(&self) -> Position {
         (self.index << self.level.0).into()
     }
 
     /// Returns the (exclusive) end of the range of leaf positions that are contained within the
     /// tree with its root at this address.
+    #[must_use]
     pub fn position_range_end(&self) -> Position {
         ((self.index + 1) << self.level.0).into()
     }
 
     /// Returns the maximum value among the range of leaf positions that are contained within the
     /// tree with its root at this address.
+    #[must_use]
     pub fn max_position(&self) -> Position {
         self.position_range_end() - 1
     }
 
     /// Returns the end-exclusive range of leaf positions that are contained within the tree with
     /// its root at this address.
+    #[must_use]
     pub fn position_range(&self) -> Range<Position> {
         Range {
             start: self.position_range_start(),
@@ -494,6 +513,7 @@ impl Address {
     /// than or equal to that of this address) or the range of indices of root addresses of
     /// subtrees with roots at the given level contained within the tree with its root at this
     /// address otherwise.
+    #[must_use]
     pub fn context(&self, level: Level) -> Either<Address, Range<u64>> {
         if level >= self.level {
             Either::Left(Address {
@@ -512,6 +532,7 @@ impl Address {
     /// Returns whether the tree with this root address contains the given leaf position, or if not
     /// whether an address at the same level with a greater or lesser index will contain the
     /// specified leaf position.
+    #[must_use]
     pub fn position_cmp(&self, pos: Position) -> Ordering {
         let range = self.position_range();
         if range.start > pos {
@@ -524,15 +545,18 @@ impl Address {
     }
 
     /// Returns whether this address is the left-hand child of its parent
+    #[must_use]
     pub fn is_left_child(&self) -> bool {
         self.index & 0x1 == 0
     }
 
     /// Returns whether this address is the right-hand child of its parent
+    #[must_use]
     pub fn is_right_child(&self) -> bool {
         self.index & 0x1 == 1
     }
 
+    #[must_use]
     pub fn current_incomplete(&self) -> Address {
         // find the first zero bit in the index, searching from the least significant bit
         let mut index = self.index;
@@ -550,6 +574,7 @@ impl Address {
         unreachable!("The loop will always terminate via return in at most 64 iterations.")
     }
 
+    #[must_use]
     pub fn next_incomplete_parent(&self) -> Address {
         if self.is_right_child() {
             self.current_incomplete()
@@ -563,6 +588,7 @@ impl Address {
     }
 
     /// Increments this address's index by 1 and returns the resulting address.
+    #[must_use]
     pub fn next_at_level(&self) -> Address {
         Address {
             level: self.level,
@@ -630,10 +656,12 @@ impl<H, const DEPTH: u8> MerklePath<H, DEPTH> {
         }
     }
 
+    #[must_use]
     pub fn path_elems(&self) -> &[H] {
         &self.path_elems
     }
 
+    #[must_use]
     pub fn position(&self) -> Position {
         self.position
     }
@@ -668,6 +696,7 @@ pub trait Hashable: fmt::Debug {
     ///
     /// At each successive level, the value is produced by combining the value at the level below
     /// with a copy of itself.
+    #[must_use]
     fn empty_root(level: Level) -> Self
     where
         Self: Sized,

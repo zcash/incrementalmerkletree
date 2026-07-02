@@ -140,17 +140,20 @@ impl<
     }
 
     /// Returns the root address of the tree.
+    #[must_use]
     pub fn root_addr() -> Address {
         Address::from_parts(Level::from(DEPTH), 0)
     }
 
     /// Returns the fixed level of subtree roots within the vector of subtrees used as this tree's
     /// representation.
+    #[must_use]
     pub fn subtree_level() -> Level {
         Level::from(SHARD_HEIGHT)
     }
 
     /// Returns the root address of the subtree that contains the specified position.
+    #[must_use]
     pub fn subtree_addr(pos: Position) -> Address {
         Address::above_position(Self::subtree_level(), pos)
     }
