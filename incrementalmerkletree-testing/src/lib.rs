@@ -166,7 +166,7 @@ impl<H: Hashable + Clone, C: Clone> Operation<H, C> {
                 None
             }
             Checkpoint(id) => {
-                tree.checkpoint(id.clone());
+                let _ = tree.checkpoint(id.clone());
                 None
             }
             Rewind(depth) => {
@@ -249,16 +249,16 @@ where
 pub fn apply_operation<H, C, T: Tree<H, C>>(tree: &mut T, op: Operation<H, C>) {
     match op {
         Append(value, r) => {
-            tree.append(value, r);
+            let _ = tree.append(value, r);
         }
         Unmark(position) => {
-            tree.remove_mark(position);
+            let _ = tree.remove_mark(position);
         }
         Checkpoint(id) => {
-            tree.checkpoint(id);
+            let _ = tree.checkpoint(id);
         }
         Rewind(depth) => {
-            tree.rewind(depth);
+            let _ = tree.rewind(depth);
         }
         CurrentPosition => {}
         Witness(_, _) => {}
@@ -308,12 +308,12 @@ pub fn check_operations<H: Hashable + Ord + Clone + Debug, C: Clone, T: Tree<H, 
                 }
             }
             Unmark(position) => {
-                tree.remove_mark(*position);
+                let _ = tree.remove_mark(*position);
             }
             MarkedPositions => {}
             Checkpoint(id) => {
                 tree_checkpoints.push(tree_size);
-                tree.checkpoint(id.clone());
+                let _ = tree.checkpoint(id.clone());
             }
             Rewind(depth) => {
                 if tree.rewind(*depth) {
@@ -627,14 +627,14 @@ pub fn check_witnesses<H: TestHashable, C: TestCheckpoint, T: Tree<H, C>, F: Fn(
         let mut tree = new_tree(100);
         tree.assert_append(0, Ephemeral);
         tree.assert_append(1, Marked);
-        tree.checkpoint(C::from_u64(0));
+        let _ = tree.checkpoint(C::from_u64(0));
         assert_eq!(tree.witness(Position::from(0), 0), None);
     }
 
     {
         let mut tree = new_tree(100);
         tree.assert_append(0, Marked);
-        tree.checkpoint(C::from_u64(0));
+        let _ = tree.checkpoint(C::from_u64(0));
         assert_eq!(
             tree.witness(Position::from(0), 0),
             Some(vec![
@@ -646,7 +646,7 @@ pub fn check_witnesses<H: TestHashable, C: TestCheckpoint, T: Tree<H, C>, F: Fn(
         );
 
         tree.assert_append(1, Ephemeral);
-        tree.checkpoint(C::from_u64(1));
+        let _ = tree.checkpoint(C::from_u64(1));
         assert_eq!(
             tree.witness(0.into(), 0),
             Some(vec![
@@ -658,7 +658,7 @@ pub fn check_witnesses<H: TestHashable, C: TestCheckpoint, T: Tree<H, C>, F: Fn(
         );
 
         tree.assert_append(2, Marked);
-        tree.checkpoint(C::from_u64(2));
+        let _ = tree.checkpoint(C::from_u64(2));
         assert_eq!(
             tree.witness(Position::from(2), 0),
             Some(vec![
@@ -670,7 +670,7 @@ pub fn check_witnesses<H: TestHashable, C: TestCheckpoint, T: Tree<H, C>, F: Fn(
         );
 
         tree.assert_append(3, Ephemeral);
-        tree.checkpoint(C::from_u64(3));
+        let _ = tree.checkpoint(C::from_u64(3));
         assert_eq!(
             tree.witness(Position::from(2), 0),
             Some(vec![
@@ -682,7 +682,7 @@ pub fn check_witnesses<H: TestHashable, C: TestCheckpoint, T: Tree<H, C>, F: Fn(
         );
 
         tree.assert_append(4, Ephemeral);
-        tree.checkpoint(C::from_u64(4));
+        let _ = tree.checkpoint(C::from_u64(4));
         assert_eq!(
             tree.witness(Position::from(2), 0),
             Some(vec![
@@ -702,7 +702,7 @@ pub fn check_witnesses<H: TestHashable, C: TestCheckpoint, T: Tree<H, C>, F: Fn(
         }
         tree.assert_append(6, Marked);
         tree.assert_append(7, Ephemeral);
-        tree.checkpoint(C::from_u64(0));
+        let _ = tree.checkpoint(C::from_u64(0));
 
         assert_eq!(
             tree.witness(0.into(), 0),
@@ -724,7 +724,7 @@ pub fn check_witnesses<H: TestHashable, C: TestCheckpoint, T: Tree<H, C>, F: Fn(
         tree.assert_append(4, Marked);
         tree.assert_append(5, Marked);
         tree.assert_append(6, Ephemeral);
-        tree.checkpoint(C::from_u64(0));
+        let _ = tree.checkpoint(C::from_u64(0));
 
         assert_eq!(
             tree.witness(Position::from(5), 0),
@@ -744,7 +744,7 @@ pub fn check_witnesses<H: TestHashable, C: TestCheckpoint, T: Tree<H, C>, F: Fn(
         }
         tree.assert_append(10, Marked);
         tree.assert_append(11, Ephemeral);
-        tree.checkpoint(C::from_u64(0));
+        let _ = tree.checkpoint(C::from_u64(0));
 
         assert_eq!(
             tree.witness(Position::from(10), 0),
@@ -774,7 +774,7 @@ pub fn check_witnesses<H: TestHashable, C: TestCheckpoint, T: Tree<H, C>, F: Fn(
         for i in 5..8 {
             tree.assert_append(i, Ephemeral);
         }
-        tree.checkpoint(C::from_u64(2));
+        let _ = tree.checkpoint(C::from_u64(2));
         assert_eq!(
             tree.witness(0.into(), 0),
             Some(vec![
@@ -823,7 +823,7 @@ pub fn check_witnesses<H: TestHashable, C: TestCheckpoint, T: Tree<H, C>, F: Fn(
         tree.assert_append(13, Marked);
         tree.assert_append(14, Ephemeral);
         tree.assert_append(15, Ephemeral);
-        tree.checkpoint(C::from_u64(0));
+        let _ = tree.checkpoint(C::from_u64(0));
 
         assert_eq!(
             tree.witness(Position::from(12), 0),
@@ -1033,34 +1033,34 @@ pub fn check_checkpoint_rewind<C: TestCheckpoint, T: Tree<String, C>, F: Fn(usiz
     assert!(!t.rewind(1));
 
     let mut t = new_tree(100);
-    t.append("a".to_string(), Retention::Ephemeral);
+    let _ = t.append("a".to_string(), Retention::Ephemeral);
     t.assert_checkpoint(1);
-    t.append("b".to_string(), Retention::Marked);
+    let _ = t.append("b".to_string(), Retention::Marked);
     assert_eq!(Some(Position::from(1)), t.current_position());
     assert!(t.rewind(0));
     assert_eq!(Some(Position::from(0)), t.current_position());
 
     let mut t = new_tree(100);
-    t.append("a".to_string(), Retention::Marked);
+    let _ = t.append("a".to_string(), Retention::Marked);
     t.assert_checkpoint(1);
     assert!(t.rewind(0));
     assert_eq!(Some(Position::from(0)), t.current_position());
 
     let mut t = new_tree(100);
-    t.append("a".to_string(), Retention::Marked);
+    let _ = t.append("a".to_string(), Retention::Marked);
     t.assert_checkpoint(1);
-    t.append("a".to_string(), Retention::Ephemeral);
+    let _ = t.append("a".to_string(), Retention::Ephemeral);
     assert!(t.rewind(0));
     assert_eq!(Some(Position::from(0)), t.current_position());
 
     let mut t = new_tree(100);
-    t.append("a".to_string(), Retention::Ephemeral);
+    let _ = t.append("a".to_string(), Retention::Ephemeral);
     t.assert_checkpoint(1);
     t.assert_checkpoint(2);
     assert!(t.rewind(1));
-    t.append("b".to_string(), Retention::Ephemeral);
+    let _ = t.append("b".to_string(), Retention::Ephemeral);
     assert!(t.rewind(0));
-    t.append("b".to_string(), Retention::Ephemeral);
+    let _ = t.append("b".to_string(), Retention::Ephemeral);
     assert_eq!(t.root(None).unwrap(), "ab______________");
 }
 
@@ -1104,7 +1104,7 @@ pub fn check_rewind_remove_mark<C: TestCheckpoint, T: Tree<String, C>, F: Fn(usi
 ) {
     // rewinding doesn't remove a mark
     let mut tree = new_tree(100);
-    tree.append("e".to_string(), Retention::Marked);
+    let _ = tree.append("e".to_string(), Retention::Marked);
     tree.assert_checkpoint(1);
     assert!(tree.rewind(0));
     assert!(tree.remove_mark(0u64.into()));

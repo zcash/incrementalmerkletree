@@ -201,7 +201,7 @@ impl<H: Hashable + Clone + PartialEq> LocatedPrunableTree<H> {
         while position < position_range.end {
             if let Some((value, retention)) = values.next() {
                 if let Retention::Checkpoint { id, .. } = &retention {
-                    checkpoints.insert(id.clone(), position);
+                    let _ = checkpoints.insert(id.clone(), position);
                 }
 
                 let rflags = RetentionFlags::from(retention);
@@ -497,12 +497,12 @@ mod tests {
         }) = LocatedPrunableTree::from_iter(start..end, 0.into(), leaves.clone().into_iter())
         {
             assert_eq!(remainder.next(), None);
-            left.insert_tree(subtree, checkpoints).unwrap();
+            let _ = left.insert_tree(subtree, checkpoints).unwrap();
         }
 
         // Construct a tree using `ShardTree::batch_insert`.
         let mut right = ShardTree::new(MemoryShardStore::empty(), max_checkpoints);
-        right.batch_insert(start, leaves.into_iter()).unwrap();
+        let _ = right.batch_insert(start, leaves.into_iter()).unwrap();
 
         (left, right)
     }

@@ -91,7 +91,7 @@ impl<H: Clone, C: Clone + Ord> ShardStore for MemoryShardStore<H, C> {
         checkpoint_id: C,
         checkpoint: Checkpoint,
     ) -> Result<(), Self::Error> {
-        self.checkpoints.insert(checkpoint_id, checkpoint);
+        let _ = self.checkpoints.insert(checkpoint_id, checkpoint);
         Ok(())
     }
 
@@ -165,17 +165,17 @@ impl<H: Clone, C: Clone + Ord> ShardStore for MemoryShardStore<H, C> {
     }
 
     fn remove_checkpoint(&mut self, checkpoint_id: &C) -> Result<(), Self::Error> {
-        self.checkpoints.remove(checkpoint_id);
+        let _ = self.checkpoints.remove(checkpoint_id);
         Ok(())
     }
 
     fn add_retained_checkpoint(&mut self, checkpoint_id: C) -> Result<(), Self::Error> {
-        self.retained_checkpoints.insert(checkpoint_id);
+        let _ = self.retained_checkpoints.insert(checkpoint_id);
         Ok(())
     }
 
     fn remove_retained_checkpoint(&mut self, checkpoint_id: &C) -> Result<(), Self::Error> {
-        self.retained_checkpoints.remove(checkpoint_id);
+        let _ = self.retained_checkpoints.remove(checkpoint_id);
         Ok(())
     }
 
@@ -190,7 +190,7 @@ impl<H: Clone, C: Clone + Ord> ShardStore for MemoryShardStore<H, C> {
         let mut rest = self.checkpoints.split_off(checkpoint_id);
         if let Some(mut c) = rest.remove(checkpoint_id) {
             c.marks_removed.clear();
-            self.checkpoints.insert(checkpoint_id.clone(), c);
+            let _ = self.checkpoints.insert(checkpoint_id.clone(), c);
         }
         Ok(())
     }

@@ -289,7 +289,7 @@ impl<H: Hashable + Clone + PartialEq> PrunableTree<H> {
             } => {
                 let mut result = BTreeSet::new();
                 if root_addr.level() == 0.into() && retention.is_marked() {
-                    result.insert(Position::from(root_addr.index()));
+                    let _ = result.insert(Position::from(root_addr.index()));
                 }
                 result
             }
@@ -619,7 +619,7 @@ impl<H: Hashable + Clone + PartialEq> LocatedPrunableTree<H> {
                 }
                 Node::Leaf { value } => {
                     if value.1.is_marked() && root_addr.level() == 0.into() {
-                        acc.insert(Position::from(root_addr.index()));
+                        let _ = acc.insert(Position::from(root_addr.index()));
                     }
                 }
                 _ => {}
@@ -1175,7 +1175,7 @@ impl<H: Hashable + Clone + PartialEq> LocatedPrunableTree<H> {
                     go(right, r_addr, acc);
                 }
                 Node::Leaf { value } if value.1 != RetentionFlags::EPHEMERAL => {
-                    acc.insert(root_addr.max_position(), value.1);
+                    let _ = acc.insert(root_addr.max_position(), value.1);
                 }
                 _ => (),
             }
@@ -1749,9 +1749,9 @@ mod tests {
                 (BTreeMap::new(), BTreeMap::new()),
                 |(mut to_clear, mut to_retain), (i, (pos, flags))| {
                     if i % 2 == 0 {
-                        to_clear.insert(pos, flags);
+                        let _ = to_clear.insert(pos, flags);
                     } else {
-                        to_retain.insert(pos, flags);
+                        let _ = to_retain.insert(pos, flags);
                     }
                     (to_clear, to_retain)
                 }

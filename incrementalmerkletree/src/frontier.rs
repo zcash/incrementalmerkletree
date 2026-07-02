@@ -738,7 +738,7 @@ pub mod testing {
         vec(arb_node, min_size..(min_size + 100)).prop_map(move |v| {
             let mut frontier = Frontier::empty();
             for node in v.into_iter() {
-                frontier.append(node);
+                let _ = frontier.append(node);
             }
             frontier
         })
@@ -808,13 +808,13 @@ mod tests {
         assert_eq!(frontier.root().len(), 16);
         assert_eq!(frontier.root(), "________________");
 
-        frontier.append("a".to_string());
+        let _ = frontier.append("a".to_string());
         assert_eq!(frontier.root(), "a_______________");
 
-        frontier.append("b".to_string());
+        let _ = frontier.append("b".to_string());
         assert_eq!(frontier.root(), "ab______________");
 
-        frontier.append("c".to_string());
+        let _ = frontier.append("c".to_string());
         assert_eq!(frontier.root(), "abc_____________");
     }
 
@@ -842,7 +842,7 @@ mod tests {
     fn frontier_witness() {
         let mut frontier = Frontier::<String, 4>::empty();
         for c in 'a'..='g' {
-            frontier.append(c.to_string());
+            let _ = frontier.append(c.to_string());
         }
 
         assert_eq!(
@@ -911,7 +911,7 @@ mod tests {
 
         let mut f: Frontier<TestNode, 8> = Frontier::empty();
         for i in 0..tree_size {
-            f.append(TestNode(i));
+            let _ = f.append(TestNode(i));
         }
         let f = f.frontier.expect("Frontier should not be empty.");
 

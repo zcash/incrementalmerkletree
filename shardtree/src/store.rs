@@ -362,6 +362,6 @@ impl Checkpoint {
     }
 
     pub(crate) fn mark_removed(&mut self, position: Position) {
-        self.marks_removed.insert(position);
+        let _ = self.marks_removed.insert(position);
     }
 }

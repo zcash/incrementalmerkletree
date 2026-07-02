@@ -104,14 +104,14 @@ impl<H: Hashable, C: Clone + Ord + core::fmt::Debug, const DEPTH: u8> CompleteTr
         match retention {
             Retention::Marked => {
                 append(&mut self.leaves, value, DEPTH)?;
-                self.mark();
+                let _ = self.mark();
             }
             Retention::Checkpoint { id, marking } => {
                 let latest_checkpoint = self.checkpoints.keys().next_back();
                 if Some(&id) > latest_checkpoint {
                     append(&mut self.leaves, value, DEPTH)?;
                     if marking == Marking::Marked {
-                        self.mark();
+                        let _ = self.mark();
                     }
                     self.checkpoint(id, self.current_position());
                 } else {
@@ -144,10 +144,10 @@ impl<H: Hashable, C: Clone + Ord + core::fmt::Debug, const DEPTH: u8> CompleteTr
     fn mark(&mut self) -> Option<Position> {
         if let Some(pos) = self.current_position() {
             if !self.marks.contains(&pos) {
-                self.marks.insert(pos);
+                let _ = self.marks.insert(pos);
 
                 if let Some(checkpoint) = self.checkpoints.values_mut().next_back() {
-                    checkpoint.marked.insert(pos);
+                    let _ = checkpoint.marked.insert(pos);
                 }
             }
 
@@ -161,7 +161,7 @@ impl<H: Hashable, C: Clone + Ord + core::fmt::Debug, const DEPTH: u8> CompleteTr
     // is not provided, the position of the most recently appended leaf is used, or a new
     // checkpoint of the empty tree is added if appropriate.
     fn checkpoint(&mut self, id: C, pos: Option<Position>) {
-        self.checkpoints.insert(
+        let _ = self.checkpoints.insert(
             id,
             Checkpoint::at_length(pos.map_or_else(
                 || self.leaves.len(),
@@ -169,7 +169,7 @@ impl<H: Hashable, C: Clone + Ord + core::fmt::Debug, const DEPTH: u8> CompleteTr
             )),
         );
         if self.checkpoints.len() > self.max_checkpoints {
-            self.drop_oldest_checkpoint();
+            let _ = self.drop_oldest_checkpoint();
         }
     }
 
@@ -188,10 +188,10 @@ impl<H: Hashable, C: Clone + Ord + core::fmt::Debug, const DEPTH: u8> CompleteTr
         if self.checkpoints.len() > self.max_checkpoints {
             let (id, c) = self.checkpoints.iter().next().unwrap();
             for pos in c.forgotten.iter() {
-                self.marks.remove(pos);
+                let _ = self.marks.remove(pos);
             }
             let id = id.clone(); // needed to avoid mutable/immutable borrow conflict
-            self.checkpoints.remove(&id);
+            let _ = self.checkpoints.remove(&id);
             true
         } else {
             false
@@ -279,9 +279,9 @@ impl<H: Hashable + PartialEq + Clone, C: Ord + Clone + core::fmt::Debug, const D
     fn remove_mark(&mut self, position: Position) -> bool {
         if self.marks.contains(&position) {
             if let Some(c) = self.checkpoints.values_mut().next_back() {
-                c.forgotten.insert(position);
+                let _ = c.forgotten.insert(position);
             } else {
-                self.marks.remove(&position);
+                let _ = self.marks.remove(&position);
             }
             true
         } else {
@@ -313,7 +313,7 @@ impl<H: Hashable + PartialEq + Clone, C: Ord + Clone + core::fmt::Debug, const D
                 .take(depth + 1)
             {
                 for pos in c.marked.iter() {
-                    self.marks.remove(pos);
+                    let _ = self.marks.remove(pos);
                 }
                 if idx < depth {
                     to_delete.push(id.clone());
@@ -324,7 +324,7 @@ impl<H: Hashable + PartialEq + Clone, C: Ord + Clone + core::fmt::Debug, const D
                 }
             }
             for cid in to_delete.iter() {
-                self.checkpoints.remove(cid);
+                let _ = self.checkpoints.remove(cid);
             }
 
             true

@@ -651,7 +651,7 @@ mod tests {
             for i in 5..8 {
                 assert!(tree.append(String::from_u64(i), Ephemeral));
             }
-            tree.checkpoint(2);
+            let _ = tree.checkpoint(2);
             assert_eq!(
                 tree.witness(0.into(), 0),
                 Some(vec![
@@ -1003,9 +1003,9 @@ mod tests {
                 ShardTree::<_, 4, 3>::new(&mut rhs, 100),
             );
 
-            t.append("a".to_string(), Retention::Ephemeral);
+            let _ = t.append("a".to_string(), Retention::Ephemeral);
             assert!(t.checkpoint(1));
-            t.append("b".to_string(), Retention::Marked);
+            let _ = t.append("b".to_string(), Retention::Marked);
             assert!(t.rewind(0));
             assert_eq!(Some(Position::from(0)), t.current_position());
 
@@ -1020,7 +1020,7 @@ mod tests {
                 ShardTree::<_, 4, 3>::new(&mut rhs, 100),
             );
 
-            t.append("a".to_string(), Retention::Marked);
+            let _ = t.append("a".to_string(), Retention::Marked);
             assert!(t.checkpoint(1));
             assert!(t.rewind(0));
 
@@ -1035,9 +1035,9 @@ mod tests {
                 ShardTree::<_, 4, 3>::new(&mut rhs, 100),
             );
 
-            t.append("a".to_string(), Retention::Marked);
+            let _ = t.append("a".to_string(), Retention::Marked);
             assert!(t.checkpoint(1));
-            t.append("a".to_string(), Retention::Ephemeral);
+            let _ = t.append("a".to_string(), Retention::Ephemeral);
             assert!(t.rewind(0));
             assert_eq!(Some(Position::from(0)), t.current_position());
 
@@ -1052,13 +1052,13 @@ mod tests {
                 ShardTree::<_, 4, 3>::new(&mut rhs, 100),
             );
 
-            t.append("a".to_string(), Retention::Ephemeral);
+            let _ = t.append("a".to_string(), Retention::Ephemeral);
             assert!(t.checkpoint(1));
             assert!(t.checkpoint(2));
             assert!(t.rewind(1));
-            t.append("b".to_string(), Retention::Ephemeral);
+            let _ = t.append("b".to_string(), Retention::Ephemeral);
             assert!(t.rewind(0));
-            t.append("b".to_string(), Retention::Ephemeral);
+            let _ = t.append("b".to_string(), Retention::Ephemeral);
             assert_eq!(t.root(None).unwrap(), "ab______________");
 
             check_equal(lhs, rhs);
@@ -1123,7 +1123,7 @@ mod tests {
                 ShardTree::<_, 4, 3>::new(&mut rhs, 100),
             );
 
-            tree.append("e".to_string(), Retention::Marked);
+            let _ = tree.append("e".to_string(), Retention::Marked);
             assert!(tree.checkpoint(1));
             assert!(tree.rewind(0));
             assert!(tree.remove_mark(0u64.into()));

@@ -129,27 +129,28 @@ where
         let mut tree = ShardTree::new(MemoryShardStore::empty(), 10);
         let mut checkpoint_positions = vec![];
         let mut marked_positions = vec![];
-        tree.batch_insert(
-            Position::from(0),
-            leaves
-                .into_iter()
-                .enumerate()
-                .map(|(id, (leaf, retention))| {
-                    let pos = Position::try_from(id).unwrap();
-                    match retention {
-                        Retention::Ephemeral | Retention::Reference => (),
-                        Retention::Checkpoint { marking, .. } => {
-                            checkpoint_positions.push(pos);
-                            if marking == Marking::Marked {
-                                marked_positions.push(pos);
+        let _ = tree
+            .batch_insert(
+                Position::from(0),
+                leaves
+                    .into_iter()
+                    .enumerate()
+                    .map(|(id, (leaf, retention))| {
+                        let pos = Position::try_from(id).unwrap();
+                        match retention {
+                            Retention::Ephemeral | Retention::Reference => (),
+                            Retention::Checkpoint { marking, .. } => {
+                                checkpoint_positions.push(pos);
+                                if marking == Marking::Marked {
+                                    marked_positions.push(pos);
+                                }
                             }
+                            Retention::Marked => marked_positions.push(pos),
                         }
-                        Retention::Marked => marked_positions.push(pos),
-                    }
-                    (leaf, retention)
-                }),
-        )
-        .unwrap();
+                        (leaf, retention)
+                    }),
+            )
+            .unwrap();
         (tree, checkpoint_positions, marked_positions)
     })
 }
@@ -216,7 +217,7 @@ where
                 let base = index << shard_height;
                 for (slot, (_, flags)) in leaves.iter().enumerate() {
                     if flags.is_marked() {
-                        marked_positions.insert(Position::from(base + slot as u64));
+                        let _ = marked_positions.insert(Position::from(base + slot as u64));
                     }
                 }
                 shards.push(LocatedTree {
@@ -468,23 +469,24 @@ pub fn check_witness_with_pruned_subtrees<
     }
 
     // simulate discovery of a note
-    tree.batch_insert(
-        Position::from(24),
-        ('a'..='h').map(|c| {
-            (
-                c.to_string(),
-                match c {
-                    'c' => Retention::Marked,
-                    'h' => Retention::Checkpoint {
-                        id: 3,
-                        marking: Marking::None,
+    let _ = tree
+        .batch_insert(
+            Position::from(24),
+            ('a'..='h').map(|c| {
+                (
+                    c.to_string(),
+                    match c {
+                        'c' => Retention::Marked,
+                        'h' => Retention::Checkpoint {
+                            id: 3,
+                            marking: Marking::None,
+                        },
+                        _ => Retention::Ephemeral,
                     },
-                    _ => Retention::Ephemeral,
-                },
-            )
-        }),
-    )
-    .unwrap();
+                )
+            }),
+        )
+        .unwrap();
 
     // construct a witness for the note
     let witness = tree

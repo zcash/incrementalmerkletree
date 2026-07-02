@@ -668,10 +668,10 @@ impl<
                         let subtree_addr = Self::subtree_addr(pos);
                         if removing {
                             // Mark flags to be cleared from the given position.
-                            clear_positions
+                            let _ = clear_positions
                                 .entry(subtree_addr)
                                 .and_modify(|to_clear| {
-                                    to_clear
+                                    let _ = to_clear
                                         .entry(pos)
                                         .and_modify(|flags| *flags |= flags_to_clear)
                                         .or_insert(flags_to_clear);
@@ -1856,7 +1856,7 @@ mod tests {
         let mut tree = new_tree(MAX);
         let mut frontier = Frontier::<String, 4>::empty();
         for (i, c) in ('a'..='e').enumerate() {
-            frontier.append(c.to_string());
+            let _ = frontier.append(c.to_string());
             tree.insert_frontier(
                 frontier.clone(),
                 Retention::Checkpoint {
@@ -1879,7 +1879,7 @@ mod tests {
                 },
             )
         });
-        tree.batch_insert(Position::from(0), values).unwrap();
+        let _ = tree.batch_insert(Position::from(0), values).unwrap();
         assert_eq!(tree.store().checkpoint_count(), Ok(MAX));
     }
 
@@ -1896,7 +1896,7 @@ mod tests {
             let frontier_end = Position::from((1 << 3) - 3);
             let mut f0 = Frontier::<String, 6>::empty();
             for c in 'a'..='f' {
-                f0.append(c.to_string());
+                let _ = f0.append(c.to_string());
             }
 
             let frontier = Frontier::from_parts(
@@ -1919,23 +1919,25 @@ mod tests {
 
             // Insert a few leaves beginning at the subsequent position, so as to cross the shard
             // boundary.
-            tree.batch_insert(
-                frontier_end + 1,
-                ('g'..='j').map(|c| (c.to_string(), Retention::Ephemeral)),
-            )
-            .unwrap();
+            let _ = tree
+                .batch_insert(
+                    frontier_end + 1,
+                    ('g'..='j').map(|c| (c.to_string(), Retention::Ephemeral)),
+                )
+                .unwrap();
 
             // Trigger pruning by adding 5 more checkpoints
             for i in 2..7 {
-                tree.checkpoint(i).unwrap();
+                let _ = tree.checkpoint(i).unwrap();
             }
 
             // Insert nodes that require the pruned nodes for witnessing
-            tree.batch_insert(
-                frontier_end - 1,
-                ('e'..='f').map(|c| (c.to_string(), Retention::Marked)),
-            )
-            .unwrap();
+            let _ = tree
+                .batch_insert(
+                    frontier_end - 1,
+                    ('e'..='f').map(|c| (c.to_string(), Retention::Marked)),
+                )
+                .unwrap();
 
             // Compute the witness
             tree.witness_at_checkpoint_id(frontier_end, &6)
