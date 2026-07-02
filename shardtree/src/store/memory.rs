@@ -1,6 +1,6 @@
 //! Implementation of an in-memory shard store with no persistence.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::convert::{Infallible, TryFrom};
 
 use incrementalmerkletree::Address;
@@ -15,6 +15,7 @@ use crate::{LocatedPrunableTree, LocatedTree, PrunableTree, Tree};
 pub struct MemoryShardStore<H, C: Ord> {
     shards: Vec<LocatedPrunableTree<H>>,
     checkpoints: BTreeMap<C, Checkpoint>,
+    retained_checkpoints: BTreeSet<C>,
     cap: PrunableTree<H>,
 }
 
@@ -24,6 +25,7 @@ impl<H, C: Ord> MemoryShardStore<H, C> {
         Self {
             shards: vec![],
             checkpoints: BTreeMap::new(),
+            retained_checkpoints: BTreeSet::new(),
             cap: PrunableTree::empty(),
         }
     }
@@ -164,6 +166,20 @@ impl<H: Clone, C: Clone + Ord> ShardStore for MemoryShardStore<H, C> {
     fn remove_checkpoint(&mut self, checkpoint_id: &C) -> Result<(), Self::Error> {
         self.checkpoints.remove(checkpoint_id);
         Ok(())
+    }
+
+    fn add_retained_checkpoint(&mut self, checkpoint_id: C) -> Result<(), Self::Error> {
+        self.retained_checkpoints.insert(checkpoint_id);
+        Ok(())
+    }
+
+    fn remove_retained_checkpoint(&mut self, checkpoint_id: &C) -> Result<(), Self::Error> {
+        self.retained_checkpoints.remove(checkpoint_id);
+        Ok(())
+    }
+
+    fn retained_checkpoints(&self) -> Result<BTreeSet<C>, Self::Error> {
+        Ok(self.retained_checkpoints.clone())
     }
 
     fn truncate_checkpoints_retaining(
