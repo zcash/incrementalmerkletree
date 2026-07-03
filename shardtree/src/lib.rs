@@ -89,6 +89,41 @@ pub mod testing;
 #[cfg_attr(docsrs, doc(cfg(feature = "legacy-api")))]
 mod legacy;
 
+/// A wrapper around a node hash `H` that treats the cap of a [`ShardTree`] as a
+/// standalone tree of `DEPTH - SHARD_HEIGHT` levels.
+///
+/// The cap is the upper part of a shard tree, spanning levels
+/// `SHARD_HEIGHT..=DEPTH`; its leaves are the shard roots, which live at level
+/// `SHARD_HEIGHT` of the full tree. `LevelShifter` re-bases those levels so that
+/// a shard root (full-tree level `SHARD_HEIGHT`) becomes a level-`0` leaf of the
+/// cap. Its [`Hashable`] implementation shifts every level argument up by
+/// `SHARD_HEIGHT` before delegating to the wrapped `H`, so combining and
+/// computing empty roots at cap-relative levels produces exactly the same hashes
+/// as operating at the corresponding full-tree levels.
+///
+/// This lets the existing tree-construction machinery (which works in terms of
+/// level-`0` leaves) be reused to batch-insert shard roots into the cap, without
+/// the caller having to translate levels at every step.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct LevelShifter<H, const SHARD_HEIGHT: u8>(pub H);
+
+impl<H: Hashable, const SHARD_HEIGHT: u8> Hashable for LevelShifter<H, SHARD_HEIGHT> {
+    fn empty_leaf() -> Self {
+        Self(H::empty_root(SHARD_HEIGHT.into()))
+    }
+
+    fn combine(level: Level, a: &Self, b: &Self) -> Self {
+        Self(H::combine(level + SHARD_HEIGHT, &a.0, &b.0))
+    }
+
+    fn empty_root(level: Level) -> Self
+    where
+        Self: Sized,
+    {
+        Self(H::empty_root(level + SHARD_HEIGHT))
+    }
+}
+
 /// A sparse binary Merkle tree of the specified depth, represented as an ordered collection of
 /// subtrees (shards) of a given maximum height.
 ///
