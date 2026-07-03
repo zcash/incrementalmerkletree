@@ -131,7 +131,10 @@ impl<H: Hashable, const SHARD_HEIGHT: u8> Hashable for LevelShifter<H, SHARD_HEI
 /// front of the tree, that are maintained such that it's possible to truncate nodes to the right
 /// of the specified position.
 #[derive(Debug)]
-pub struct ShardTree<S: ShardStore, const DEPTH: u8, const SHARD_HEIGHT: u8> {
+pub struct ShardTree<S, const DEPTH: u8, const SHARD_HEIGHT: u8>
+where
+    S: ShardStore,
+{
     /// The vector of tree shards.
     store: S,
     /// The maximum number of checkpoints to retain before pruning.
@@ -526,10 +529,10 @@ impl<
     /// Panics if `root` represents a parent node but `root_addr` is a depth-0 leaf address.
     pub fn checkpoint(&mut self, checkpoint_id: C) -> Result<bool, ShardTreeError<S::Error>> {
         /// Pre-condition: `root_addr` must be the address of `root`.
-        fn go<H: Hashable + Clone + PartialEq>(
-            root_addr: Address,
-            root: &PrunableTree<H>,
-        ) -> Option<(PrunableTree<H>, Position)> {
+        fn go<H>(root_addr: Address, root: &PrunableTree<H>) -> Option<(PrunableTree<H>, Position)>
+        where
+            H: Hashable + Clone + PartialEq,
+        {
             match &root.0 {
                 Node::Parent { ann, left, right } => {
                     let (l_addr, r_addr) = root_addr
@@ -2125,14 +2128,17 @@ mod tests {
 
     // Combined tree tests
     #[allow(clippy::type_complexity)]
-    fn new_combined_tree<H: Hashable + Ord + Clone + core::fmt::Debug>(
+    fn new_combined_tree<H>(
         max_checkpoints: usize,
     ) -> CombinedTree<
         H,
         usize,
         CompleteTree<H, usize, 4>,
         ShardTree<MemoryShardStore<H, usize>, 4, 3>,
-    > {
+    >
+    where
+        H: Hashable + Ord + Clone + core::fmt::Debug,
+    {
         CombinedTree::new(
             CompleteTree::new(max_checkpoints),
             ShardTree::new(MemoryShardStore::empty(), max_checkpoints),

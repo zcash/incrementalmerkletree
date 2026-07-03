@@ -169,7 +169,10 @@ pub trait ShardStore {
     ) -> Result<(), Self::Error>;
 }
 
-impl<S: ShardStore> ShardStore for &mut S {
+impl<S> ShardStore for &mut S
+where
+    S: ShardStore,
+{
     type H = S::H;
     type CheckpointId = S::CheckpointId;
     type Error = S::Error;

@@ -152,7 +152,10 @@ impl fmt::Display for MergeError {
     }
 }
 
-impl<H: Hashable + Clone + PartialEq> PrunableTree<H> {
+impl<H> PrunableTree<H>
+where
+    H: Hashable + Clone + PartialEq,
+{
     /// Returns the the value if this is a leaf.
     pub fn leaf_value(&self) -> Option<&H> {
         self.0.leaf_value().map(|(h, _)| h)
@@ -319,11 +322,14 @@ impl<H: Hashable + Clone + PartialEq> PrunableTree<H> {
     pub fn merge_checked(self, root_addr: Address, other: Self) -> Result<Self, MergeError> {
         /// Pre-condition: `root_addr` must be the address of `t0` and `t1`.
         #[allow(clippy::type_complexity)]
-        fn go<H: Hashable + Clone + PartialEq>(
+        fn go<H>(
             addr: Address,
             t0: PrunableTree<H>,
             t1: PrunableTree<H>,
-        ) -> Result<PrunableTree<H>, MergeError> {
+        ) -> Result<PrunableTree<H>, MergeError>
+        where
+            H: Hashable + Clone + PartialEq,
+        {
             // Require that any roots the we compute will not be default-filled by picking
             // a starting valid fill point that is outside the range of leaf positions.
             let no_default_fill = addr.position_range_end();
@@ -544,7 +550,10 @@ impl From<incrementalmerkletree::frontier::FrontierError> for FrontierError {
     }
 }
 
-impl<H: Hashable + Clone + PartialEq> LocatedPrunableTree<H> {
+impl<H> LocatedPrunableTree<H>
+where
+    H: Hashable + Clone + PartialEq,
+{
     /// Returns the maximum position at which a non-`Nil` leaf has been observed in the tree.
     ///
     /// Note that no actual leaf value may exist at this position, as it may have previously been
@@ -602,11 +611,10 @@ impl<H: Hashable + Clone + PartialEq> LocatedPrunableTree<H> {
     /// Returns the positions of marked leaves in the tree.
     pub fn marked_positions(&self) -> BTreeSet<Position> {
         /// Pre-condition: `root_addr` must be the address of `root`.
-        fn go<H: Hashable + Clone + PartialEq>(
-            root_addr: Address,
-            root: &PrunableTree<H>,
-            acc: &mut BTreeSet<Position>,
-        ) {
+        fn go<H>(root_addr: Address, root: &PrunableTree<H>, acc: &mut BTreeSet<Position>)
+        where
+            H: Hashable + Clone + PartialEq,
+        {
             match &root.0 {
                 Node::Parent { left, right, .. } => {
                     let (l_addr, r_addr) = root_addr
@@ -642,12 +650,15 @@ impl<H: Hashable + Clone + PartialEq> LocatedPrunableTree<H> {
         /// the authentication path on the way back up.
         //
         /// Pre-condition: `root_addr` must be the address of `root`.
-        fn go<H: Hashable + Clone + PartialEq>(
+        fn go<H>(
             root: &PrunableTree<H>,
             root_addr: Address,
             position: Position,
             truncate_at: Position,
-        ) -> Result<Vec<H>, Vec<Address>> {
+        ) -> Result<Vec<H>, Vec<Address>>
+        where
+            H: Hashable + Clone + PartialEq,
+        {
             match &root.0 {
                 Node::Parent { left, right, .. } => {
                     let (l_addr, r_addr) = root_addr
@@ -728,11 +739,14 @@ impl<H: Hashable + Clone + PartialEq> LocatedPrunableTree<H> {
     /// otherwise.
     pub fn truncate_to_position(&self, position: Position) -> Option<Self> {
         /// Pre-condition: `root_addr` must be the address of `root`.
-        fn go<H: Hashable + Clone + PartialEq>(
+        fn go<H>(
             position: Position,
             root_addr: Address,
             root: &PrunableTree<H>,
-        ) -> Option<PrunableTree<H>> {
+        ) -> Option<PrunableTree<H>>
+        where
+            H: Hashable + Clone + PartialEq,
+        {
             match &root.0 {
                 Node::Parent { ann, left, right } => {
                     let (l_child, r_child) = root_addr
@@ -796,12 +810,15 @@ impl<H: Hashable + Clone + PartialEq> LocatedPrunableTree<H> {
         ///
         /// Pre-condition: `root_addr` must be the address of `into`.
         #[allow(clippy::type_complexity)]
-        fn go<H: Hashable + Clone + PartialEq>(
+        fn go<H>(
             root_addr: Address,
             into: &PrunableTree<H>,
             subtree: LocatedPrunableTree<H>,
             contains_marked: bool,
-        ) -> Result<(PrunableTree<H>, Vec<IncompleteAt>), InsertionError> {
+        ) -> Result<(PrunableTree<H>, Vec<IncompleteAt>), InsertionError>
+        where
+            H: Hashable + Clone + PartialEq,
+        {
             // An empty tree cannot replace any other type of tree.
             if subtree.root().is_nil() {
                 Ok((into.clone(), vec![]))
@@ -961,11 +978,14 @@ impl<H: Hashable + Clone + PartialEq> LocatedPrunableTree<H> {
     /// Prefer to use [`Self::batch_append`] or [`Self::batch_insert`] when appending multiple
     /// values, as these operations require fewer traversals of the tree than are necessary when
     /// performing multiple sequential calls to [`Self::append`].
-    pub fn append<C: Clone + Ord>(
+    pub fn append<C>(
         &self,
         value: H,
         retention: Retention<C>,
-    ) -> Result<(Self, Position, Option<C>), InsertionError> {
+    ) -> Result<(Self, Position, Option<C>), InsertionError>
+    where
+        C: Clone + Ord,
+    {
         let checkpoint_id = if let Retention::Checkpoint { id, .. } = &retention {
             Some(id.clone())
         } else {
@@ -1102,11 +1122,14 @@ impl<H: Hashable + Clone + PartialEq> LocatedPrunableTree<H> {
     /// that no longer need to be retained.
     pub fn clear_flags(&self, to_clear: BTreeMap<Position, RetentionFlags>) -> Self {
         /// Pre-condition: `root_addr` must be the address of `root`.
-        fn go<H: Hashable + Clone + PartialEq>(
+        fn go<H>(
             to_clear: &[(Position, RetentionFlags)],
             root_addr: Address,
             root: &PrunableTree<H>,
-        ) -> PrunableTree<H> {
+        ) -> PrunableTree<H>
+        where
+            H: Hashable + Clone + PartialEq,
+        {
             if to_clear.is_empty() {
                 // nothing to do, so we just return the root
                 root.clone()
@@ -1196,10 +1219,13 @@ impl<H: Hashable + Clone + PartialEq> LocatedPrunableTree<H> {
         /// level, or `None` if the frontier cannot be extracted.
         ///
         /// Pre-condition: `addr` must be the address of `root`.
-        fn go<H: Hashable + Clone + PartialEq>(
+        fn go<H>(
             address: Address,
             root: &PrunableTree<H>,
-        ) -> Result<Option<(Position, H, Vec<H>)>, FrontierError> {
+        ) -> Result<Option<(Position, H, Vec<H>)>, FrontierError>
+        where
+            H: Hashable + Clone + PartialEq,
+        {
             match &root.0 {
                 Node::Nil => Err(FrontierError::TreeIncomplete { address }),
                 Node::Leaf { value: (h, _) } => {

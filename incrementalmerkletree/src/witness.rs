@@ -177,7 +177,10 @@ impl<H, const DEPTH: u8> IncrementalWitness<H, DEPTH> {
     }
 }
 
-impl<H: Hashable + Clone, const DEPTH: u8> IncrementalWitness<H, DEPTH> {
+impl<H, const DEPTH: u8> IncrementalWitness<H, DEPTH>
+where
+    H: Hashable + Clone,
+{
     fn filler(&self) -> PathFiller<H> {
         let cursor_root = self
             .cursor

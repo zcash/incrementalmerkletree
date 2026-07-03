@@ -12,14 +12,20 @@ use crate::{LocatedPrunableTree, LocatedTree, PrunableTree, Tree};
 ///
 /// State is not persisted anywhere, and will be lost when the struct is dropped.
 #[derive(Debug)]
-pub struct MemoryShardStore<H, C: Ord> {
+pub struct MemoryShardStore<H, C>
+where
+    C: Ord,
+{
     shards: Vec<LocatedPrunableTree<H>>,
     checkpoints: BTreeMap<C, Checkpoint>,
     retained_checkpoints: BTreeSet<C>,
     cap: PrunableTree<H>,
 }
 
-impl<H, C: Ord> MemoryShardStore<H, C> {
+impl<H, C> MemoryShardStore<H, C>
+where
+    C: Ord,
+{
     /// Constructs a new empty `MemoryShardStore`.
     pub fn empty() -> Self {
         Self {
@@ -31,7 +37,11 @@ impl<H, C: Ord> MemoryShardStore<H, C> {
     }
 }
 
-impl<H: Clone, C: Clone + Ord> ShardStore for MemoryShardStore<H, C> {
+impl<H, C> ShardStore for MemoryShardStore<H, C>
+where
+    H: Clone,
+    C: Clone + Ord,
+{
     type H = H;
     type CheckpointId = C;
     type Error = Infallible;

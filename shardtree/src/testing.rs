@@ -19,13 +19,15 @@ pub fn arb_retention_flags() -> impl Strategy<Value = RetentionFlags> + Clone {
     ])
 }
 
-pub fn arb_tree<A: Strategy + Clone + 'static, V: Strategy + 'static>(
+pub fn arb_tree<A, V>(
     arb_annotation: A,
     arb_leaf: V,
     depth: u32,
     size: u32,
 ) -> impl Strategy<Value = Tree<A::Value, V::Value>> + Clone
 where
+    A: Strategy + Clone + 'static,
+    V: Strategy + 'static,
     A::Value: Clone + 'static,
     V::Value: Clone + 'static,
 {
@@ -434,9 +436,11 @@ pub fn check_shardtree_insertion<
     );
 }
 
-pub fn check_shard_sizes<E: Debug, S: ShardStore<H = String, CheckpointId = u32, Error = E>>(
-    mut tree: ShardTree<S, 4, 2>,
-) {
+pub fn check_shard_sizes<E, S>(mut tree: ShardTree<S, 4, 2>)
+where
+    E: Debug,
+    S: ShardStore<H = String, CheckpointId = u32, Error = E>,
+{
     for c in 'a'..'p' {
         tree.append(c.to_string(), Retention::Ephemeral).unwrap();
     }
