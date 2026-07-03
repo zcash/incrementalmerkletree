@@ -61,17 +61,17 @@ where
     )
 }
 
-/// Constructs a random sequence of leaves that form a tree of size up to 2^6.
-pub fn arb_leaves<H>(arb_leaf: H) -> impl Strategy<Value = Vec<(H::Value, Retention<usize>)>>
+/// Constructs a random sequence of up to `max_count` leaves, each randomly
+/// assigned ephemeral, checkpoint, or marked retention.
+pub fn arb_leaves_sized<H>(
+    arb_leaf: H,
+    max_count: usize,
+) -> impl Strategy<Value = Vec<(H::Value, Retention<usize>)>>
 where
     H: Strategy + Clone,
     H::Value: Hashable + Clone + PartialEq,
 {
-    vec(
-        (arb_leaf, weighted(0.1), weighted(0.2)),
-        0..=(2usize.pow(6)),
-    )
-    .prop_map(|leaves| {
+    vec((arb_leaf, weighted(0.1), weighted(0.2)), 0..=max_count).prop_map(|leaves| {
         leaves
             .into_iter()
             .enumerate()
@@ -96,6 +96,15 @@ where
     })
 }
 
+/// Constructs a random sequence of leaves that form a tree of size up to 2^6.
+pub fn arb_leaves<H>(arb_leaf: H) -> impl Strategy<Value = Vec<(H::Value, Retention<usize>)>>
+where
+    H: Strategy + Clone,
+    H::Value: Hashable + Clone + PartialEq,
+{
+    arb_leaves_sized(arb_leaf, 2usize.pow(6))
+}
+
 /// A random shardtree of size up to 2^6 with shards of size 2^3, along with vectors of the
 /// checkpointed and marked positions within the tree.
 type ArbShardtreeParts<H> = (
@@ -104,14 +113,23 @@ type ArbShardtreeParts<H> = (
     Vec<Position>,
 );
 
-/// Constructs a random shardtree of size up to 2^6 with shards of size 2^3. Returns the tree,
-/// along with vectors of the checkpointed and marked positions.
-pub fn arb_shardtree<H>(arb_leaf: H) -> impl Strategy<Value = ArbShardtreeParts<H>>
+/// Constructs a random shardtree of `DEPTH` and `SHARD_HEIGHT`, of size up to
+/// 2^`DEPTH`. Returns the tree, along with vectors of the checkpointed and
+/// marked positions.
+pub fn arb_shardtree_sized<H, const DEPTH: u8, const SHARD_HEIGHT: u8>(
+    arb_leaf: H,
+) -> impl Strategy<
+    Value = (
+        ShardTree<MemoryShardStore<H::Value, usize>, DEPTH, SHARD_HEIGHT>,
+        Vec<Position>,
+        Vec<Position>,
+    ),
+>
 where
     H: Strategy + Clone,
     H::Value: Hashable + Clone + PartialEq,
 {
-    arb_leaves(arb_leaf).prop_map(|leaves| {
+    arb_leaves_sized(arb_leaf, 1usize << DEPTH).prop_map(|leaves| {
         let mut tree = ShardTree::new(MemoryShardStore::empty(), 10);
         let mut checkpoint_positions = vec![];
         let mut marked_positions = vec![];
@@ -140,9 +158,82 @@ where
     })
 }
 
+/// Constructs a random shardtree of size up to 2^6 with shards of size 2^3. Returns the tree,
+/// along with vectors of the checkpointed and marked positions.
+pub fn arb_shardtree<H>(arb_leaf: H) -> impl Strategy<Value = ArbShardtreeParts<H>>
+where
+    H: Strategy + Clone,
+    H::Value: Hashable + Clone + PartialEq,
+{
+    arb_shardtree_sized::<H, 6, 3>(arb_leaf)
+}
+
 pub fn arb_char_str() -> impl Strategy<Value = String> + Clone {
     let chars = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ";
     (0usize..chars.len()).prop_map(move |i| chars.get(i..=i).unwrap().to_string())
+}
+
+/// A randomly generated collection of complete shards placed at arbitrary,
+/// possibly non-contiguous indices, paired with the marked positions they hold.
+#[derive(Clone, Debug)]
+pub struct ShardLayout<H> {
+    pub shards: Vec<LocatedPrunableTree<H>>,
+    pub marked_positions: BTreeSet<Position>,
+}
+
+/// Builds the perfect binary tree over `leaves`, whose length must be a power of
+/// two, as an unannotated `PrunableTree`.
+fn perfect_shard<H: Clone>(leaves: &[(H, RetentionFlags)]) -> PrunableTree<H> {
+    if let [(value, flags)] = leaves {
+        Tree::leaf((value.clone(), *flags))
+    } else {
+        let mid = leaves.len() / 2;
+        Tree::parent(
+            None,
+            perfect_shard(&leaves[..mid]),
+            perfect_shard(&leaves[mid..]),
+        )
+    }
+}
+
+/// Strategy for a [`ShardLayout`]: between 1 and `max_shards` complete shards of
+/// height `shard_height`, at distinct indices drawn from `0..max_index`, each
+/// leaf carrying a random retention flag. `max_index` must be at least
+/// `max_shards` so that enough distinct indices exist.
+pub fn arb_shard_layout<H>(
+    arb_leaf: H,
+    shard_height: u8,
+    max_index: u64,
+    max_shards: usize,
+) -> impl Strategy<Value = ShardLayout<H::Value>>
+where
+    H: Strategy + Clone + 'static,
+    H::Value: Clone + core::fmt::Debug + 'static,
+{
+    let leaf_count = 1usize << shard_height;
+    let shard_contents = vec((arb_leaf, arb_retention_flags()), leaf_count);
+    proptest::collection::btree_map(0u64..max_index, shard_contents, 1..=max_shards).prop_map(
+        move |layout| {
+            let mut shards = Vec::with_capacity(layout.len());
+            let mut marked_positions = BTreeSet::new();
+            for (index, leaves) in layout {
+                let base = index << shard_height;
+                for (slot, (_, flags)) in leaves.iter().enumerate() {
+                    if flags.is_marked() {
+                        marked_positions.insert(Position::from(base + slot as u64));
+                    }
+                }
+                shards.push(LocatedTree {
+                    root_addr: Address::from_parts(Level::from(shard_height), index),
+                    root: perfect_shard(&leaves),
+                });
+            }
+            ShardLayout {
+                shards,
+                marked_positions,
+            }
+        },
+    )
 }
 
 impl<

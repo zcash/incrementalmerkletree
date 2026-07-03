@@ -139,6 +139,28 @@ pub trait ShardStore {
     /// If no checkpoint exists with the given ID, this does nothing.
     fn remove_checkpoint(&mut self, checkpoint_id: &Self::CheckpointId) -> Result<(), Self::Error>;
 
+    /// Adds the given checkpoint identifier to the set of checkpoints that must be retained when
+    /// pruning excess checkpoints.
+    ///
+    /// A retained checkpoint is excluded from the `max_checkpoints` budget and is never removed by
+    /// automatic pruning (see [`crate::ShardTree::prune_excess_checkpoints`]). The identifier may
+    /// be recorded even if no checkpoint with that identifier currently exists in the data store.
+    fn add_retained_checkpoint(
+        &mut self,
+        checkpoint_id: Self::CheckpointId,
+    ) -> Result<(), Self::Error>;
+
+    /// Removes the given checkpoint identifier from the set of retained checkpoints, allowing it to
+    /// be pruned normally. Has no effect if the identifier is not in the retention set.
+    fn remove_retained_checkpoint(
+        &mut self,
+        checkpoint_id: &Self::CheckpointId,
+    ) -> Result<(), Self::Error>;
+
+    /// Returns the set of checkpoint identifiers that have been marked for retention via
+    /// [`ShardStore::add_retained_checkpoint`].
+    fn retained_checkpoints(&self) -> Result<BTreeSet<Self::CheckpointId>, Self::Error>;
+
     /// Removes checkpoints with identifiers greater than to the given identifier, and removes mark
     /// removal metadata from the specified checkpoint.
     fn truncate_checkpoints_retaining(
@@ -247,6 +269,24 @@ where
 
     fn remove_checkpoint(&mut self, checkpoint_id: &Self::CheckpointId) -> Result<(), Self::Error> {
         S::remove_checkpoint(self, checkpoint_id)
+    }
+
+    fn add_retained_checkpoint(
+        &mut self,
+        checkpoint_id: Self::CheckpointId,
+    ) -> Result<(), Self::Error> {
+        S::add_retained_checkpoint(self, checkpoint_id)
+    }
+
+    fn remove_retained_checkpoint(
+        &mut self,
+        checkpoint_id: &Self::CheckpointId,
+    ) -> Result<(), Self::Error> {
+        S::remove_retained_checkpoint(self, checkpoint_id)
+    }
+
+    fn retained_checkpoints(&self) -> Result<BTreeSet<Self::CheckpointId>, Self::Error> {
+        S::retained_checkpoints(self)
     }
 
     fn truncate_checkpoints_retaining(

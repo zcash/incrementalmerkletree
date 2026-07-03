@@ -1,5 +1,6 @@
 //! Implementation of an in-memory shard store with persistence.
 
+use std::collections::BTreeSet;
 use std::convert::Infallible;
 
 use incrementalmerkletree::Address;
@@ -11,6 +12,7 @@ use crate::{LocatedPrunableTree, PrunableTree};
 enum Action<C> {
     TruncateShards(u64),
     RemoveCheckpoint(C),
+    RemoveRetainedCheckpoint(C),
     TruncateCheckpointsRetaining(C),
 }
 
@@ -69,6 +71,9 @@ where
                 Action::RemoveCheckpoint(checkpoint_id) => {
                     self.backend.remove_checkpoint(checkpoint_id)
                 }
+                Action::RemoveRetainedCheckpoint(checkpoint_id) => {
+                    self.backend.remove_retained_checkpoint(checkpoint_id)
+                }
                 Action::TruncateCheckpointsRetaining(checkpoint_id) => {
                     self.backend.truncate_checkpoints_retaining(checkpoint_id)
                 }
@@ -109,6 +114,14 @@ where
             .expect("error type is Infallible");
         for (checkpoint_id, checkpoint) in checkpoints {
             self.backend.add_checkpoint(checkpoint_id, checkpoint)?;
+        }
+
+        for checkpoint_id in self
+            .cache
+            .retained_checkpoints()
+            .expect("error type is Infallible")
+        {
+            self.backend.add_retained_checkpoint(checkpoint_id)?;
         }
 
         Ok(self.backend)
@@ -220,6 +233,26 @@ where
         self.deferred_actions
             .push(Action::RemoveCheckpoint(checkpoint_id.clone()));
         self.cache.remove_checkpoint(checkpoint_id)
+    }
+
+    fn add_retained_checkpoint(
+        &mut self,
+        checkpoint_id: Self::CheckpointId,
+    ) -> Result<(), Self::Error> {
+        self.cache.add_retained_checkpoint(checkpoint_id)
+    }
+
+    fn remove_retained_checkpoint(
+        &mut self,
+        checkpoint_id: &Self::CheckpointId,
+    ) -> Result<(), Self::Error> {
+        self.deferred_actions
+            .push(Action::RemoveRetainedCheckpoint(checkpoint_id.clone()));
+        self.cache.remove_retained_checkpoint(checkpoint_id)
+    }
+
+    fn retained_checkpoints(&self) -> Result<BTreeSet<Self::CheckpointId>, Self::Error> {
+        self.cache.retained_checkpoints()
     }
 
     fn truncate_checkpoints_retaining(
