@@ -55,6 +55,13 @@ where
                 .expect("error type is Infallible");
             Ok(())
         })?;
+        // Seed the retention set so that pruning performed through the overlay observes the
+        // backend's durable anchors (a retained checkpoint must never be pruned).
+        for checkpoint_id in backend.retained_checkpoints()? {
+            cache
+                .add_retained_checkpoint(checkpoint_id)
+                .expect("error type is Infallible");
+        }
 
         Ok(Self {
             backend,
@@ -825,6 +832,28 @@ mod tests {
         assert_eq!(sparse.get_shard(absent), Ok(None));
         // `get_shard_roots` reports the union of cached and backend-resident shards.
         assert_eq!(sparse.get_shard_roots().unwrap(), roots);
+    }
+
+    #[test]
+    fn load_seeds_retained_checkpoints() {
+        use std::collections::BTreeSet;
+
+        use crate::store::Checkpoint;
+
+        let mut backend = MemoryShardStore::<String, u64>::empty();
+        backend.add_checkpoint(5, Checkpoint::tree_empty()).unwrap();
+        backend.add_retained_checkpoint(5).unwrap();
+
+        // The overlay must observe the backend's durable retention set: pruning performed
+        // through the overlay (`ShardTree::prune_excess_checkpoints`) consults
+        // `retained_checkpoints` to decide what it may remove, so a checkpoint retained in
+        // the backend but invisible to the cache could be pruned away.
+        let store = CachingShardStore::load(backend).unwrap();
+        assert_eq!(store.retained_checkpoints().unwrap(), BTreeSet::from([5]));
+
+        // A load -> flush round trip must also preserve the retention marker.
+        let backend = store.flush().unwrap();
+        assert_eq!(backend.retained_checkpoints().unwrap(), BTreeSet::from([5]));
     }
 
     #[test]
