@@ -1156,15 +1156,36 @@ where
                     }
                     Node::Leaf { value: (h, r) } => {
                         trace!("In {:?}, clearing {:?}", root_addr, to_clear);
-                        // When we reach a leaf, we should be down to just a single position
-                        // which should correspond to the last level-0 child of the address's
-                        // subtree range; if it's a checkpoint this will always be the case for
-                        // a partially-pruned branch, and if it's a marked node then it will
-                        // be a level-0 leaf.
+                        // When we reach a leaf, we are usually down to just a single position
+                        // which corresponds to the last level-0 child of the address's subtree
+                        // range; if it's a checkpoint this will be the case for a partially-pruned
+                        // branch, and if it's a marked node then it will be a level-0 leaf.
                         match to_clear {
                             [(_, flags)] => Tree::leaf((h.clone(), *r & !*flags)),
                             _ => {
-                                panic!("Tree state inconsistent with checkpoints.");
+                                // More than one position to clear has landed in a single
+                                // already-pruned leaf. This is reachable whenever the frontier
+                                // advances very little between many checkpoints, so that a run of
+                                // checkpointed positions collapses into one pruned subtree leaf
+                                // (for example a sparsely-used shielded pool whose note commitment
+                                // tree is still checkpointed at every block by cross-pool
+                                // checkpoint synchronization). Such a leaf can only carry
+                                // CHECKPOINT (and/or REFERENCE) retention: a MARKED position is
+                                // always a level-0 leaf and is never collapsed into a multi-
+                                // position pruned leaf, so no witness can be lost here.
+                                //
+                                // The leaf carries a single retention value that is the union of
+                                // the needs of every position it covers, and `to_clear` cannot
+                                // tell us whether a position sharing this leaf must keep its flag
+                                // (e.g. a retained anchor that was preserved at the position level
+                                // but aliases this same pruned leaf). Clearing the union of the
+                                // requested flags could therefore drop a still-needed flag, so we
+                                // conservatively retain the leaf unchanged rather than panic. The
+                                // checkpoints themselves are still removed from the checkpoint set
+                                // by the caller; retaining the leaf flag only defers pruning of an
+                                // already-pruned leaf, which is safe and self-correcting as the
+                                // tree advances and the positions separate again.
+                                root.clone()
                             }
                         }
                     }
@@ -1789,5 +1810,41 @@ mod tests {
             assert!(cleared.max_position() == pre_clearing_max_position);
             assert_eq!(to_retain, cleared.flag_positions());
         }
+    }
+
+    /// Regression: clearing checkpoint flags at several distinct positions that have
+    /// collapsed into a single already-pruned leaf must not panic.
+    ///
+    /// A note-commitment tree whose frontier advances very little between many
+    /// checkpoints (e.g. a sparsely-used pool that is still checkpointed at every
+    /// block by cross-pool synchronization) prunes the interval between those
+    /// checkpoints down to a single `Leaf` hash. When automatic checkpoint pruning
+    /// later clears the `CHECKPOINT` flag for a batch of those positions at once,
+    /// `clear_flags` reaches that one leaf holding more than one position to clear.
+    /// Before the fix this hit the `panic!("Tree state inconsistent with
+    /// checkpoints.")` arm; it must instead conservatively retain the leaf.
+    #[test]
+    fn clear_flags_multiple_positions_in_pruned_leaf() {
+        // A level-2 leaf: a fully-pruned subtree spanning positions 0..=3, collapsed
+        // to a single hash that still carries CHECKPOINT retention.
+        let root_addr = Address::from_parts(Level::from(2), 0);
+        let tree: LocatedPrunableTree<String> = LocatedTree::from_parts(
+            root_addr,
+            PrunableTree::leaf(("abcd".to_string(), RetentionFlags::CHECKPOINT)),
+        )
+        .unwrap();
+
+        // Two distinct checkpoint positions inside that one pruned leaf are cleared
+        // in the same batch, exactly as `prune_excess_checkpoints` does when evicting
+        // a run of densely-packed checkpoints.
+        let to_clear = BTreeMap::from([
+            (Position::from(0), RetentionFlags::CHECKPOINT),
+            (Position::from(3), RetentionFlags::CHECKPOINT),
+        ]);
+
+        // Must not panic. Conservatively, the leaf is retained unchanged (over-
+        // retention is safe; a marked leaf is never collapsed, so no witness is lost).
+        let cleared = tree.clear_flags(to_clear);
+        assert_eq!(cleared, tree);
     }
 }
