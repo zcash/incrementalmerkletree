@@ -36,6 +36,13 @@ and this project adheres to Rust's notion of
   - `ShardStore::remove_retained_checkpoint`
   - `ShardStore::retained_checkpoints`
 
+### Fixed
+- `ShardTree::prune_excess_checkpoints` could corrupt a retained checkpoint's
+  leaf retention, or panic with "Tree state inconsistent with checkpoints", when
+  retained anchors interleaved with the checkpoints being pruned. Repeated
+  checkpoints sharing a tree position, as a stalled chain produces, triggered it
+  within a single pruning window.
+
 
 ## [0.6.2] - 2026-02-20
 
