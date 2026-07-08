@@ -1156,17 +1156,17 @@ where
                     }
                     Node::Leaf { value: (h, r) } => {
                         trace!("In {:?}, clearing {:?}", root_addr, to_clear);
-                        // When we reach a leaf, we should be down to just a single position
-                        // which should correspond to the last level-0 child of the address's
-                        // subtree range; if it's a checkpoint this will always be the case for
-                        // a partially-pruned branch, and if it's a marked node then it will
-                        // be a level-0 leaf.
-                        match to_clear {
-                            [(_, flags)] => Tree::leaf((h.clone(), *r & !*flags)),
-                            _ => {
-                                panic!("Tree state inconsistent with checkpoints.");
-                            }
-                        }
+                        // A single-position branch descends to the level-0 leaf it targets.
+                        // A folded leaf (a subtree pruned to one annotated node) can hold
+                        // several `to_clear` positions instead. `unite` only folds an
+                        // ephemeral left child under an unmarked right, so a folded leaf
+                        // carries at most the rightmost position's checkpoint flag and never
+                        // a mark. The other positions were already pruned, so clearing the
+                        // union of the requested flags drops the live flag and no-ops the rest.
+                        let cleared = to_clear
+                            .iter()
+                            .fold(RetentionFlags::empty(), |acc, (_, flags)| acc | *flags);
+                        Tree::leaf((h.clone(), *r & !cleared))
                     }
                     Node::Nil => Tree::empty(),
                 }
@@ -1759,6 +1759,31 @@ mod tests {
             .unwrap();
 
         assert_eq!(filled_tree.frontier(), Ok(Some(frontier)));
+    }
+
+    #[test]
+    fn clear_flags_across_a_folded_leaf() {
+        // A subtree pruned to a single annotated leaf (positions 0..4 folded into one
+        // level-2 leaf carrying the rightmost position's checkpoint) must not panic when
+        // `clear_flags` is asked to clear several positions that all fall inside it. The
+        // already-pruned positions clear as no-ops; the live checkpoint flag drops.
+        let root_addr = Address::from_parts(Level::from(3), 0);
+        let folded = leaf(("abcd".to_string(), RetentionFlags::CHECKPOINT));
+        let tree = LocatedTree::from_parts(root_addr, parent(folded, nil())).unwrap();
+
+        assert_eq!(
+            tree.flag_positions(),
+            BTreeMap::from([(Position::from(3), RetentionFlags::CHECKPOINT)]),
+        );
+
+        let to_clear = BTreeMap::from([
+            (Position::from(1), RetentionFlags::MARKED),
+            (Position::from(3), RetentionFlags::CHECKPOINT),
+        ]);
+        let cleared = tree.clear_flags(to_clear);
+
+        assert_eq!(cleared.max_position(), tree.max_position());
+        assert!(cleared.flag_positions().is_empty());
     }
 
     proptest! {
