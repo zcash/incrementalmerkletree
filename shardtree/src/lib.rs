@@ -806,6 +806,11 @@ impl<
     /// Returns `true` if the truncation succeeds or has no effect, or `false` if no checkpoint
     /// exists at the specified depth. Depth 0 refers to the most recent checkpoint in the tree;
     ///
+    /// Returns [`QueryError::CheckpointPruned`] if the leaf at the checkpoint's position is not
+    /// individually represented in the tree (it has been pruned into a merged hash, or removed
+    /// entirely), since truncation at such a position would have to discard retained data along
+    /// with the requested suffix; the store is left unmodified in this case.
+    ///
     /// ## Parameters
     /// - `checkpoint_depth`: A zero-based index over the checkpoints that have been added to the
     ///   tree, in reverse checkpoint identifier order.
@@ -829,6 +834,11 @@ impl<
     ///
     /// Returns `true` if the truncation succeeds or has no effect, or `false` if no checkpoint
     /// exists for the specified checkpoint identifier.
+    ///
+    /// Returns [`QueryError::CheckpointPruned`] if the leaf at the checkpoint's position is not
+    /// individually represented in the tree (it has been pruned into a merged hash, or removed
+    /// entirely), since truncation at such a position would have to discard retained data along
+    /// with the requested suffix; the store is left unmodified in this case.
     pub fn truncate_to_checkpoint(
         &mut self,
         checkpoint_id: &C,
@@ -863,33 +873,39 @@ impl<
                     .map_err(ShardTreeError::Storage)?;
             }
             TreeState::AtPosition(position) => {
+                // Truncation is only possible if the boundary shard individually represents
+                // the checkpoint's position; if the leaf at that position has been pruned
+                // (merged into a larger hash, or removed entirely), fail — before any part
+                // of the store has been modified — rather than either discarding retained
+                // data the caller asked to keep or leaving the discarded suffix in place.
                 let subtree_addr = Self::subtree_addr(position);
-                let replacement = self
+                let truncated_shard = self
                     .store
                     .get_shard(subtree_addr)
                     .map_err(ShardTreeError::Storage)?
-                    .and_then(|s| s.truncate_to_position(position));
+                    .and_then(|s| s.truncate_to_position(position))
+                    .ok_or(ShardTreeError::Query(QueryError::CheckpointPruned))?;
 
-                if let Some(truncated) = replacement {
-                    let truncated_cap = LocatedTree {
-                        root_addr: Self::root_addr(),
-                        root: self.store.get_cap().map_err(ShardTreeError::Storage)?,
-                    }
-                    .truncate_cache_to_position(position);
+                // The cap's nodes are caches of hashes recomputable from the shards, so a
+                // cached entry spanning the truncation boundary is discarded (lossy
+                // truncation) rather than making the position unusable.
+                let cap_tree = LocatedTree {
+                    root_addr: Self::root_addr(),
+                    root: self.store.get_cap().map_err(ShardTreeError::Storage)?,
+                };
+                self.store
+                    .put_cap(cap_tree.truncate_cache_to_position(position).root)
+                    .map_err(ShardTreeError::Storage)?;
 
-                    self.store
-                        .put_cap(truncated_cap.root)
-                        .map_err(ShardTreeError::Storage)?;
-                    self.store
-                        .truncate_shards(subtree_addr.index())
-                        .map_err(ShardTreeError::Storage)?;
-                    self.store
-                        .put_shard(truncated)
-                        .map_err(ShardTreeError::Storage)?;
-                    self.store
-                        .truncate_checkpoints_retaining(checkpoint_id)
-                        .map_err(ShardTreeError::Storage)?;
-                }
+                self.store
+                    .truncate_shards(subtree_addr.index())
+                    .map_err(ShardTreeError::Storage)?;
+                self.store
+                    .put_shard(truncated_shard)
+                    .map_err(ShardTreeError::Storage)?;
+                self.store
+                    .truncate_checkpoints_retaining(checkpoint_id)
+                    .map_err(ShardTreeError::Storage)?;
             }
         }
 
