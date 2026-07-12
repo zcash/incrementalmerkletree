@@ -731,24 +731,37 @@ where
         }
     }
 
-    /// Prunes this tree by replacing all nodes that are right-hand children along the path
-    /// to the specified position with [`Node::Nil`].
+    /// Truncates this tree by discarding all data at positions greater than `position`.
     ///
-    /// The leaf at the specified position is retained. Returns the truncated tree if a leaf or
-    /// subtree root with the specified position as its maximum position exists, or `None`
-    /// otherwise.
+    /// The leaf at `position`, and all data at lesser positions, is retained wherever it is
+    /// individually represented in the tree. If `position` falls in the interior of a pruned
+    /// subtree — one whose leaves have been merged into a single hash — that subtree is
+    /// replaced by [`Node::Nil`]: its hash incorporates discarded data, and its constituent
+    /// parts cannot be recovered. Cached root annotations of parent nodes whose subtrees lose
+    /// data in the truncation are likewise discarded, since such an annotation is a hash over
+    /// the parent's complete subtree. Roots and witnesses that depend upon a discarded range
+    /// will be unavailable until its contents are re-inserted.
+    ///
+    /// Returns `None` if `position` is outside the position range of this tree.
     pub fn truncate_to_position(&self, position: Position) -> Option<Self> {
         /// Pre-condition: `root_addr` must be the address of `root`.
-        fn go<H>(
-            position: Position,
-            root_addr: Address,
-            root: &PrunableTree<H>,
-        ) -> Option<PrunableTree<H>>
+        fn go<H>(position: Position, root_addr: Address, root: &PrunableTree<H>) -> PrunableTree<H>
         where
             H: Hashable + Clone + PartialEq,
         {
+            if root_addr.max_position() <= position {
+                // Nothing above `position` exists within this subtree, so it is retained
+                // unmodified, along with any cached root annotation.
+                return root.clone();
+            }
             match &root.0 {
-                Node::Parent { ann, left, right } => {
+                Node::Parent {
+                    ann: _,
+                    left,
+                    right,
+                } => {
+                    // This node's subtree loses data in the truncation, so any cached root
+                    // annotation for it (a hash over its complete subtree) is discarded.
                     let (l_child, r_child) = root_addr
                         .children()
                         .expect("has children because we checked `root` is a parent");
@@ -756,33 +769,40 @@ where
                         // we are truncating within the range of the left node, so recurse
                         // to the left to truncate the left child and then reconstruct the
                         // node with `Nil` as the right sibling
-                        go(position, l_child, left.as_ref()).map(|left| {
-                            Tree::unite(l_child.level(), ann.clone(), left, Tree::empty())
-                        })
+                        Tree::unite(
+                            l_child.level(),
+                            None,
+                            go(position, l_child, left.as_ref()),
+                            Tree::empty(),
+                        )
                     } else {
                         // we are truncating within the range of the right node, so recurse
                         // to the right to truncate the right child and then reconstruct the
                         // node with the left sibling unchanged
-                        go(position, r_child, right.as_ref()).map(|right| {
-                            Tree::unite(r_child.level(), ann.clone(), left.as_ref().clone(), right)
-                        })
+                        Tree::unite(
+                            r_child.level(),
+                            None,
+                            left.as_ref().clone(),
+                            go(position, r_child, right.as_ref()),
+                        )
                     }
                 }
-                Node::Leaf { .. } => {
-                    if root_addr.max_position() <= position {
-                        Some(root.clone())
-                    } else {
-                        None
-                    }
-                }
-                Node::Nil => None,
+                // The truncation position falls in the interior of a pruned subtree whose
+                // leaves have been merged into a single hash. The merged hash incorporates
+                // discarded data, and the constituent parts from which a replacement hash
+                // could be computed are unrecoverable, so the node must be discarded. It can
+                // be restored by re-insertion of the subtree's contents.
+                Node::Leaf { .. } => Tree::empty(),
+                // The subtree contains no data at all; in particular, nothing above
+                // `position`.
+                Node::Nil => Tree::empty(),
             }
         }
 
         if self.root_addr.position_range().contains(&position) {
-            go(position, self.root_addr, &self.root).map(|root| LocatedTree {
+            Some(LocatedTree {
                 root_addr: self.root_addr,
-                root,
+                root: go(position, self.root_addr, &self.root),
             })
         } else {
             None

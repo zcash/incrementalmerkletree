@@ -881,17 +881,17 @@ impl<
                         .map_err(ShardTreeError::Storage)?;
                 };
 
+                self.store
+                    .truncate_shards(subtree_addr.index())
+                    .map_err(ShardTreeError::Storage)?;
                 if let Some(truncated) = replacement {
-                    self.store
-                        .truncate_shards(subtree_addr.index())
-                        .map_err(ShardTreeError::Storage)?;
                     self.store
                         .put_shard(truncated)
                         .map_err(ShardTreeError::Storage)?;
-                    self.store
-                        .truncate_checkpoints_retaining(checkpoint_id)
-                        .map_err(ShardTreeError::Storage)?;
                 }
+                self.store
+                    .truncate_checkpoints_retaining(checkpoint_id)
+                    .map_err(ShardTreeError::Storage)?;
             }
         }
 

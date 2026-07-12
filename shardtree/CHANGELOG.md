@@ -5,6 +5,29 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to Rust's notion of
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## Unreleased
+
+### Fixed
+- `shardtree::LocatedPrunableTree::truncate_to_position` no longer leaves stale
+  state from the discarded suffix of the tree in place:
+  - Parent nodes reconstructed along the truncation path now have their cached
+    root annotations discarded. Such an annotation is a hash over the parent's
+    complete subtree — including the data being truncated away — and a stale
+    annotation caused spurious `Insert(Conflict(..))` errors (or silently
+    incorrect roots) when the truncated region was later refilled with
+    different data, e.g. when re-scanning a divergent chain after a reorg.
+  - When the truncation position falls in the interior of a pruned subtree
+    whose leaves have been merged into a single hash, the merged node (whose
+    hash incorporates discarded data, and whose constituent parts cannot be
+    recovered) is now replaced by `Nil` instead of the truncation being
+    refused. Previously `ShardTree::truncate_to_checkpoint` reacted to the
+    refusal by silently skipping the shard and checkpoint truncation — after
+    having already truncated the cap — while still reporting success.
+- `ShardTree::truncate_to_checkpoint` and
+  `ShardTree::truncate_to_checkpoint_depth` now always remove the shards,
+  and the checkpoints, that lie beyond the checkpoint being truncated to,
+  even if the boundary shard itself is absent from the store.
+
 ## [0.7.0] - 2026-07-09
 
 ### Added
