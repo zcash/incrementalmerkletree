@@ -1497,6 +1497,76 @@ mod tests {
     }
 
     #[test]
+    fn truncate_to_position_discards_annotations() {
+        // A cached annotation on a parent node is a hash over the parent's complete
+        // subtree — including any data above the truncation position — so truncation
+        // along a path through an annotated parent must discard the annotation.
+        let t: LocatedPrunableTree<String> = LocatedTree {
+            root_addr: Address::from_parts(Level::from(2), 0),
+            root: Tree::parent(
+                Some(Arc::new("abcd".to_string())),
+                parent(
+                    leaf(("a".to_string(), RetentionFlags::EPHEMERAL)),
+                    leaf(("b".to_string(), RetentionFlags::EPHEMERAL)),
+                ),
+                parent(
+                    leaf(("c".to_string(), RetentionFlags::EPHEMERAL)),
+                    leaf(("d".to_string(), RetentionFlags::EPHEMERAL)),
+                ),
+            ),
+        };
+
+        let truncated = t
+            .truncate_to_position(Position::from(1))
+            .expect("position is in range");
+        assert_eq!(
+            truncated.root,
+            Tree::parent(
+                None,
+                parent(
+                    leaf(("a".to_string(), RetentionFlags::EPHEMERAL)),
+                    leaf(("b".to_string(), RetentionFlags::EPHEMERAL)),
+                ),
+                nil()
+            )
+        );
+
+        // Truncating at the tree's max position removes nothing: the tree is retained
+        // unchanged, including its cached annotations.
+        let untouched = t
+            .truncate_to_position(Position::from(3))
+            .expect("position is in range");
+        assert_eq!(untouched.root, t.root);
+    }
+
+    #[test]
+    fn truncate_to_position_fails_inside_pruned_subtree() {
+        // When the truncation position falls in the interior of a pruned subtree whose
+        // leaves have been merged into a single hash, the merged hash incorporates data
+        // above the truncation position and its constituent parts cannot be recovered:
+        // truncation at that position must be refused. It is the caller's responsibility
+        // to select a position at which truncation is possible.
+        let t: LocatedPrunableTree<String> = LocatedTree {
+            root_addr: Address::from_parts(Level::from(2), 0),
+            root: parent(
+                leaf(("ab".to_string(), RetentionFlags::EPHEMERAL)),
+                leaf(("cd".to_string(), RetentionFlags::EPHEMERAL)),
+            ),
+        };
+
+        assert_eq!(t.truncate_to_position(Position::from(0)), None);
+
+        // Truncating at the merged node's max position retains it whole.
+        let truncated = t
+            .truncate_to_position(Position::from(1))
+            .expect("position is in range");
+        assert_eq!(
+            truncated.root,
+            parent(leaf(("ab".to_string(), RetentionFlags::EPHEMERAL)), nil())
+        );
+    }
+
+    #[test]
     fn merge_checked() {
         let t0: PrunableTree<String> =
             parent(leaf(("a".to_string(), RetentionFlags::EPHEMERAL)), nil());
