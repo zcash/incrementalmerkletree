@@ -1657,12 +1657,12 @@ mod tests {
 
     use crate::{
         error::{QueryError, ShardTreeError},
-        store::{memory::MemoryShardStore, ShardStore},
+        store::{memory::MemoryShardStore, Checkpoint, ShardStore},
         testing::{
             arb_char_str, arb_shard_layout, arb_shardtree_sized, check_shard_sizes,
             check_shardtree_insertion, check_witness_with_pruned_subtrees,
         },
-        InsertionError, LocatedPrunableTree, LocatedTree, ShardTree,
+        InsertionError, LocatedPrunableTree, LocatedTree, RetentionFlags, ShardTree, Tree,
     };
 
     #[test]
@@ -2484,6 +2484,131 @@ mod tests {
         assert_matches!(
             tree2.insert_frontier_nodes::<()>(frontier, &Retention::Ephemeral),
             Err(InsertionError::Conflict(_))
+        );
+    }
+
+    #[test]
+    fn truncate_to_checkpoint_discards_stale_annotations() {
+        // Regression test: `LocatedPrunableTree::truncate_to_position` reconstructed
+        // the parent nodes along the truncation path with their cached root annotations
+        // intact. Such an annotation is a hash over the parent's complete subtree —
+        // including the data being truncated away — so a retained annotation caused
+        // spurious `Conflict` errors (or silently incorrect roots) once the truncated
+        // region was refilled with different data, as happens when a wallet re-scans a
+        // divergent chain after a reorg.
+        let mut tree = empty_tree::<String, 4, 2>();
+
+        // The original chain: leaves at positions 0..=5, checkpointed at positions 4
+        // and 5.
+        for (leaf, retention) in [
+            ("a", Retention::Ephemeral),
+            ("b", Retention::Ephemeral),
+            ("c", Retention::Ephemeral),
+            ("d", Retention::Ephemeral),
+            (
+                "e",
+                Retention::Checkpoint {
+                    id: 1,
+                    marking: Marking::None,
+                },
+            ),
+            (
+                "f",
+                Retention::Checkpoint {
+                    id: 2,
+                    marking: Marking::None,
+                },
+            ),
+        ] {
+            tree.append(leaf.to_string(), retention).unwrap();
+        }
+
+        // Inserting a frontier at position 6 (as a wallet does with the chain state at
+        // the start of each scanned batch) writes the frontier's ommers into the tree;
+        // the ommer covering positions 4..=5 is recorded as a cached annotation on the
+        // existing parent node for those positions.
+        tree.insert_frontier(
+            Frontier::from_parts(
+                Position::from(6),
+                "g".to_string(),
+                vec!["ef".to_string(), "abcd".to_string()],
+            )
+            .unwrap(),
+            Retention::Checkpoint {
+                id: 3,
+                marking: Marking::None,
+            },
+        )
+        .unwrap();
+
+        // Truncate back to the checkpoint at position 4, discarding the data at
+        // positions 5 and 6.
+        assert!(tree.truncate_to_checkpoint(&1).unwrap());
+
+        // On the divergent chain, positions 5 and 6 hold different leaves. Inserting
+        // its frontier must succeed: nothing of the discarded chain may remain in the
+        // tree to conflict with the replacement data.
+        tree.insert_frontier(
+            Frontier::from_parts(
+                Position::from(6),
+                "y".to_string(),
+                vec!["ex".to_string(), "abcd".to_string()],
+            )
+            .unwrap(),
+            Retention::Checkpoint {
+                id: 4,
+                marking: Marking::None,
+            },
+        )
+        .unwrap();
+
+        // The tree's state at the new checkpoint reflects the divergent chain.
+        assert_eq!(
+            tree.root_at_checkpoint_id(&4).unwrap(),
+            Some("abcdexy_________".to_string()),
+        );
+    }
+
+    #[test]
+    fn truncate_to_checkpoint_within_pruned_subtree() {
+        // Regression test: when the checkpoint's position fell in the interior of a
+        // pruned subtree (a merged hash node), `truncate_to_position` returned `None`,
+        // and `truncate_to_checkpoint` reacted by silently skipping the shard and
+        // checkpoint truncation — after having already truncated the cap — while still
+        // reporting success, leaving all post-checkpoint state in place.
+        let mut tree = empty_tree::<String, 4, 2>();
+        tree.store
+            .put_shard(LocatedTree {
+                root_addr: Address::from_parts(Level::from(2), 0),
+                root: Tree::parent(
+                    None,
+                    Tree::leaf(("ab".to_string(), RetentionFlags::EPHEMERAL)),
+                    Tree::leaf(("cd".to_string(), RetentionFlags::EPHEMERAL)),
+                ),
+            })
+            .unwrap();
+        tree.store
+            .add_checkpoint(1, Checkpoint::at_position(Position::from(0)))
+            .unwrap();
+        tree.store
+            .add_checkpoint(2, Checkpoint::at_position(Position::from(3)))
+            .unwrap();
+
+        assert!(tree.truncate_to_checkpoint(&1).unwrap());
+
+        // The checkpoint at position 3 must have been removed...
+        assert_eq!(tree.store.checkpoint_count().unwrap(), 1);
+
+        // ...and no data above position 0 may survive. The merged node containing
+        // position 0 incorporates data above the truncation position, so it is
+        // discarded along with everything else; its contents can be restored by
+        // re-insertion.
+        assert_eq!(
+            tree.store
+                .get_shard(Address::from_parts(Level::from(2), 0))
+                .unwrap()
+                .map(|s| s.root),
+            Some(Tree::empty()),
         );
     }
 
