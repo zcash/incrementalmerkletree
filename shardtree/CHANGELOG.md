@@ -5,6 +5,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to Rust's notion of
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Fixed
+- Checkpoint truncation now discards cached cap roots that commit to positions
+  beyond the checkpoint, so replacement commitments produce the correct root.
+
 ## [0.7.0] - 2026-07-09
 
 ### Added
@@ -42,9 +48,6 @@ and this project adheres to Rust's notion of
   retained anchors interleaved with the checkpoints being pruned. Repeated
   checkpoints sharing a tree position, as a stalled chain produces, triggered it
   within a single pruning window.
-- Checkpoint truncation now discards cached cap roots that commit to positions
-  beyond the checkpoint, so replacement commitments produce the correct root.
-
 
 ## [0.6.2] - 2026-02-20
 
