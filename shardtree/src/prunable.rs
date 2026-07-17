@@ -731,12 +731,20 @@ where
         }
     }
 
-    /// Prunes this tree by replacing all nodes that are right-hand children along the path
-    /// to the specified position with [`Node::Nil`].
+    /// Truncates this tree by discarding all data at positions greater than `position`.
     ///
-    /// The leaf at the specified position is retained. Returns the truncated tree if a leaf or
-    /// subtree root with the specified position as its maximum position exists, or `None`
-    /// otherwise.
+    /// The leaf at `position`, and all data at lesser positions, is retained. Cached root
+    /// annotations of parent nodes whose subtrees lose data in the truncation are discarded,
+    /// since such an annotation is a hash over the parent's complete subtree, including the
+    /// discarded data; subtrees lying entirely at or below `position` are retained unmodified,
+    /// annotations included.
+    ///
+    /// Truncation is only possible at a position that the tree individually represents:
+    /// returns `None` if `position` is outside the position range of this tree, if it falls in
+    /// the interior of a pruned subtree whose leaves have been merged into a single hash (the
+    /// hash incorporates data beyond `position`, and its constituent parts cannot be
+    /// recovered), or if the tree contains no data at `position`. It is the caller's
+    /// responsibility to select a position at which truncation is possible.
     pub fn truncate_to_position(&self, position: Position) -> Option<Self> {
         /// Pre-condition: `root_addr` must be the address of `root`.
         fn go<H>(
@@ -747,8 +755,19 @@ where
         where
             H: Hashable + Clone + PartialEq,
         {
+            if root_addr.max_position() <= position {
+                // Nothing above `position` exists within this subtree, so it is retained
+                // unmodified, along with any cached root annotation.
+                return Some(root.clone());
+            }
             match &root.0 {
-                Node::Parent { ann, left, right } => {
+                Node::Parent {
+                    ann: _,
+                    left,
+                    right,
+                } => {
+                    // This node's subtree loses data in the truncation, so any cached root
+                    // annotation for it (a hash over its complete subtree) is discarded.
                     let (l_child, r_child) = root_addr
                         .children()
                         .expect("has children because we checked `root` is a parent");
@@ -756,25 +775,25 @@ where
                         // we are truncating within the range of the left node, so recurse
                         // to the left to truncate the left child and then reconstruct the
                         // node with `Nil` as the right sibling
-                        go(position, l_child, left.as_ref()).map(|left| {
-                            Tree::unite(l_child.level(), ann.clone(), left, Tree::empty())
-                        })
+                        go(position, l_child, left.as_ref())
+                            .map(|left| Tree::unite(l_child.level(), None, left, Tree::empty()))
                     } else {
                         // we are truncating within the range of the right node, so recurse
                         // to the right to truncate the right child and then reconstruct the
                         // node with the left sibling unchanged
                         go(position, r_child, right.as_ref()).map(|right| {
-                            Tree::unite(r_child.level(), ann.clone(), left.as_ref().clone(), right)
+                            Tree::unite(r_child.level(), None, left.as_ref().clone(), right)
                         })
                     }
                 }
-                Node::Leaf { .. } => {
-                    if root_addr.max_position() <= position {
-                        Some(root.clone())
-                    } else {
-                        None
-                    }
-                }
+                // The truncation position falls in the interior of a pruned subtree whose
+                // leaves have been merged into a single hash (the guard above establishes
+                // that this subtree extends beyond `position`). The merged hash incorporates
+                // data beyond the truncation position, and the constituent parts from which
+                // a replacement hash could be computed are unrecoverable, so truncation at
+                // this position is not possible.
+                Node::Leaf { .. } => None,
+                // The tree contains no data at `position`.
                 Node::Nil => None,
             }
         }
@@ -786,6 +805,53 @@ where
             })
         } else {
             None
+        }
+    }
+
+    /// Removes cached nodes and annotations that commit to positions beyond `position`.
+    ///
+    /// Unlike [`Self::truncate_to_position`], this may discard a cached leaf that spans the
+    /// boundary because the underlying shard data remains authoritative.
+    pub(crate) fn truncate_cache_to_position(&self, position: Position) -> Self {
+        /// Pre-condition: `root_addr` must be the address of `root`.
+        fn go<H>(position: Position, root_addr: Address, root: &PrunableTree<H>) -> PrunableTree<H>
+        where
+            H: Hashable + Clone + PartialEq,
+        {
+            if position < root_addr.position_range_start() {
+                Tree::empty()
+            } else if root_addr.max_position() <= position {
+                root.clone()
+            } else {
+                match &root.0 {
+                    Node::Parent { left, right, .. } => {
+                        let (l_child, r_child) = root_addr
+                            .children()
+                            .expect("has children because we checked `root` is a parent");
+                        if position < r_child.position_range_start() {
+                            Tree::unite(
+                                l_child.level(),
+                                None,
+                                go(position, l_child, left.as_ref()),
+                                Tree::empty(),
+                            )
+                        } else {
+                            Tree::unite(
+                                l_child.level(),
+                                None,
+                                left.as_ref().clone(),
+                                go(position, r_child, right.as_ref()),
+                            )
+                        }
+                    }
+                    Node::Leaf { .. } | Node::Nil => Tree::empty(),
+                }
+            }
+        }
+
+        LocatedTree {
+            root_addr: self.root_addr,
+            root: go(position, self.root_addr, &self.root),
         }
     }
 
@@ -1304,6 +1370,7 @@ fn accumulate_result_with<A, B, C>(
 mod tests {
     use assert_matches::assert_matches;
     use std::collections::{BTreeMap, BTreeSet};
+    use std::sync::Arc;
 
     use incrementalmerkletree::{frontier::NonEmptyFrontier, Address, Level, Position};
     use proptest::proptest;
@@ -1315,7 +1382,7 @@ mod tests {
         testing::{arb_char_str, arb_prunable_tree},
         tree::{
             tests::{leaf, nil, parent},
-            LocatedTree,
+            LocatedTree, Tree,
         },
     };
 
@@ -1387,6 +1454,157 @@ mod tests {
                 leaf(("ab".to_string(), RetentionFlags::EPHEMERAL))
             )
         );
+    }
+
+    #[test]
+    fn truncate_cache_to_position_discards_nodes_that_span_cut() {
+        let root_addr = Address::from_parts(2.into(), 0);
+        let tree: LocatedPrunableTree<String> = LocatedTree {
+            root_addr,
+            root: parent(
+                parent(
+                    leaf(("a".to_string(), RetentionFlags::EPHEMERAL)),
+                    leaf(("b".to_string(), RetentionFlags::EPHEMERAL)),
+                ),
+                leaf(("cd".to_string(), RetentionFlags::EPHEMERAL)),
+            ),
+        };
+        assert_eq!(
+            tree.truncate_cache_to_position(Position::from(2)),
+            LocatedTree {
+                root_addr,
+                root: parent(
+                    parent(
+                        leaf(("a".to_string(), RetentionFlags::EPHEMERAL)),
+                        leaf(("b".to_string(), RetentionFlags::EPHEMERAL)),
+                    ),
+                    nil(),
+                ),
+            }
+        );
+
+        let annotated: LocatedPrunableTree<String> = LocatedTree {
+            root_addr,
+            root: Tree::parent(
+                Some(Arc::new("abcd".to_string())),
+                Tree::parent(
+                    Some(Arc::new("ab".to_string())),
+                    leaf(("a".to_string(), RetentionFlags::EPHEMERAL)),
+                    leaf(("b".to_string(), RetentionFlags::EPHEMERAL)),
+                ),
+                parent(
+                    leaf(("c".to_string(), RetentionFlags::EPHEMERAL)),
+                    leaf(("d".to_string(), RetentionFlags::EPHEMERAL)),
+                ),
+            ),
+        };
+        assert_eq!(
+            annotated.truncate_cache_to_position(Position::from(2)),
+            LocatedTree {
+                root_addr,
+                root: Tree::parent(
+                    None,
+                    Tree::parent(
+                        Some(Arc::new("ab".to_string())),
+                        leaf(("a".to_string(), RetentionFlags::EPHEMERAL)),
+                        leaf(("b".to_string(), RetentionFlags::EPHEMERAL)),
+                    ),
+                    parent(leaf(("c".to_string(), RetentionFlags::EPHEMERAL)), nil()),
+                ),
+            }
+        );
+    }
+
+    #[test]
+    fn truncate_to_position_discards_annotations() {
+        // A cached annotation on a parent node is a hash over the parent's complete
+        // subtree — including any data above the truncation position — so truncation
+        // along a path through an annotated parent must discard the annotation.
+        let t: LocatedPrunableTree<String> = LocatedTree {
+            root_addr: Address::from_parts(Level::from(2), 0),
+            root: Tree::parent(
+                Some(Arc::new("abcd".to_string())),
+                parent(
+                    leaf(("a".to_string(), RetentionFlags::EPHEMERAL)),
+                    leaf(("b".to_string(), RetentionFlags::EPHEMERAL)),
+                ),
+                parent(
+                    leaf(("c".to_string(), RetentionFlags::EPHEMERAL)),
+                    leaf(("d".to_string(), RetentionFlags::EPHEMERAL)),
+                ),
+            ),
+        };
+
+        let truncated = t
+            .truncate_to_position(Position::from(1))
+            .expect("position is in range");
+        assert_eq!(
+            truncated.root,
+            Tree::parent(
+                None,
+                parent(
+                    leaf(("a".to_string(), RetentionFlags::EPHEMERAL)),
+                    leaf(("b".to_string(), RetentionFlags::EPHEMERAL)),
+                ),
+                nil()
+            )
+        );
+
+        // Truncating at the tree's max position removes nothing: the tree is retained
+        // unchanged, including its cached annotations.
+        let untouched = t
+            .truncate_to_position(Position::from(3))
+            .expect("position is in range");
+        assert_eq!(untouched.root, t.root);
+    }
+
+    #[test]
+    fn truncate_to_position_fails_inside_pruned_subtree() {
+        // When the truncation position falls in the interior of a pruned subtree whose
+        // leaves have been merged into a single hash, the merged hash incorporates data
+        // above the truncation position and its constituent parts cannot be recovered:
+        // truncation at that position must be refused. It is the caller's responsibility
+        // to select a position at which truncation is possible.
+        let t: LocatedPrunableTree<String> = LocatedTree {
+            root_addr: Address::from_parts(Level::from(2), 0),
+            root: parent(
+                leaf(("ab".to_string(), RetentionFlags::EPHEMERAL)),
+                leaf(("cd".to_string(), RetentionFlags::EPHEMERAL)),
+            ),
+        };
+
+        assert_eq!(t.truncate_to_position(Position::from(0)), None);
+
+        // Truncating at the merged node's max position retains it whole.
+        let truncated = t
+            .truncate_to_position(Position::from(1))
+            .expect("position is in range");
+        assert_eq!(
+            truncated.root,
+            parent(leaf(("ab".to_string(), RetentionFlags::EPHEMERAL)), nil())
+        );
+    }
+
+    #[test]
+    fn truncate_cache_to_position_discards_boundary_spanning_nodes() {
+        // The cache variant used for the cap discards a node whose merged hash spans
+        // the truncation boundary, along with everything above it, instead of refusing
+        // as `truncate_to_position` does on the same tree: every node in such a
+        // structure is a cache of data recoverable from elsewhere.
+        let t: LocatedPrunableTree<String> = LocatedTree {
+            root_addr: Address::from_parts(Level::from(2), 0),
+            root: parent(
+                leaf(("ab".to_string(), RetentionFlags::EPHEMERAL)),
+                leaf(("cd".to_string(), RetentionFlags::EPHEMERAL)),
+            ),
+        };
+
+        assert_eq!(t.truncate_cache_to_position(Position::from(0)).root, nil());
+        assert_eq!(
+            t.truncate_cache_to_position(Position::from(1)).root,
+            parent(leaf(("ab".to_string(), RetentionFlags::EPHEMERAL)), nil())
+        );
+        assert_eq!(t.truncate_cache_to_position(Position::from(3)).root, t.root);
     }
 
     #[test]
