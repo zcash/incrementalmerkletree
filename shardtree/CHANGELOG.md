@@ -5,6 +5,31 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to Rust's notion of
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+## [0.7.1] - 2026-07-17
+
+### Fixed
+- Checkpoint truncation now discards cached cap roots that commit to positions
+  beyond the checkpoint, so replacement commitments produce the correct root.
+- `shardtree::LocatedPrunableTree::truncate_to_position` no longer retains the
+  cached root annotations of the parent nodes it reconstructs along the
+  truncation path. Such an annotation is a hash over the parent's complete
+  subtree — including the data being truncated away — and a stale annotation
+  caused spurious `Insert(Conflict(..))` errors (or silently incorrect roots)
+  when the truncated region was later refilled with different data, e.g. when
+  re-scanning a divergent chain after a reorg.
+- `ShardTree::truncate_to_checkpoint` and
+  `ShardTree::truncate_to_checkpoint_depth` now fail with
+  `QueryError::CheckpointPruned`, leaving the store unmodified, when the leaf
+  at the checkpoint's position is not individually represented in the tree
+  (because it has been pruned into a merged hash, or removed entirely):
+  truncation at such a position would have to discard retained data along with
+  the requested suffix. Previously the shard and checkpoint truncation was
+  silently skipped — after the cap had already been modified — while still
+  reporting success, leaving the store internally inconsistent with all
+  post-checkpoint state in place.
+
 ## [0.7.0] - 2026-07-09
 
 ### Added
@@ -42,7 +67,6 @@ and this project adheres to Rust's notion of
   retained anchors interleaved with the checkpoints being pruned. Repeated
   checkpoints sharing a tree position, as a stalled chain produces, triggered it
   within a single pruning window.
-
 
 ## [0.6.2] - 2026-02-20
 
