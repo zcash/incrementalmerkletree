@@ -7,6 +7,8 @@ and this project adheres to Rust's notion of
 
 ## [Unreleased]
 
+## [0.7.1] - 2026-07-17
+
 ### Fixed
 - Checkpoint truncation now discards cached cap roots that commit to positions
   beyond the checkpoint, so replacement commitments produce the correct root.
