@@ -16,8 +16,8 @@ user-login = "nuttycom"
 user-name = "Kris Nuttycombe"
 
 [[publisher.shardtree]]
-version = "0.7.0"
-when = "2026-07-09"
+version = "0.7.1"
+when = "2026-07-17"
 user-id = 169181
 user-login = "nuttycom"
 user-name = "Kris Nuttycombe"
