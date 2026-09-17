@@ -142,11 +142,10 @@ impl fmt::Display for MergeError {
         match &self {
             MergeError::Conflict(addr) => write!(
                 f,
-                "Inserted root conflicts with existing root at address {:?}",
-                addr
+                "Inserted root conflicts with existing root at address {addr:?}"
             ),
             MergeError::TreeMalformed(addr) => {
-                write!(f, "Merge input malformed at address {:?}", addr)
+                write!(f, "Merge input malformed at address {addr:?}")
             }
         }
     }
@@ -174,7 +173,7 @@ where
     pub fn is_marked_leaf(&self) -> bool {
         self.0
             .leaf_value()
-            .map_or(false, |(_, retention)| retention.is_marked())
+            .is_some_and(|(_, retention)| retention.is_marked())
     }
 
     /// Returns `true` if it is possible to compute or retrieve the Merkle root of this

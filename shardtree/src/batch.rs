@@ -417,8 +417,6 @@ where
 
 #[cfg(test)]
 mod tests {
-    use std::iter;
-
     use incrementalmerkletree::{Address, Level, Position, Retention};
 
     use super::{LocatedPrunableTree, RetentionFlags};
@@ -548,9 +546,8 @@ mod tests {
 
         for i in 0..64 {
             let num_leaves = i + 1;
-            let leaves = iter::repeat(("a".into(), Retention::Ephemeral))
-                .take(num_leaves)
-                .collect();
+            let leaves =
+                std::iter::repeat_n(("a".into(), Retention::Ephemeral), num_leaves).collect();
             let expected_root = (0..64)
                 .map(|c| if c < num_leaves { 'a' } else { '_' })
                 .fold(String::with_capacity(64), |mut acc, c| {

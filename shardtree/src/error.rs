@@ -41,8 +41,7 @@ where
             ShardTreeError::Storage(s) => {
                 write!(
                     f,
-                    "An error occurred persisting or retrieving tree data: {}",
-                    s
+                    "An error occurred persisting or retrieving tree data: {s}"
                 )
             }
         }
@@ -90,26 +89,21 @@ impl fmt::Display for InsertionError {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match &self {
             InsertionError::NotContained(addr) => {
-                write!(f, "Tree does not contain a root at address {:?}", addr)
+                write!(f, "Tree does not contain a root at address {addr:?}")
             }
             InsertionError::OutOfRange(p, r) => {
-                write!(
-                    f,
-                    "Attempted insertion point {:?} is not in range {:?}",
-                    p, r
-                )
+                write!(f, "Attempted insertion point {p:?} is not in range {r:?}")
             }
             InsertionError::Conflict(addr) => write!(
                 f,
-                "Inserted root conflicts with existing root at address {:?}",
-                addr
+                "Inserted root conflicts with existing root at address {addr:?}"
             ),
             InsertionError::CheckpointOutOfOrder => {
                 write!(f, "Cannot append out-of-order checkpoint identifier.")
             }
             InsertionError::TreeFull => write!(f, "Note commitment tree is full."),
             InsertionError::InputMalformed(addr) => {
-                write!(f, "Input malformed for insertion at address {:?}", addr)
+                write!(f, "Input malformed for insertion at address {addr:?}")
             }
             InsertionError::MarkedRetentionInvalid => {
                 write!(f, "Cannot use `Marked` retention for the empty tree.")
@@ -142,7 +136,7 @@ impl fmt::Display for QueryError {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match &self {
             QueryError::NotContained(addr) => {
-                write!(f, "Tree does not contain a root at address {:?}", addr)
+                write!(f, "Tree does not contain a root at address {addr:?}")
             }
             QueryError::CheckpointPruned => {
                 write!(
@@ -153,8 +147,7 @@ impl fmt::Display for QueryError {
             QueryError::TreeIncomplete(addrs) => {
                 write!(
                     f,
-                    "Unable to compute root; missing values for nodes {:?}",
-                    addrs
+                    "Unable to compute root; missing values for nodes {addrs:?}"
                 )
             }
         }
