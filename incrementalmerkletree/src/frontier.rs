@@ -10,8 +10,8 @@ use {alloc::boxed::Box, alloc::collections::VecDeque, core::iter::repeat};
 use {
     core::num::{NonZeroU64, NonZeroU8},
     rand::{
-        distributions::{Distribution, Standard},
-        Rng, RngCore,
+        distr::{Distribution, StandardUniform},
+        Rng, RngExt,
     },
 };
 
@@ -192,18 +192,18 @@ where
 impl<H> NonEmptyFrontier<H>
 where
     H: Hashable + Clone,
-    Standard: Distribution<H>,
+    StandardUniform: Distribution<H>,
 {
     /// Generates a random frontier of a Merkle tree having the specified nonzero size.
     pub fn random_of_size<R>(rng: &mut R, tree_size: NonZeroU64) -> Self
     where
-        R: RngCore,
+        R: Rng,
     {
         let position = (u64::from(tree_size) - 1).into();
         NonEmptyFrontier::from_parts(
             position,
-            rng.gen(),
-            core::iter::repeat_with(|| rng.gen())
+            rng.random(),
+            core::iter::repeat_with(|| rng.random())
                 .take(position.past_ommer_count().into())
                 .collect(),
         )
@@ -216,11 +216,11 @@ where
         subtree_depth: NonZeroU8,
     ) -> (Vec<H>, Self)
     where
-        R: RngCore,
+        R: Rng,
     {
         let prior_subtree_count: u64 = u64::from(tree_size) >> u8::from(subtree_depth);
         if prior_subtree_count > 0 {
-            let prior_roots: Vec<H> = core::iter::repeat_with(|| rng.gen())
+            let prior_roots: Vec<H> = core::iter::repeat_with(|| rng.random())
                 .take(prior_subtree_count as usize)
                 .collect();
 
@@ -398,12 +398,12 @@ where
 impl<H, const DEPTH: u8> Frontier<H, DEPTH>
 where
     H: Hashable + Clone,
-    Standard: Distribution<H>,
+    StandardUniform: Distribution<H>,
 {
     /// Generates a random frontier of a Merkle tree having the specified size.
     pub fn random_of_size<R>(rng: &mut R, tree_size: u64) -> Self
     where
-        R: RngCore,
+        R: Rng,
     {
         assert!(tree_size <= 2u64.checked_pow(DEPTH.into()).unwrap());
         Frontier {
@@ -418,7 +418,7 @@ where
         subtree_depth: NonZeroU8,
     ) -> (Vec<H>, Self)
     where
-        R: RngCore,
+        R: Rng,
     {
         assert!(tree_size <= 2u64.checked_pow(DEPTH.into()).unwrap());
         NonZeroU64::new(tree_size).map_or((vec![], Frontier::empty()), |tree_size| {
@@ -705,7 +705,10 @@ pub mod testing {
     use core::fmt::Debug;
     use proptest::collection::vec;
     use proptest::prelude::*;
-    use rand::{distributions::Standard, prelude::Distribution};
+    use rand::{
+        distr::{Distribution, StandardUniform},
+        Rng, RngExt,
+    };
 
     #[cfg(feature = "std")]
     use {core::hash::Hasher, std::collections::hash_map::DefaultHasher};
@@ -743,12 +746,12 @@ pub mod testing {
         }
     }
 
-    impl Distribution<TestNode> for Standard {
+    impl Distribution<TestNode> for StandardUniform {
         fn sample<R>(&self, rng: &mut R) -> TestNode
         where
             R: Rng + ?Sized,
         {
-            TestNode(rng.gen())
+            TestNode(rng.random())
         }
     }
 

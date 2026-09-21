@@ -7,6 +7,18 @@ and this project adheres to Rust's notion of
 
 ## Unreleased
 
+### Changed
+- MSRV is now 1.88.0.
+- Migrated to `rand 0.10`, `rand_core 0.10`, and `rand_chacha 0.10`.
+- `incrementalmerkletree::frontier` (under the `test-dependencies` feature):
+  - `NonEmptyFrontier::{random_of_size, random_with_prior_subtree_roots}` and
+    `Frontier::{random_of_size, random_with_prior_subtree_roots}` now require
+    `R: rand::Rng` instead of `R: rand::RngCore`, and are available when
+    `rand::distr::StandardUniform: Distribution<H>` (previously
+    `rand::distributions::Standard: Distribution<H>`).
+  - `testing::TestNode` now implements `Distribution` for
+    `rand::distr::StandardUniform` instead of `rand::distributions::Standard`.
+
 ## [0.8.2] - 2025-01-31
 
 ### Added

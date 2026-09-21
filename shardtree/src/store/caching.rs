@@ -1714,9 +1714,7 @@ mod tests {
             let result = check_operations(tree, sample);
             assert!(
                 matches!(result, Ok(())),
-                "Reference/Test mismatch at index {}: {:?}",
-                i,
-                result
+                "Reference/Test mismatch at index {i}: {result:?}"
             );
 
             check_equal(lhs, rhs);
@@ -1824,9 +1822,7 @@ mod tests {
             let result = check_operations(tree, sample);
             assert!(
                 matches!(result, Ok(())),
-                "Reference/Test mismatch at index {}: {:?}",
-                i,
-                result
+                "Reference/Test mismatch at index {i}: {result:?}"
             );
 
             check_equal(lhs, rhs);
@@ -1966,9 +1962,7 @@ mod tests {
             let result = check_operations(tree, sample);
             assert!(
                 matches!(result, Ok(())),
-                "Reference/Test mismatch at index {}: {:?}",
-                i,
-                result
+                "Reference/Test mismatch at index {i}: {result:?}"
             );
 
             check_equal(lhs, rhs);

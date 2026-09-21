@@ -113,18 +113,20 @@ type ArbShardtreeParts<H> = (
     Vec<Position>,
 );
 
+/// A random shardtree of `DEPTH` and `SHARD_HEIGHT` with leaves of type `V`, along with
+/// vectors of the checkpointed and marked positions within the tree.
+type ArbShardtreeSizedParts<V, const DEPTH: u8, const SHARD_HEIGHT: u8> = (
+    ShardTree<MemoryShardStore<V, usize>, DEPTH, SHARD_HEIGHT>,
+    Vec<Position>,
+    Vec<Position>,
+);
+
 /// Constructs a random shardtree of `DEPTH` and `SHARD_HEIGHT`, of size up to
 /// 2^`DEPTH`. Returns the tree, along with vectors of the checkpointed and
 /// marked positions.
 pub fn arb_shardtree_sized<H, const DEPTH: u8, const SHARD_HEIGHT: u8>(
     arb_leaf: H,
-) -> impl Strategy<
-    Value = (
-        ShardTree<MemoryShardStore<H::Value, usize>, DEPTH, SHARD_HEIGHT>,
-        Vec<Position>,
-        Vec<Position>,
-    ),
->
+) -> impl Strategy<Value = ArbShardtreeSizedParts<H::Value, DEPTH, SHARD_HEIGHT>>
 where
     H: Strategy + Clone,
     H::Value: Hashable + Clone + PartialEq,
@@ -252,35 +254,35 @@ impl<
         match ShardTree::append(self, value, retention) {
             Ok(_) => true,
             Err(ShardTreeError::Insert(InsertionError::TreeFull)) => false,
-            Err(other) => panic!("append failed due to error: {:?}", other),
+            Err(other) => panic!("append failed due to error: {other:?}"),
         }
     }
 
     fn current_position(&self) -> Option<Position> {
         match ShardTree::max_leaf_position(self, None) {
             Ok(v) => v,
-            Err(err) => panic!("current position query failed: {:?}", err),
+            Err(err) => panic!("current position query failed: {err:?}"),
         }
     }
 
     fn get_marked_leaf(&self, position: Position) -> Option<H> {
         match ShardTree::get_marked_leaf(self, position) {
             Ok(v) => v,
-            Err(err) => panic!("marked leaf query failed: {:?}", err),
+            Err(err) => panic!("marked leaf query failed: {err:?}"),
         }
     }
 
     fn marked_positions(&self) -> BTreeSet<Position> {
         match ShardTree::marked_positions(self) {
             Ok(v) => v,
-            Err(err) => panic!("marked positions query failed: {:?}", err),
+            Err(err) => panic!("marked positions query failed: {err:?}"),
         }
     }
 
     fn root(&self, checkpoint_depth: Option<usize>) -> Option<H> {
         match ShardTree::root_at_checkpoint_depth(self, checkpoint_depth) {
             Ok(v) => v,
-            Err(err) => panic!("root computation failed: {:?}", err),
+            Err(err) => panic!("root computation failed: {err:?}"),
         }
     }
 
@@ -292,7 +294,7 @@ impl<
                 | QueryError::TreeIncomplete(_)
                 | QueryError::CheckpointPruned,
             )) => None,
-            Err(err) => panic!("witness computation failed: {:?}", err),
+            Err(err) => panic!("witness computation failed: {err:?}"),
         }
     }
 
@@ -300,11 +302,11 @@ impl<
         let max_checkpoint = self
             .store
             .max_checkpoint_id()
-            .unwrap_or_else(|err| panic!("checkpoint retrieval failed: {:?}", err));
+            .unwrap_or_else(|err| panic!("checkpoint retrieval failed: {err:?}"));
 
         match ShardTree::remove_mark(self, position, max_checkpoint.as_ref()) {
             Ok(result) => result,
-            Err(err) => panic!("mark removal failed: {:?}", err),
+            Err(err) => panic!("mark removal failed: {err:?}"),
         }
     }
 

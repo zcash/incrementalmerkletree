@@ -577,16 +577,14 @@ where
     fn assert_append(&mut self, value: u64, retention: Retention<u64>) {
         assert!(
             self.append(H::from_u64(value), retention.map(|id| C::from_u64(*id))),
-            "append failed for value {}",
-            value
+            "append failed for value {value}"
         );
     }
 
     fn assert_checkpoint(&mut self, value: u64) {
         assert!(
             self.checkpoint(C::from_u64(value)),
-            "checkpoint failed for value {}",
-            value
+            "checkpoint failed for value {value}"
         );
     }
 }
@@ -1150,9 +1148,7 @@ where
         let result = check_operations(new_tree(100), sample);
         assert!(
             matches!(result, Ok(())),
-            "Reference/Test mismatch at index {}: {:?}",
-            i,
-            result
+            "Reference/Test mismatch at index {i}: {result:?}"
         );
     }
 }
@@ -1233,9 +1229,7 @@ where
         let result = check_operations(new_tree(100), sample);
         assert!(
             matches!(result, Ok(())),
-            "Reference/Test mismatch at index {}: {:?}",
-            i,
-            result
+            "Reference/Test mismatch at index {i}: {result:?}"
         );
     }
 }
@@ -1368,9 +1362,7 @@ where
         let result = check_operations(new_tree(100), sample);
         assert!(
             matches!(result, Ok(())),
-            "Reference/Test mismatch at index {}: {:?}",
-            i,
-            result
+            "Reference/Test mismatch at index {i}: {result:?}"
         );
     }
 }
