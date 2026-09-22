@@ -2327,6 +2327,281 @@ mod tests {
         assert_matches!(tree.store().get_checkpoint(&1), Ok(None));
     }
 
+    #[test]
+    fn retained_anchors_recorded_before_creation_golden() {
+        // Golden vectors for the corner where anchor retention is recorded *before* the
+        // checkpoints exist, and where the marked leaf's own checkpoint is later pruned. Two
+        // anchors (ids 0 and 3) are retained on an empty tree; twelve leaves are then appended,
+        // each its own checkpoint, and the leaf at position 1 is marked. With `max_checkpoints`
+        // of 2, checkpoint 1 — the marked leaf's checkpoint — is pruned, yet the mark, the
+        // retained anchors, and the witness anchored at checkpoint 3 must survive with exact,
+        // known values. `String` hashing here is concatenation, with `_` as the empty leaf, so an
+        // empty subtree of `2^k` leaves is `k` doublings of `_`.
+        let mut tree =
+            ShardTree::<MemoryShardStore<String, usize>, 6, 3>::new(MemoryShardStore::empty(), 2);
+
+        // Retain both anchors before any checkpoint with those ids exists.
+        tree.ensure_retained(0).unwrap();
+        tree.ensure_retained(3).unwrap();
+
+        for (pos, c) in ('a'..='l').enumerate() {
+            let marking = if pos == 1 {
+                Marking::Marked
+            } else {
+                Marking::None
+            };
+            tree.append(c.to_string(), Retention::Checkpoint { id: pos, marking })
+                .unwrap();
+        }
+
+        // Anchors 0 (the deepest checkpoint) and 3 survive; checkpoint 1 — non-retained, and the
+        // marked leaf's own checkpoint — is pruned.
+        assert_matches!(tree.store().get_checkpoint(&0), Ok(Some(_)));
+        assert_matches!(tree.store().get_checkpoint(&3), Ok(Some(_)));
+        assert_matches!(tree.store().get_checkpoint(&1), Ok(None));
+
+        // The root as of the deepest anchor (one leaf, "a") is exactly "a" padded with empties.
+        assert_eq!(
+            tree.root_at_checkpoint_id(&0).unwrap(),
+            Some(format!("a{}", "_".repeat(63)))
+        );
+
+        // The witness for the marked leaf at position 1, as of anchor 3 (four leaves committed),
+        // has a fixed path, even though checkpoint 1 was pruned.
+        let expected_path: Vec<String> = [
+            "a",
+            "cd",
+            "____",
+            "________",
+            "________________",
+            "________________________________",
+        ]
+        .iter()
+        .map(|s| s.to_string())
+        .collect();
+        let witness = tree
+            .witness_at_checkpoint_id(Position::from(1), &3)
+            .unwrap()
+            .expect("the marked leaf's witness survives its checkpoint being pruned");
+        assert_eq!(witness.path_elems(), expected_path.as_slice());
+
+        // The root as of anchor 3 (leaves a,b,c,d committed) is fixed and consistent with that
+        // witness.
+        let anchor_root = tree
+            .root_at_checkpoint_id(&3)
+            .unwrap()
+            .expect("the retained anchor's root remains computable");
+        assert_eq!(anchor_root, format!("abcd{}", "_".repeat(60)));
+        assert_eq!(
+            anchor_root,
+            compute_root_from_witness("b".to_string(), Position::from(1), witness.path_elems())
+        );
+    }
+
+    #[test]
+    fn retained_anchors_survive_single_batch_insert_prune() {
+        // `batch_insert` (like `insert_tree`) adds every checkpoint in the batch and then prunes
+        // exactly once. Anchors registered via `ensure_retained` *before* that single batch must
+        // all be exempt from that one prune, at and above the checkpoint budget. Registering them
+        // afterward is too late: the batch's prune has already run. `id == position` throughout,
+        // and the leaf at position 0 is marked.
+        let make_batch = |n: usize| -> Vec<(String, Retention<usize>)> {
+            (0..n)
+                .map(|id| {
+                    let marking = if id == 0 {
+                        Marking::Marked
+                    } else {
+                        Marking::None
+                    };
+                    (format!("l{id}"), Retention::Checkpoint { id, marking })
+                })
+                .collect()
+        };
+
+        for max_checkpoints in [1usize, 2, 3] {
+            // Batch checkpoint counts at the budget, just above it, and well above it (the last
+            // crosses shard boundaries at SHARD_HEIGHT 3).
+            for n_checkpoints in [
+                max_checkpoints,
+                max_checkpoints + 1,
+                max_checkpoints * 4 + 3,
+            ] {
+                // Retain every anchor before the batch, then insert the whole batch in one call.
+                let mut tree = ShardTree::<MemoryShardStore<String, usize>, 6, 3>::new(
+                    MemoryShardStore::empty(),
+                    max_checkpoints,
+                );
+                for id in 0..n_checkpoints {
+                    tree.ensure_retained(id).unwrap();
+                }
+                tree.batch_insert(Position::from(0), make_batch(n_checkpoints).into_iter())
+                    .unwrap();
+
+                // No anchor is dropped by the single batch prune, and none consumed the budget, so
+                // the full batch is present.
+                assert_eq!(
+                    tree.store().checkpoint_count().unwrap(),
+                    n_checkpoints,
+                    "an anchor was pruned (max={max_checkpoints}, batch={n_checkpoints})"
+                );
+                for id in 0..n_checkpoints {
+                    assert_matches!(tree.store().get_checkpoint(&id), Ok(Some(_)));
+                    assert!(
+                        tree.root_at_checkpoint_id(&id).unwrap().is_some(),
+                        "anchor {id} lost its root (max={max_checkpoints}, batch={n_checkpoints})"
+                    );
+                }
+                // The marked leaf remains witnessable as of the deepest and newest anchors.
+                for id in [0, n_checkpoints - 1] {
+                    assert!(
+                        tree.witness_at_checkpoint_id(Position::from(0), &id)
+                            .unwrap()
+                            .is_some(),
+                        "marked leaf not witnessable as of anchor {id}"
+                    );
+                }
+
+                // The negative: the same batch with no pre-registration. The single prune keeps
+                // only `max_checkpoints`, so once the batch exceeds the budget the deepest would-be
+                // anchor is already gone, and retaining it afterward cannot bring it back.
+                if n_checkpoints > max_checkpoints {
+                    let mut tree = ShardTree::<MemoryShardStore<String, usize>, 6, 3>::new(
+                        MemoryShardStore::empty(),
+                        max_checkpoints,
+                    );
+                    tree.batch_insert(Position::from(0), make_batch(n_checkpoints).into_iter())
+                        .unwrap();
+                    assert_eq!(tree.store().checkpoint_count().unwrap(), max_checkpoints);
+                    tree.ensure_retained(0).unwrap();
+                    assert_matches!(tree.store().get_checkpoint(&0), Ok(None));
+                }
+            }
+        }
+    }
+
+    proptest! {
+        #![proptest_config(ProptestConfig::with_cases(256))]
+
+        /// Property test for the durable-anchor invariant: a checkpoint marked via
+        /// [`ShardTree::ensure_retained`] is exempt from the `max_checkpoints` prune budget and
+        /// survives an arbitrary run of later checkpoints, with its root and the witnesses for
+        /// marked leaves at or before it remaining computable and root-consistent.
+        ///
+        /// Both registration orderings are exercised:
+        /// - `ahead == true`: retention is recorded *before* the checkpoint exists, so a run of
+        ///   checkpoints larger than the budget cannot prune an anchor before its retention id has
+        ///   been registered.
+        /// - `ahead == false`: retention is recorded immediately after each checkpoint, correct
+        ///   only at the per-append granularity used here.
+        ///
+        /// The generated layout always drives real pruning (`max_checkpoints` is small while many
+        /// checkpoints are created) with prunable checkpoints interleaved between retained anchors,
+        /// and crosses shard boundaries so buried anchors exercise subtree folding. Anchor id 0 —
+        /// the deepest, first-to-be-pruned checkpoint — is always retained, and the marked leaf
+        /// frequently lands on a non-retained checkpoint that is itself pruned, so the mark (and
+        /// thus the witness) must outlive the checkpoint that recorded it.
+        #[test]
+        fn retained_anchor_survives_pruning(
+            (n_leaves, max_checkpoints, retain_stride, ahead, marked_pos) in
+                (8usize..40, 1usize..4, 2usize..7, any::<bool>())
+                    .prop_flat_map(|(n, m, stride, ahead)| {
+                        (Just(n), Just(m), Just(stride), Just(ahead), 0usize..n)
+                    }),
+        ) {
+            use std::collections::BTreeSet;
+
+            let mut tree: ShardTree<MemoryShardStore<String, usize>, 6, 3> =
+                ShardTree::new(MemoryShardStore::empty(), max_checkpoints);
+
+            // One checkpoint per leaf, with `id == position`. Anchors are the checkpoints whose id
+            // is a multiple of `retain_stride`; id 0 is always among them.
+            let retained_ids: Vec<usize> =
+                (0..n_leaves).filter(|id| id % retain_stride == 0).collect();
+
+            // The fixed ordering: record retention for every anchor up front, before any of their
+            // checkpoints exist. `ensure_retained` accepts an id whose checkpoint does not yet
+            // exist, which is exactly what makes recording it ahead of insertion safe.
+            if ahead {
+                for id in &retained_ids {
+                    tree.ensure_retained(*id).unwrap();
+                }
+            }
+
+            let marked_leaf = format!("l{marked_pos}");
+            for pos in 0..n_leaves {
+                let marking = if pos == marked_pos {
+                    Marking::Marked
+                } else {
+                    Marking::None
+                };
+                tree.append(
+                    format!("l{pos}"),
+                    Retention::Checkpoint { id: pos, marking },
+                )
+                .unwrap();
+                // The pre-fix ordering: record retention just after the checkpoint is created,
+                // before the next append's prune runs.
+                if !ahead && pos % retain_stride == 0 {
+                    tree.ensure_retained(pos).unwrap();
+                }
+            }
+
+            // The checkpoints that survived pruning, and the recorded retention set.
+            let checkpoint_count = tree.store().checkpoint_count().unwrap();
+            let mut survivors = BTreeSet::new();
+            tree.store()
+                .for_each_checkpoint(checkpoint_count, |cid, _| {
+                    survivors.insert(*cid);
+                    Ok(())
+                })
+                .unwrap();
+            let retained_set = tree.store().retained_checkpoints().unwrap();
+
+            // The chain-tip checkpoint is never pruned.
+            prop_assert!(survivors.contains(&(n_leaves - 1)));
+
+            for id in &retained_ids {
+                // Every anchor survived, even though far more than `max_checkpoints` checkpoints
+                // were created after it.
+                prop_assert!(
+                    survivors.contains(id),
+                    "retained anchor {id} was pruned (max_checkpoints = {max_checkpoints})"
+                );
+                prop_assert!(tree.store().get_checkpoint(id).unwrap().is_some());
+
+                // The anchor's root remains computable.
+                let anchor_root = tree
+                    .root_at_checkpoint_id(id)
+                    .unwrap()
+                    .expect("a retained anchor's root must remain computable");
+
+                // A witness for the marked leaf, as of any anchor at or after it, remains
+                // computable and consistent with that anchor's root.
+                if *id >= marked_pos {
+                    let position = Position::from(marked_pos as u64);
+                    let witness = tree
+                        .witness_at_checkpoint_id(position, id)
+                        .unwrap()
+                        .expect(
+                            "a witness for a marked leaf as of a retained anchor must remain \
+                             computable",
+                        );
+                    let computed =
+                        compute_root_from_witness(marked_leaf.clone(), position, witness.path_elems());
+                    prop_assert_eq!(anchor_root, computed);
+                }
+            }
+
+            // Retention is exempt from the budget rather than counted against it: the number of
+            // surviving *non-retained* checkpoints never exceeds `max_checkpoints`.
+            let prunable_survivors = survivors.difference(&retained_set).count();
+            prop_assert!(
+                prunable_survivors <= max_checkpoints,
+                "{prunable_survivors} prunable checkpoints exceed the budget of {max_checkpoints}"
+            );
+        }
+    }
+
     // Combined tree tests
     #[allow(clippy::type_complexity)]
     fn new_combined_tree<H>(
