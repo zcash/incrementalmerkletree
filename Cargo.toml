@@ -29,5 +29,5 @@ proptest = "1"
 rand = "0.10"
 rand_chacha = "0.10"
 rand_core = "0.10"
-tempfile = ">=3, <3.7.0" # 3.7 has MSRV 1.63
+tempfile = ">=3, <3.11.0" # 3.7 has MSRV 1.63
 tracing = "0.1"
