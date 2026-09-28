@@ -138,6 +138,95 @@ where
         }
     }
 
+    /// Appends `leaves` in order, equal to [`NonEmptyFrontier::append`] per leaf.
+    ///
+    /// Hashes level by level: each level's new nodes go through one [`Hashable::combine_pairs`]
+    pub fn append_batch<I: IntoIterator<Item = H>>(&mut self, leaves: I) {
+        self.append_batch_inner(leaves, None::<fn(Address, &[H])>);
+    }
+
+    /// As [`NonEmptyFrontier::append_batch`], also passing every node the batch completes to `visit`.
+    ///
+    /// - `visit(first, nodes)`: a run of one level's consecutive nodes, `first` = `nodes[0]`'s address
+    /// - Every node visited once, by the batch holding its last leaf (level 0 = the leaves appended)
+    /// - Extra cost: one hash per trailing one of the new tip's position (nodes the tip completes,
+    ///   which the frontier cannot keep and the next batch hashes again)
+    pub fn append_batch_visiting<I, V>(&mut self, leaves: I, visit: V)
+    where
+        I: IntoIterator<Item = H>,
+        V: FnMut(Address, &[H]),
+    {
+        self.append_batch_inner(leaves, Some(visit));
+    }
+
+    fn append_batch_inner<I, V>(&mut self, leaves: I, mut visit: Option<V>)
+    where
+        I: IntoIterator<Item = H>,
+        V: FnMut(Address, &[H]),
+    {
+        let prior = u64::from(self.position);
+        let mut nodes: Vec<H> = core::iter::once(self.leaf.clone()).chain(leaves).collect();
+        let appended = nodes.len() as u64 - 1;
+        if appended == 0 {
+            return;
+        }
+        if let Some(visit) = visit.as_mut() {
+            visit(Address::from_parts(0.into(), prior + 1), &nodes[1..]);
+        }
+        // new tip stays unhashed, as `append` leaves it
+        self.leaf = nodes.pop().expect("the prior leaf is always present");
+
+        // ommers = complete subtrees of a tree of `position` leaves, one per set bit, ascending
+        let mut size = prior;
+        let mut ommers = core::mem::take(&mut self.ommers).into_iter();
+        let mut carry: Vec<Option<H>> = (0..u64::BITS)
+            .map(|level| match (size >> level) & 1 {
+                1 => ommers.next(),
+                _ => None,
+            })
+            .collect();
+
+        for (level, slot) in carry.iter_mut().enumerate() {
+            if nodes.is_empty() {
+                break;
+            }
+            if let (Some(visit), true) = (visit.as_mut(), level > 0) {
+                // prior tip's complete ancestors: visited by the batch that completed them
+                let seen = usize::from(level as u32 <= prior.trailing_ones());
+                if nodes.len() > seen {
+                    let first = Address::from_parts(Level::from(level as u8), size + seen as u64);
+                    visit(first, &nodes[seen..]);
+                }
+            }
+            let mut children = Vec::with_capacity(nodes.len() + 1);
+            if size % 2 == 1 {
+                children.push(slot.take().expect("an odd size carries a left sibling"));
+            }
+            children.extend(nodes);
+            if children.len() % 2 == 1 {
+                *slot = children.pop();
+            }
+            nodes = H::combine_pairs(Level::from(level as u8), &children);
+            size >>= 1;
+        }
+
+        self.position += appended;
+        self.ommers = carry.into_iter().flatten().collect();
+
+        if let Some(mut visit) = visit {
+            let tip = u64::from(self.position);
+            let mut node = self.leaf.clone();
+            for (level, ommer) in (0..tip.trailing_ones() as u8).zip(&self.ommers) {
+                node = H::combine(level.into(), ommer, &node);
+                let parent = Level::from(level + 1);
+                visit(
+                    Address::from_parts(parent, tip >> (level + 1)),
+                    core::slice::from_ref(&node),
+                );
+            }
+        }
+    }
+
     /// Generate the root of the Merkle tree by hashing against empty subtree roots.
     pub fn root(&self, root_level: Option<Level>) -> H {
         let max_level = root_level.unwrap_or_else(|| self.position.root_level());
@@ -357,6 +446,57 @@ where
             self.frontier = Some(NonEmptyFrontier::new(value));
             true
         }
+    }
+
+    /// Appends `leaves` in order, as [`NonEmptyFrontier::append_batch`].
+    ///
+    /// Returns false, appending nothing, if the tree would exceed `2^DEPTH` leaves
+    pub fn append_batch(&mut self, leaves: Vec<H>) -> bool {
+        self.append_batch_inner(leaves, None::<fn(Address, &[H])>)
+    }
+
+    /// Appends `leaves` in order, as [`NonEmptyFrontier::append_batch_visiting`].
+    ///
+    /// Returns false, appending and visiting nothing, if the tree would exceed `2^DEPTH` leaves
+    pub fn append_batch_visiting<V: FnMut(Address, &[H])>(
+        &mut self,
+        leaves: Vec<H>,
+        visit: V,
+    ) -> bool {
+        self.append_batch_inner(leaves, Some(visit))
+    }
+
+    fn append_batch_inner<V: FnMut(Address, &[H])>(
+        &mut self,
+        leaves: Vec<H>,
+        mut visit: Option<V>,
+    ) -> bool {
+        let capacity = 1u128 << DEPTH.min(64);
+        let current_size = self
+            .frontier
+            .as_ref()
+            .map_or(0, |frontier| u128::from(u64::from(frontier.position())) + 1);
+        if current_size + leaves.len() as u128 > capacity {
+            return false;
+        }
+        let mut leaves = leaves.into_iter();
+        let frontier = match self.frontier.as_mut() {
+            Some(frontier) => frontier,
+            None => match leaves.next() {
+                Some(first) => {
+                    if let Some(visit) = visit.as_mut() {
+                        visit(
+                            Address::from_parts(0.into(), 0),
+                            core::slice::from_ref(&first),
+                        );
+                    }
+                    self.frontier.insert(NonEmptyFrontier::new(first))
+                }
+                None => return true,
+            },
+        };
+        frontier.append_batch_inner(leaves, visit);
+        true
     }
 
     /// Obtains the current root of this Merkle frontier by hashing
@@ -815,6 +955,154 @@ mod tests {
         super::testing::{arb_commitment_tree, arb_test_node},
         proptest::prelude::*,
     };
+
+    /// Every start size and batch length up to past two carries of depth 6, against `append`
+    #[test]
+    fn append_batch_equals_append_per_leaf() {
+        const DEPTH: u8 = 6;
+        let leaf = |i: usize| format!("<{i}>");
+        for start in 0..=40 {
+            for batch in 0..=24 {
+                let mut expected = super::Frontier::<String, DEPTH>::empty();
+                for i in 0..start + batch {
+                    assert!(expected.append(leaf(i)));
+                }
+                let mut batched = super::Frontier::<String, DEPTH>::empty();
+                assert!(batched.append_batch((0..start).map(leaf).collect()));
+                assert!(batched.append_batch((start..start + batch).map(leaf).collect()));
+                assert_eq!(batched, expected, "{start} then {batch}");
+                assert_eq!(batched.root(), expected.root(), "{start} then {batch}");
+            }
+        }
+    }
+
+    /// Three consecutive batches of every small length: every complete node visited exactly once,
+    /// by value (a `String` node = its leaves concatenated), and the frontier = `append`'s
+    #[test]
+    fn append_batch_visiting_visits_every_complete_node_once() {
+        const DEPTH: u8 = 5;
+        let leaf = |i: u64| format!("<{i}>");
+        // 3 × 10 leaves stays within a depth-5 tree's 32
+        for a in 0..=10 {
+            for b in 0..=10 {
+                for c in 0..=10 {
+                    let size = a + b + c;
+                    let mut visited = alloc::collections::BTreeMap::new();
+                    let mut frontier = super::Frontier::<String, DEPTH>::empty();
+                    for range in [0..a, a..a + b, a + b..size] {
+                        assert!(frontier.append_batch_visiting(
+                            range.map(leaf).collect(),
+                            |first, nodes| {
+                                for (index, node) in (first.index()..).zip(nodes) {
+                                    let at = (u8::from(first.level()), index);
+                                    let again = visited.insert(at, node.clone());
+                                    assert_eq!(again, None, "{at:?} visited twice, {a}/{b}/{c}");
+                                }
+                            }
+                        ));
+                    }
+
+                    let mut expected = alloc::collections::BTreeMap::new();
+                    for level in 0..=DEPTH {
+                        for index in 0..size >> level {
+                            let leaves = (index << level)..((index + 1) << level);
+                            expected.insert((level, index), leaves.map(leaf).collect::<String>());
+                        }
+                    }
+                    assert_eq!(visited, expected, "{a}/{b}/{c}");
+
+                    let mut appended = super::Frontier::<String, DEPTH>::empty();
+                    for i in 0..size {
+                        assert!(appended.append(leaf(i)));
+                    }
+                    assert_eq!(frontier, appended, "{a}/{b}/{c}");
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn append_batch_past_capacity_appends_nothing() {
+        let leaves = |range: core::ops::Range<u8>| range.map(|i| i.to_string()).collect();
+        let mut frontier = super::Frontier::<String, 3>::empty();
+        assert!(frontier.append_batch(leaves(0..5)));
+        let before = frontier.clone();
+        assert!(!frontier.append_batch(leaves(5..9)));
+        assert_eq!(frontier, before);
+        assert!(frontier.append_batch(leaves(5..8)));
+        assert_eq!(frontier.root(), "01234567");
+        assert!(!frontier.append_batch(leaves(8..9)));
+    }
+
+    #[test]
+    fn append_batch_depth_128_does_not_overflow_capacity() {
+        let mut frontier = super::Frontier::<String, 128>::empty();
+        assert!(frontier.append_batch(vec!["a".to_string(), "b".to_string()]));
+        assert_eq!(frontier.tree_size(), 2);
+    }
+
+    #[test]
+    fn append_batch_rejects_addition_at_u64_max() {
+        let max_position = Position::from(u64::MAX);
+        let mut frontier = super::Frontier::<String, 64>::from_parts(
+            max_position,
+            "tip".to_string(),
+            vec![String::new(); 64],
+        )
+        .expect("valid frontier");
+        let before = frontier.clone();
+        let mut visits = 0;
+        assert!(!frontier.append_batch_visiting(vec!["next".to_string()], |_, _| visits += 1));
+        assert_eq!(visits, 0);
+        assert_eq!(frontier, before);
+    }
+
+    /// Hashes only through `combine_pairs` (`combine` unreachable)
+    #[derive(Clone, Debug, PartialEq, Eq)]
+    struct PairsOnly(String);
+
+    impl Hashable for PairsOnly {
+        fn empty_leaf() -> Self {
+            PairsOnly(String::empty_leaf())
+        }
+
+        fn combine(_: Level, _: &Self, _: &Self) -> Self {
+            unreachable!("hashed outside combine_pairs")
+        }
+
+        fn combine_pairs(level: Level, children: &[Self]) -> Vec<Self> {
+            children
+                .chunks_exact(2)
+                .map(|pair| PairsOnly(String::combine(level, &pair[0].0, &pair[1].0)))
+                .collect()
+        }
+
+        fn empty_root(level: Level) -> Self {
+            PairsOnly(String::empty_root(level))
+        }
+    }
+
+    #[test]
+    fn append_batch_hashes_through_combine_pairs() {
+        let mut frontier = super::Frontier::<PairsOnly, 5>::empty();
+        let mut expected = super::Frontier::<String, 5>::empty();
+        for batch in [13, 6, 1, 3] {
+            let leaves: Vec<String> = (0..batch).map(|i| format!("<{batch}.{i}>")).collect();
+            let pairs_only = leaves.iter().cloned().map(PairsOnly).collect();
+            assert!(frontier.append_batch(pairs_only));
+            for leaf in leaves {
+                assert!(expected.append(leaf));
+            }
+
+            let actual = frontier.value().expect("frontier is non-empty");
+            let expected = expected.value().expect("frontier is non-empty");
+            assert_eq!(actual.position(), expected.position(), "after {batch}");
+            assert_eq!(actual.leaf().0, *expected.leaf(), "after {batch}");
+            let actual_ommers: Vec<_> = actual.ommers().iter().map(|node| &node.0).collect();
+            let expected_ommers: Vec<_> = expected.ommers().iter().collect();
+            assert_eq!(actual_ommers, expected_ommers, "after {batch}");
+        }
+    }
 
     #[test]
     fn nonempty_frontier_root() {

@@ -670,6 +670,22 @@ pub trait Hashable: fmt::Debug {
     /// producing a new node at level `level + 1`.
     fn combine(level: Level, a: &Self, b: &Self) -> Self;
 
+    /// Combines `children` taken pairwise, producing one node at level `level + 1` per pair.
+    ///
+    /// - Must equal [`Hashable::combine`] on each pair, in order
+    /// - Override to hash a batch faster than one pair at a time
+    /// - Panics if `children` has an odd length
+    fn combine_pairs(level: Level, children: &[Self]) -> Vec<Self>
+    where
+        Self: Sized,
+    {
+        assert!(children.len() % 2 == 0, "children pair up");
+        children
+            .chunks_exact(2)
+            .map(|pair| Self::combine(level, &pair[0], &pair[1]))
+            .collect()
+    }
+
     /// Produces an empty root at the specified level of the tree by combining empty leaf values.
     ///
     /// At each successive level, the value is produced by combining the value at the level below
