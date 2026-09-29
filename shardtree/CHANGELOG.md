@@ -10,6 +10,16 @@ and this project adheres to Rust's notion of
 ### Changed
 - MSRV is now 1.88.0.
 
+### Fixed
+- `shardtree::LocatedPrunableTree::insert_subtree` and
+  `shardtree::PrunableTree::merge_checked` now return a conflict error when a
+  stored root (a pruned leaf, or a cached parent annotation) differs from the
+  root of a complete subtree inserted or merged beneath it. Previously, such
+  an insertion either replaced the stored root or kept it in preference to
+  the root of the inserted leaves. `ShardTree::insert_frontier_nodes`,
+  `ShardTree::insert_tree`, and `ShardTree::batch_insert` return
+  `ShardTreeError::Insert(InsertionError::Conflict(_))` in these cases.
+
 ## [0.7.1] - 2026-07-17
 
 ### Fixed
