@@ -23,6 +23,11 @@ and this project adheres to Rust's notion of
   shard with the root of the requested address when that address is below the
   shard level. Previously, such a call changed the roots reported for the
   tree.
+- `shardtree::ShardTree::root_caching` no longer discards the root stored at a
+  cap node when it computes a truncated root beneath that node. Previously,
+  repeated truncated queries could discard a frontier ommer inserted by
+  `ShardTree::insert_frontier_nodes`, after which the root of the tree could
+  no longer be computed.
 
 ## [0.7.1] - 2026-07-17
 

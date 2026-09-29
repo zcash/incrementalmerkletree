@@ -1053,7 +1053,7 @@ impl<
         // both cases there is no cached subtree to preserve, so compute the root directly
         // from shard data. A Leaf at the target address is intentionally excluded here:
         // when it needs truncation it is expanded and reannotated by the Phase 3 descent,
-        // preserving its cached hash as the replacement Parent's annotation (a cacheable
+        // preserving its hash as the replacement Parent's annotation (a cacheable
         // Leaf at the target is already served by the Phase 1 fast path).
         let at_shard_level =
             cap.root_addr.level() == ShardTree::<S, DEPTH, SHARD_HEIGHT>::subtree_level();
@@ -1077,12 +1077,10 @@ impl<
 
         // Phase 3: Descent — recurse into children and combine results.
 
-        // Save the original leaf value so we can re-annotate the replacement Parent with it,
-        // preserving cached values when a Leaf is expanded.
-        let orig_leaf_value = match &cap.root.0 {
-            Node::Leaf { value } => Some(value.0.clone()),
-            _ => None,
-        };
+        // Save the original node value (a Leaf's hash or a Parent's annotation) so that the
+        // replacement Parent retains it. The value may be a frontier ommer that cannot be
+        // recomputed from the shards.
+        let orig_value = cap.root.node_value().cloned();
 
         // Get children: real children for Parent nodes, empty children for Leaf/Nil.
         let (orig_left, orig_right) = match &cap.root.0 {
@@ -1164,9 +1162,9 @@ impl<
             right: new_right.map_or_else(|| orig_right, Arc::new),
         });
 
-        // If the original node was a Leaf, preserve its hash as the Parent annotation
-        // so that future non-truncated lookups can use it via the fast-path.
-        let replacement = match orig_leaf_value {
+        // Preserve the original node value as the Parent annotation so that future
+        // non-truncated lookups can use it via the fast-path.
+        let replacement = match orig_value {
             Some(h) => new_parent.reannotate_root(Some(Arc::new(h))),
             None => new_parent,
         };
