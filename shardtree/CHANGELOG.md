@@ -19,6 +19,10 @@ and this project adheres to Rust's notion of
   the root of the inserted leaves. `ShardTree::insert_frontier_nodes`,
   `ShardTree::insert_tree`, and `ShardTree::batch_insert` return
   `ShardTreeError::Insert(InsertionError::Conflict(_))` in these cases.
+- `shardtree::ShardTree::root_caching` no longer replaces the cached root of a
+  shard with the root of the requested address when that address is below the
+  shard level. Previously, such a call changed the roots reported for the
+  tree.
 
 ## [0.7.1] - 2026-07-17
 

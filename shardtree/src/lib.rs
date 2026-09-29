@@ -1066,7 +1066,8 @@ impl<
             let root = self.root_from_shards(addr, truncate_at)?;
             return Ok((
                 root.clone(),
-                if cacheable {
+                // Only the root of the cap node itself may replace the cap node.
+                if cacheable && target_contains {
                     Some(Tree::leaf((root, RetentionFlags::EPHEMERAL)))
                 } else {
                     None
