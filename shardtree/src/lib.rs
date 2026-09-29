@@ -197,6 +197,100 @@ impl<
         (0x1 << (DEPTH - SHARD_HEIGHT)) - 1
     }
 
+    /// Writes `shard` to the store, after checking that its root does not conflict with a root
+    /// that the cap holds at or above the shard's address.
+    ///
+    /// The cap can hold roots that the shards do not, such as the ommers of an inserted
+    /// frontier. When `shard` is complete, the lowest cap node on the path to the shard that
+    /// holds a root is compared with the root computed from `shard` and from the sibling
+    /// subtrees along that path. If a sibling subtree is incomplete, the comparison is made
+    /// when the last of those subtrees is completed.
+    fn put_shard_checked(
+        &mut self,
+        shard: LocatedPrunableTree<H>,
+    ) -> Result<(), ShardTreeError<S::Error>> {
+        self.check_shard_against_cap(&shard)?;
+        self.store.put_shard(shard).map_err(ShardTreeError::Storage)
+    }
+
+    fn check_shard_against_cap(
+        &self,
+        shard: &LocatedPrunableTree<H>,
+    ) -> Result<(), ShardTreeError<S::Error>> {
+        /// Returns the lowest node on the path from `addr` to `target` that holds a root.
+        ///
+        /// Pre-condition: `addr` must be the address of `tree`, and must contain `target`.
+        fn lowest_root<H: Hashable + Clone + PartialEq>(
+            addr: Address,
+            tree: &PrunableTree<H>,
+            target: Address,
+        ) -> Option<(Address, H)> {
+            let below = match &tree.0 {
+                Node::Parent { left, right, .. } if addr != target => {
+                    let (l_addr, r_addr) = addr
+                        .children()
+                        .expect("has children because `addr` strictly contains `target`");
+                    if l_addr.contains(&target) {
+                        lowest_root(l_addr, left, target)
+                    } else {
+                        lowest_root(r_addr, right, target)
+                    }
+                }
+                _ => None,
+            };
+            below.or_else(|| tree.node_value().map(|v| (addr, v.clone())))
+        }
+
+        // `is_full` is a cheap necessary condition for a computable root.
+        if !(shard.root.is_full() && shard.root.has_computable_root()) {
+            return Ok(());
+        }
+
+        let cap = LocatedTree {
+            root_addr: Self::root_addr(),
+            root: self.store.get_cap().map_err(ShardTreeError::Storage)?,
+        };
+        let Some((claim_addr, claimed)) = lowest_root(cap.root_addr, &cap.root, shard.root_addr)
+        else {
+            return Ok(());
+        };
+
+        let mut addr = shard.root_addr;
+        let mut root = shard
+            .root_hash(addr.position_range_end())
+            .map_err(|_| ShardTreeError::Insert(InsertionError::InputMalformed(addr)))?;
+        while addr != claim_addr {
+            let sibling = addr.sibling();
+            let sibling_cap = cap
+                .subtree(sibling)
+                .unwrap_or_else(|| LocatedTree::empty(sibling));
+            let sibling_root =
+                match self.root_internal(&sibling_cap, sibling, sibling.position_range_end()) {
+                    Ok((sibling_root, _)) => sibling_root,
+                    Err(ShardTreeError::Query(QueryError::TreeIncomplete(_))) => return Ok(()),
+                    Err(e) => return Err(e),
+                };
+            root = if addr.is_left_child() {
+                H::combine(addr.level(), &root, &sibling_root)
+            } else {
+                H::combine(addr.level(), &sibling_root, &root)
+            };
+            addr = addr.parent();
+        }
+
+        if root == claimed {
+            Ok(())
+        } else {
+            debug!(
+                address = ?claim_addr,
+                cap_root = ?claimed,
+                shard_root = ?root,
+                "Shard conflicts with cap"
+            );
+            Err(ShardTreeError::Insert(InsertionError::Conflict(claim_addr)))
+        }
+    }
+
     /// Returns the leaf value at the specified position, if it is a marked leaf.
     pub fn get_marked_leaf(
         &self,
@@ -325,9 +419,7 @@ impl<
                 .map_err(ShardTreeError::Insert)
                 .map(|(t, _)| t)?;
 
-            self.store
-                .put_shard(updated_shard)
-                .map_err(ShardTreeError::Storage)?;
+            self.put_shard_checked(updated_shard)?;
         }
 
         Ok(())
@@ -375,9 +467,7 @@ impl<
                 LocatedTree::empty(root_addr).append(value, retention)?
             };
 
-        self.store
-            .put_shard(append_result)
-            .map_err(ShardTreeError::Storage)?;
+        self.put_shard_checked(append_result)?;
         if let Some(c) = checkpoint_id {
             self.store
                 .add_checkpoint(c, Checkpoint::at_position(position))
@@ -446,9 +536,7 @@ impl<
 
         let (updated_subtree, supertree) =
             current_shard.insert_frontier_nodes(frontier, &leaf_retention)?;
-        self.store
-            .put_shard(updated_subtree)
-            .map_err(ShardTreeError::Storage)?;
+        self.put_shard_checked(updated_subtree)?;
 
         if let Some(supertree) = supertree {
             let new_cap = LocatedTree {
@@ -506,9 +594,7 @@ impl<
                 .unwrap_or_else(|| LocatedTree::empty(root_addr));
             let (replacement_shard, mut incomplete) =
                 current_shard.insert_subtree(subtree, contains_marked)?;
-            self.store
-                .put_shard(replacement_shard)
-                .map_err(ShardTreeError::Storage)?;
+            self.put_shard_checked(replacement_shard)?;
             all_incomplete.append(&mut incomplete);
         }
 

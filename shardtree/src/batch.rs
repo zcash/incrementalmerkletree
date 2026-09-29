@@ -63,9 +63,7 @@ impl<
                     .expect(
                         "Iterator containing leaf values to insert was verified to be nonempty.",
                     );
-                self.store
-                    .put_shard(res.subtree)
-                    .map_err(ShardTreeError::Storage)?;
+                self.put_shard_checked(res.subtree)?;
                 for (id, position) in res.checkpoints.into_iter() {
                     self.store
                         .add_checkpoint(id, Checkpoint::at_position(position))

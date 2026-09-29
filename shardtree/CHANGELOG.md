@@ -28,6 +28,14 @@ and this project adheres to Rust's notion of
   repeated truncated queries could discard a frontier ommer inserted by
   `ShardTree::insert_frontier_nodes`, after which the root of the tree could
   no longer be computed.
+- `shardtree::ShardTree` methods that write leaves to a shard (`append`,
+  `batch_insert`, `insert`, `insert_tree`, `insert_frontier_nodes`, and
+  `insert_witness_nodes`) now return
+  `ShardTreeError::Insert(InsertionError::Conflict(_))` when a completed shard
+  conflicts with a root that the cap holds at or above the shard, such as a
+  frontier ommer inserted by `ShardTree::insert_frontier_nodes`. Previously,
+  the tree reported the root from the cap while witnesses were computed from
+  the conflicting leaves.
 
 ## [0.7.1] - 2026-07-17
 
