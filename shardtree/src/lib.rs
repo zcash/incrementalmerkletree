@@ -46,7 +46,7 @@
 //!   [`store::caching::CachingShardStore`] wraps a backend with a write-back
 //!   cache.
 //! - [`Tree`] / [`LocatedTree`]: the core node structure, and the same paired
-//!   with its absolute [`Address`](incrementalmerkletree::Address).
+//!   with its absolute [`Address`].
 //! - [`PrunableTree`] / [`LocatedPrunableTree`]: a [`Tree`] specialized for
 //!   Merkle storage, with cached-hash annotations and prunable leaves.
 //! - [`store::Checkpoint`]: a saved position the tree can be rewound to.
@@ -871,7 +871,7 @@ impl<
     /// pruning of excess checkpoints.
     ///
     /// A retained checkpoint is excluded from the `max_checkpoints` budget and is never removed by
-    /// [`Self::prune_excess_checkpoints`]; it persists until it is released via
+    /// the automatic pruning of excess checkpoints; it persists until it is released via
     /// [`Self::remove_retained_checkpoint`]. As a result, its root, and witnesses for marked leaves
     /// at or before it, remain computable even after it has aged more than `max_checkpoints` behind
     /// the tip of the tree. The identifier may be recorded even if no checkpoint with that

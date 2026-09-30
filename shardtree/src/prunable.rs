@@ -1342,7 +1342,7 @@ where
     ///
     /// The returned ommers cover only the levels within this tree (from level 0 up to
     /// but not including this tree's root level). This is a building block for
-    /// [`ShardTree::frontier`] which extends the ommers to the full tree depth.
+    /// [`crate::ShardTree::frontier`] which extends the ommers to the full tree depth.
     pub(crate) fn frontier_ommers(&self) -> Result<Option<(Position, H, Vec<H>)>, FrontierError> {
         /// Traverses the rightmost path of the tree, collecting the frontier leaf and ommers.
         /// Returns `(position, leaf_hash, ommers)` with ommers ordered from lowest to highest
