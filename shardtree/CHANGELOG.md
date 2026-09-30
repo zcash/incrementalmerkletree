@@ -11,6 +11,33 @@ and this project adheres to Rust's notion of
 - Migrated to `incrementalmerkletree 0.9`, `incrementalmerkletree-testing 0.4`.
 - MSRV is now 1.88.0.
 
+### Fixed
+- `shardtree::LocatedPrunableTree::insert_subtree` and
+  `shardtree::PrunableTree::merge_checked` now return a conflict error when a
+  stored root (a pruned leaf, or a cached parent annotation) differs from the
+  root of a complete subtree inserted or merged beneath it. Previously, such
+  an insertion either replaced the stored root or kept it in preference to
+  the root of the inserted leaves. `ShardTree::insert_frontier_nodes`,
+  `ShardTree::insert_tree`, and `ShardTree::batch_insert` return
+  `ShardTreeError::Insert(InsertionError::Conflict(_))` in these cases.
+- `shardtree::ShardTree::root_caching` no longer replaces the cached root of a
+  shard with the root of the requested address when that address is below the
+  shard level. Previously, such a call changed the roots reported for the
+  tree.
+- `shardtree::ShardTree::root_caching` no longer discards the root stored at a
+  cap node when it computes a truncated root beneath that node. Previously,
+  repeated truncated queries could discard a frontier ommer inserted by
+  `ShardTree::insert_frontier_nodes`, after which the root of the tree could
+  no longer be computed.
+- `shardtree::ShardTree` methods that write leaves to a shard (`append`,
+  `batch_insert`, `insert`, `insert_tree`, `insert_frontier_nodes`, and
+  `insert_witness_nodes`) now return
+  `ShardTreeError::Insert(InsertionError::Conflict(_))` when a completed shard
+  conflicts with a root that the cap holds at or above the shard, such as a
+  frontier ommer inserted by `ShardTree::insert_frontier_nodes`. Previously,
+  the tree reported the root from the cap while witnesses were computed from
+  the conflicting leaves.
+
 ## [0.7.1] - 2026-07-17
 
 ### Fixed

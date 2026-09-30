@@ -197,6 +197,100 @@ impl<
         (0x1 << (DEPTH - SHARD_HEIGHT)) - 1
     }
 
+    /// Writes `shard` to the store, after checking that its root does not conflict with a root
+    /// that the cap holds at or above the shard's address.
+    ///
+    /// The cap can hold roots that the shards do not, such as the ommers of an inserted
+    /// frontier. When `shard` is complete, the lowest cap node on the path to the shard that
+    /// holds a root is compared with the root computed from `shard` and from the sibling
+    /// subtrees along that path. If a sibling subtree is incomplete, the comparison is made
+    /// when the last of those subtrees is completed.
+    fn put_shard_checked(
+        &mut self,
+        shard: LocatedPrunableTree<H>,
+    ) -> Result<(), ShardTreeError<S::Error>> {
+        self.check_shard_against_cap(&shard)?;
+        self.store.put_shard(shard).map_err(ShardTreeError::Storage)
+    }
+
+    fn check_shard_against_cap(
+        &self,
+        shard: &LocatedPrunableTree<H>,
+    ) -> Result<(), ShardTreeError<S::Error>> {
+        /// Returns the lowest node on the path from `addr` to `target` that holds a root.
+        ///
+        /// Pre-condition: `addr` must be the address of `tree`, and must contain `target`.
+        fn lowest_root<H: Hashable + Clone + PartialEq>(
+            addr: Address,
+            tree: &PrunableTree<H>,
+            target: Address,
+        ) -> Option<(Address, H)> {
+            let below = match &tree.0 {
+                Node::Parent { left, right, .. } if addr != target => {
+                    let (l_addr, r_addr) = addr
+                        .children()
+                        .expect("has children because `addr` strictly contains `target`");
+                    if l_addr.contains(&target) {
+                        lowest_root(l_addr, left, target)
+                    } else {
+                        lowest_root(r_addr, right, target)
+                    }
+                }
+                _ => None,
+            };
+            below.or_else(|| tree.node_value().map(|v| (addr, v.clone())))
+        }
+
+        // `is_full` is a cheap necessary condition for a computable root.
+        if !(shard.root.is_full() && shard.root.has_computable_root()) {
+            return Ok(());
+        }
+
+        let cap = LocatedTree {
+            root_addr: Self::root_addr(),
+            root: self.store.get_cap().map_err(ShardTreeError::Storage)?,
+        };
+        let Some((claim_addr, claimed)) = lowest_root(cap.root_addr, &cap.root, shard.root_addr)
+        else {
+            return Ok(());
+        };
+
+        let mut addr = shard.root_addr;
+        let mut root = shard
+            .root_hash(addr.position_range_end())
+            .map_err(|_| ShardTreeError::Insert(InsertionError::InputMalformed(addr)))?;
+        while addr != claim_addr {
+            let sibling = addr.sibling();
+            let sibling_cap = cap
+                .subtree(sibling)
+                .unwrap_or_else(|| LocatedTree::empty(sibling));
+            let sibling_root =
+                match self.root_internal(&sibling_cap, sibling, sibling.position_range_end()) {
+                    Ok((sibling_root, _)) => sibling_root,
+                    Err(ShardTreeError::Query(QueryError::TreeIncomplete(_))) => return Ok(()),
+                    Err(e) => return Err(e),
+                };
+            root = if addr.is_left_child() {
+                H::combine(addr.level(), &root, &sibling_root)
+            } else {
+                H::combine(addr.level(), &sibling_root, &root)
+            };
+            addr = addr.parent();
+        }
+
+        if root == claimed {
+            Ok(())
+        } else {
+            debug!(
+                address = ?claim_addr,
+                cap_root = ?claimed,
+                shard_root = ?root,
+                "Shard conflicts with cap"
+            );
+            Err(ShardTreeError::Insert(InsertionError::Conflict(claim_addr)))
+        }
+    }
+
     /// Returns the leaf value at the specified position, if it is a marked leaf.
     pub fn get_marked_leaf(
         &self,
@@ -325,9 +419,7 @@ impl<
                 .map_err(ShardTreeError::Insert)
                 .map(|(t, _)| t)?;
 
-            self.store
-                .put_shard(updated_shard)
-                .map_err(ShardTreeError::Storage)?;
+            self.put_shard_checked(updated_shard)?;
         }
 
         Ok(())
@@ -375,9 +467,7 @@ impl<
                 LocatedTree::empty(root_addr).append(value, retention)?
             };
 
-        self.store
-            .put_shard(append_result)
-            .map_err(ShardTreeError::Storage)?;
+        self.put_shard_checked(append_result)?;
         if let Some(c) = checkpoint_id {
             self.store
                 .add_checkpoint(c, Checkpoint::at_position(position))
@@ -446,9 +536,7 @@ impl<
 
         let (updated_subtree, supertree) =
             current_shard.insert_frontier_nodes(frontier, &leaf_retention)?;
-        self.store
-            .put_shard(updated_subtree)
-            .map_err(ShardTreeError::Storage)?;
+        self.put_shard_checked(updated_subtree)?;
 
         if let Some(supertree) = supertree {
             let new_cap = LocatedTree {
@@ -506,9 +594,7 @@ impl<
                 .unwrap_or_else(|| LocatedTree::empty(root_addr));
             let (replacement_shard, mut incomplete) =
                 current_shard.insert_subtree(subtree, contains_marked)?;
-            self.store
-                .put_shard(replacement_shard)
-                .map_err(ShardTreeError::Storage)?;
+            self.put_shard_checked(replacement_shard)?;
             all_incomplete.append(&mut incomplete);
         }
 
@@ -1053,7 +1139,7 @@ impl<
         // both cases there is no cached subtree to preserve, so compute the root directly
         // from shard data. A Leaf at the target address is intentionally excluded here:
         // when it needs truncation it is expanded and reannotated by the Phase 3 descent,
-        // preserving its cached hash as the replacement Parent's annotation (a cacheable
+        // preserving its hash as the replacement Parent's annotation (a cacheable
         // Leaf at the target is already served by the Phase 1 fast path).
         let at_shard_level =
             cap.root_addr.level() == ShardTree::<S, DEPTH, SHARD_HEIGHT>::subtree_level();
@@ -1066,7 +1152,8 @@ impl<
             let root = self.root_from_shards(addr, truncate_at)?;
             return Ok((
                 root.clone(),
-                if cacheable {
+                // Only the root of the cap node itself may replace the cap node.
+                if cacheable && target_contains {
                     Some(Tree::leaf((root, RetentionFlags::EPHEMERAL)))
                 } else {
                     None
@@ -1076,12 +1163,10 @@ impl<
 
         // Phase 3: Descent — recurse into children and combine results.
 
-        // Save the original leaf value so we can re-annotate the replacement Parent with it,
-        // preserving cached values when a Leaf is expanded.
-        let orig_leaf_value = match &cap.root.0 {
-            Node::Leaf { value } => Some(value.0.clone()),
-            _ => None,
-        };
+        // Save the original node value (a Leaf's hash or a Parent's annotation) so that the
+        // replacement Parent retains it. The value may be a frontier ommer that cannot be
+        // recomputed from the shards.
+        let orig_value = cap.root.node_value().cloned();
 
         // Get children: real children for Parent nodes, empty children for Leaf/Nil.
         let (orig_left, orig_right) = match &cap.root.0 {
@@ -1163,9 +1248,9 @@ impl<
             right: new_right.map_or_else(|| orig_right, Arc::new),
         });
 
-        // If the original node was a Leaf, preserve its hash as the Parent annotation
-        // so that future non-truncated lookups can use it via the fast-path.
-        let replacement = match orig_leaf_value {
+        // Preserve the original node value as the Parent annotation so that future
+        // non-truncated lookups can use it via the fast-path.
+        let replacement = match orig_value {
             Some(h) => new_parent.reannotate_root(Some(Arc::new(h))),
             None => new_parent,
         };
@@ -1806,6 +1891,174 @@ mod tests {
 
         let frontier = tree.frontier().unwrap();
         assert_eq!(frontier.value(), Some(&original));
+    }
+
+    #[test]
+    fn batch_insert_below_frontier_detects_conflicting_leaves() {
+        // Position 7 has ommers "g" at level 0, "ef" at level 1 and "abcd" at level 2.
+        let frontier = NonEmptyFrontier::from_parts(
+            Position::from(7),
+            "h".to_string(),
+            vec!["g".to_string(), "ef".to_string(), "abcd".to_string()],
+        )
+        .unwrap();
+
+        for retention in [Retention::Ephemeral, Retention::Marked] {
+            let fill = |leaves: &str| {
+                let mut tree = empty_tree::<String, 4, 3>();
+                tree.insert_frontier_nodes(frontier.clone(), Retention::Ephemeral)
+                    .unwrap();
+                tree.batch_insert(
+                    Position::from(0),
+                    leaves.chars().map(|c| (c.to_string(), retention)),
+                )
+                .map(|_| tree)
+            };
+
+            assert_matches!(
+                fill("wxyz"),
+                Err(ShardTreeError::Insert(InsertionError::Conflict(_)))
+            );
+
+            let tree = fill("abcd").unwrap();
+            assert_eq!(
+                tree.root_at_checkpoint_depth(None).unwrap(),
+                Some("abcdefgh________".to_string())
+            );
+        }
+    }
+
+    #[test]
+    fn batch_insert_below_cap_ommer_detects_conflicting_leaves() {
+        // With SHARD_HEIGHT = 2, the level-2 ommer "abcd" of position 7 is the root of shard 0
+        // and is stored only in the cap.
+        let frontier = NonEmptyFrontier::from_parts(
+            Position::from(7),
+            "h".to_string(),
+            vec!["g".to_string(), "ef".to_string(), "abcd".to_string()],
+        )
+        .unwrap();
+        let fill = |leaves: &str| {
+            let mut tree = empty_tree::<String, 4, 2>();
+            tree.insert_frontier_nodes(
+                frontier.clone(),
+                Retention::Checkpoint {
+                    id: 1,
+                    marking: Marking::None,
+                },
+            )
+            .unwrap();
+            tree.batch_insert(
+                Position::from(0),
+                leaves.chars().map(|c| (c.to_string(), Retention::Marked)),
+            )
+            .map(|_| tree)
+        };
+
+        assert_matches!(
+            fill("wxyz"),
+            Err(ShardTreeError::Insert(InsertionError::Conflict(_)))
+        );
+
+        let tree = fill("abcd").unwrap();
+        let root = tree.root_at_checkpoint_depth(Some(0)).unwrap().unwrap();
+        assert_eq!(root, "abcdefgh________");
+        let witness = tree
+            .witness_at_checkpoint_depth(Position::from(0), 0)
+            .unwrap()
+            .unwrap();
+        assert_eq!(witness.root("a".to_string()), root);
+    }
+
+    #[test]
+    fn batch_insert_below_cap_ommer_above_shard_level_detects_conflicting_leaves() {
+        // The level-3 ommer "abcdefgh" of position 8 spans shards 0 and 1 and is stored only
+        // in the cap. It can be checked once both shards are complete, in either order.
+        let frontier = NonEmptyFrontier::from_parts(
+            Position::from(8),
+            "i".to_string(),
+            vec!["abcdefgh".to_string()],
+        )
+        .unwrap();
+        let fill = |first: (u64, &str), second: (u64, &str)| {
+            let mut tree = empty_tree::<String, 4, 2>();
+            tree.insert_frontier_nodes(frontier.clone(), Retention::Ephemeral)
+                .unwrap();
+            for (start, leaves) in [first, second] {
+                tree.batch_insert(
+                    Position::from(start),
+                    leaves.chars().map(|c| (c.to_string(), Retention::Marked)),
+                )?;
+            }
+            Ok::<_, ShardTreeError<Infallible>>(tree)
+        };
+
+        for (first, second) in [((0, "abcd"), (4, "wxyz")), ((4, "wxyz"), (0, "abcd"))] {
+            assert_matches!(
+                fill(first, second),
+                Err(ShardTreeError::Insert(InsertionError::Conflict(addr)))
+                    if addr == Address::from_parts(Level::from(3), 0)
+            );
+        }
+        for (first, second) in [((0, "abcd"), (4, "efgh")), ((4, "efgh"), (0, "abcd"))] {
+            let tree = fill(first, second).unwrap();
+            let root_addr = ShardTree::<MemoryShardStore<String, u32>, 4, 2>::root_addr();
+            assert_eq!(
+                tree.root(root_addr, Position::from(9)).unwrap(),
+                "abcdefghi_______"
+            );
+        }
+    }
+
+    #[test]
+    fn root_caching_retains_cap_ommer() {
+        // The level-3 ommer "abcdefgh" of position 8 is stored only in the cap.
+        let frontier = NonEmptyFrontier::from_parts(
+            Position::from(8),
+            "i".to_string(),
+            vec!["abcdefgh".to_string()],
+        )
+        .unwrap();
+        let mut tree = empty_tree::<String, 4, 2>();
+        tree.insert_frontier_nodes(frontier, Retention::Ephemeral)
+            .unwrap();
+        tree.batch_insert(
+            Position::from(0),
+            "abcd"
+                .chars()
+                .map(|c| (c.to_string(), Retention::Ephemeral)),
+        )
+        .unwrap();
+
+        let root_addr = ShardTree::<MemoryShardStore<String, u32>, 4, 2>::root_addr();
+        let expected = "abcdefghi_______".to_string();
+        assert_eq!(tree.root(root_addr, Position::from(9)).unwrap(), expected);
+
+        for _ in 0..2 {
+            assert_eq!(
+                tree.root_caching(root_addr, Position::from(4)).unwrap(),
+                "abcd____________"
+            );
+            assert_eq!(tree.root(root_addr, Position::from(9)).unwrap(), expected);
+        }
+    }
+
+    #[test]
+    fn root_caching_below_shard_level_does_not_replace_shard_root() {
+        let mut tree = empty_tree::<String, 4, 2>();
+        for c in "abcde".chars() {
+            tree.append(c.to_string(), Retention::Marked).unwrap();
+        }
+        let root_addr = ShardTree::<MemoryShardStore<String, u32>, 4, 2>::root_addr();
+        assert_eq!(
+            tree.root_caching(Address::from_parts(Level::from(1), 0), Position::from(16))
+                .unwrap(),
+            "ab"
+        );
+        assert_eq!(
+            tree.root(root_addr, Position::from(5)).unwrap(),
+            "abcde___________"
+        );
     }
 
     #[test]
@@ -3179,8 +3432,9 @@ mod tests {
                 tree.root_internal(&cap, target_addr, truncate_at).unwrap();
 
             assert_eq!(computed_root_hash, expected_root_hash);
-            // Untruncated, so the sub-shard root is written back as a cached leaf.
-            assert_eq!(updated_cap, Some(pleaf(&expected_root_hash)));
+            // The sub-shard root is not the root of the cap node at (2, 0), so it is not
+            // written back.
+            assert_eq!(updated_cap, None);
         }
 
         // ---- Phase 2: `root_from_shards` multi-shard peak fold --------------

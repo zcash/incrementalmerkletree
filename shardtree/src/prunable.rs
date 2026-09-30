@@ -315,8 +315,10 @@ where
     /// Merge two subtrees having the same root address.
     ///
     /// The merge operation is checked to be strictly additive and returns an error if merging
-    /// would cause information loss or if a conflict between root hashes occurs at a node. The
-    /// returned error contains the address of the node where such a conflict occurred.
+    /// would cause information loss or if a conflict between root hashes occurs at a node. A
+    /// stored root (a leaf or a parent's cached annotation) conflicts with the root computed from
+    /// the children beneath it once those children are complete. The returned error contains the
+    /// address of the node where such a conflict occurred.
     #[tracing::instrument()]
     pub fn merge_checked(self, root_addr: Address, other: Self) -> Result<Self, MergeError> {
         /// Pre-condition: `root_addr` must be the address of `t0` and `t1`.
@@ -377,12 +379,20 @@ where
                         {
                             let (l_addr, r_addr) =
                                 addr.children().ok_or(MergeError::TreeMalformed(addr))?;
-                            Ok(Tree::unite(
-                                addr.level() - 1,
-                                lann.or(rann),
-                                go(l_addr, ll.as_ref().clone(), rl.as_ref().clone())?,
-                                go(r_addr, lr.as_ref().clone(), rr.as_ref().clone())?,
-                            ))
+                            let ann = lann.or(rann);
+                            // If either input already has complete children, the merged
+                            // children have the same root. That root was already compared
+                            // with the annotation, either when that input was built or by the
+                            // root comparison above.
+                            let verified = ann.is_none()
+                                || (ll.has_computable_root() && lr.has_computable_root())
+                                || (rl.has_computable_root() && rr.has_computable_root());
+                            let new_left = go(l_addr, ll.as_ref().clone(), rl.as_ref().clone())?;
+                            let new_right = go(r_addr, lr.as_ref().clone(), rr.as_ref().clone())?;
+                            if !verified {
+                                PrunableTree::check_annotation(addr, &ann, &new_left, &new_right)?;
+                            }
+                            Ok(Tree::unite(addr.level() - 1, ann, new_left, new_right))
                         } else {
                             unreachable!()
                         }
@@ -395,6 +405,40 @@ where
         }
 
         go(root_addr, self, other)
+    }
+
+    /// Checks a parent's cached root annotation against the root of its children.
+    ///
+    /// Returns [`MergeError::Conflict`] if `ann` is present, the roots of both `left` and `right`
+    /// can be computed, and the root of the two children differs from `ann`. An annotation over
+    /// children whose roots cannot yet be computed is not checked; the caller must check it when
+    /// the children become complete.
+    ///
+    /// `addr` must be the address of the parent of `left` and `right`.
+    fn check_annotation(
+        addr: Address,
+        ann: &Option<Arc<H>>,
+        left: &Self,
+        right: &Self,
+    ) -> Result<(), MergeError> {
+        match ann {
+            Some(claimed) if left.has_computable_root() && right.has_computable_root() => {
+                let (l_addr, r_addr) = addr.children().ok_or(MergeError::TreeMalformed(addr))?;
+                let computed = accumulate_result_with(
+                    left.root_hash(l_addr, l_addr.position_range_end()),
+                    right.root_hash(r_addr, r_addr.position_range_end()),
+                    |l, r| H::combine(l_addr.level(), &l, &r),
+                )
+                .map_err(|_| MergeError::TreeMalformed(addr))?;
+                if &computed == claimed.as_ref() {
+                    Ok(())
+                } else {
+                    trace!(ann = ?claimed, computed = ?computed, "Annotation conflicts with children");
+                    Err(MergeError::Conflict(addr))
+                }
+            }
+            _ => Ok(()),
+        }
     }
 
     /// Unite two nodes by either constructing a new parent node, or, if both nodes are ephemeral
@@ -863,8 +907,9 @@ where
     /// Returns the updated tree, along with the addresses of any [`Node::Nil`] nodes that were
     /// inserted in the process of creating the parent nodes down to the insertion point, or an
     /// error if the specified subtree's root address is not in the range of valid descendants of
-    /// the root node of this tree or if the insertion would result in a conflict between computed
-    /// root hashes of complete subtrees.
+    /// the root node of this tree or if the insertion would result in a conflict between root
+    /// hashes. A stored root (a leaf or a parent's cached annotation) conflicts with the root
+    /// computed from the leaves inserted beneath it once those leaves form a complete subtree.
     pub fn insert_subtree(
         &self,
         subtree: Self,
@@ -947,8 +992,23 @@ where
                                                 },
                                             )?
                                     } else {
-                                        // It is safe to replace the existing root unannotated, because we
-                                        // can always recompute the root from the subtree.
+                                        // The existing leaf is replaced by a subtree with the
+                                        // same root. The replacement is unannotated because the
+                                        // root can be recomputed from the subtree.
+                                        let subtree_root = subtree
+                                            .root
+                                            .root_hash(root_addr, root_addr.position_range_end())
+                                            .map_err(|_| {
+                                                InsertionError::InputMalformed(root_addr)
+                                            })?;
+                                        if &subtree_root != value {
+                                            warn!(
+                                                cur_root = ?value,
+                                                new_root = ?subtree_root,
+                                                "Insertion conflict",
+                                            );
+                                            return Err(InsertionError::Conflict(root_addr));
+                                        }
                                         subtree.root
                                     },
                                     vec![],
@@ -986,31 +1046,26 @@ where
                         let (l_addr, r_addr) = root_addr
                             .children()
                             .expect("has children because we checked `into` is a parent");
-                        if l_addr.contains(&subtree.root_addr) {
-                            let (new_left, incomplete) =
-                                go(l_addr, left.as_ref(), subtree, contains_marked)?;
-                            Ok((
-                                Tree::unite(
-                                    root_addr.level() - 1,
-                                    ann.clone(),
-                                    new_left,
-                                    right.as_ref().clone(),
-                                ),
-                                incomplete,
-                            ))
-                        } else {
-                            let (new_right, incomplete) =
-                                go(r_addr, right.as_ref(), subtree, contains_marked)?;
-                            Ok((
-                                Tree::unite(
-                                    root_addr.level() - 1,
-                                    ann.clone(),
-                                    left.as_ref().clone(),
-                                    new_right,
-                                ),
-                                incomplete,
-                            ))
+                        let (new_left, new_right, prev_child, incomplete) =
+                            if l_addr.contains(&subtree.root_addr) {
+                                let (new_left, incomplete) =
+                                    go(l_addr, left.as_ref(), subtree, contains_marked)?;
+                                (new_left, right.as_ref().clone(), left, incomplete)
+                            } else {
+                                let (new_right, incomplete) =
+                                    go(r_addr, right.as_ref(), subtree, contains_marked)?;
+                                (left.as_ref().clone(), new_right, right, incomplete)
+                            };
+                        // Insertion does not change the root of a child whose root was
+                        // already computable, so the annotation only needs to be checked
+                        // when the modified child was previously incomplete.
+                        if ann.is_some() && !prev_child.has_computable_root() {
+                            PrunableTree::check_annotation(root_addr, ann, &new_left, &new_right)?;
                         }
+                        Ok((
+                            Tree::unite(root_addr.level() - 1, ann.clone(), new_left, new_right),
+                            incomplete,
+                        ))
                     }
                 }
             }
@@ -2001,6 +2056,181 @@ mod tests {
 
         assert_eq!(cleared.max_position(), tree.max_position());
         assert!(cleared.flag_positions().is_empty());
+    }
+
+    fn str_leaf(v: &str, flags: RetentionFlags) -> PrunableTree<String> {
+        leaf((v.to_string(), flags))
+    }
+
+    fn annotated(
+        ann: &str,
+        left: PrunableTree<String>,
+        right: PrunableTree<String>,
+    ) -> PrunableTree<String> {
+        Tree::parent(Some(Arc::new(ann.to_string())), left, right)
+    }
+
+    #[test]
+    fn merge_checked_verifies_leaf_claim_on_completion() {
+        let addr = Address::from_parts(Level::from(2), 0);
+        let incomplete: PrunableTree<String> = parent(
+            parent(
+                str_leaf("a", RetentionFlags::EPHEMERAL),
+                str_leaf("b", RetentionFlags::EPHEMERAL),
+            ),
+            nil(),
+        );
+        let completion: PrunableTree<String> = parent(
+            nil(),
+            parent(
+                str_leaf("c", RetentionFlags::EPHEMERAL),
+                str_leaf("d", RetentionFlags::EPHEMERAL),
+            ),
+        );
+
+        // A claim that disagrees with the leaves is detected when the leaves complete.
+        let claimed = incomplete
+            .clone()
+            .merge_checked(addr, str_leaf("XXXX", RetentionFlags::EPHEMERAL))
+            .unwrap();
+        assert_eq!(
+            claimed.merge_checked(addr, completion.clone()),
+            Err(MergeError::Conflict(addr))
+        );
+
+        // A claim that agrees with the leaves is accepted.
+        let claimed = incomplete
+            .merge_checked(addr, str_leaf("abcd", RetentionFlags::EPHEMERAL))
+            .unwrap();
+        let completed = claimed.merge_checked(addr, completion).unwrap();
+        assert_eq!(
+            completed.root_hash(addr, Position::from(4)),
+            Ok("abcd".to_string())
+        );
+    }
+
+    #[test]
+    fn insert_subtree_verifies_replaced_leaf() {
+        let root_addr = Address::from_parts(Level::from(2), 0);
+        let existing: LocatedPrunableTree<String> = LocatedTree::from_parts(
+            root_addr,
+            parent(str_leaf("HH", RetentionFlags::EPHEMERAL), nil()),
+        )
+        .unwrap();
+        let incoming = |l: &str, r: &str| {
+            LocatedTree::from_parts(
+                Address::from_parts(Level::from(1), 0),
+                parent(
+                    str_leaf(l, RetentionFlags::EPHEMERAL),
+                    str_leaf(r, RetentionFlags::MARKED),
+                ),
+            )
+            .unwrap()
+        };
+
+        assert_eq!(
+            existing.insert_subtree(incoming("a", "b"), true),
+            Err(InsertionError::Conflict(Address::from_parts(
+                Level::from(1),
+                0
+            )))
+        );
+
+        let (result, incomplete) = existing.insert_subtree(incoming("H", "H"), true).unwrap();
+        assert!(incomplete.is_empty());
+        assert_eq!(result.root_hash(Position::from(2)), Ok("HH__".to_string()));
+        assert_eq!(
+            result.marked_positions(),
+            BTreeSet::from([Position::from(1)])
+        );
+    }
+
+    /// Inserts leaves `a`, `b`, `c` and `d` one at a time under a pruned leaf at level 2.
+    fn fill_under_leaf(
+        claim: &str,
+        flags: RetentionFlags,
+    ) -> Result<LocatedPrunableTree<String>, InsertionError> {
+        let root_addr = Address::from_parts(Level::from(2), 0);
+        ["a", "b", "c", "d"].iter().enumerate().try_fold(
+            LocatedTree::from_parts(root_addr, str_leaf(claim, RetentionFlags::EPHEMERAL)).unwrap(),
+            |tree, (i, v)| {
+                let incoming = LocatedTree::from_parts(
+                    Address::from_parts(Level::from(0), i as u64),
+                    str_leaf(v, flags),
+                )
+                .unwrap();
+                tree.insert_subtree(incoming, flags.is_marked())
+                    .map(|(tree, _)| tree)
+            },
+        )
+    }
+
+    #[test]
+    fn insert_subtree_verifies_descended_leaf_with_ephemeral_children() {
+        assert_eq!(
+            fill_under_leaf("HHHH", RetentionFlags::EPHEMERAL),
+            Err(InsertionError::Conflict(Address::from_parts(
+                Level::from(2),
+                0
+            )))
+        );
+
+        let tree = fill_under_leaf("abcd", RetentionFlags::EPHEMERAL).unwrap();
+        assert_eq!(tree.root(), &str_leaf("abcd", RetentionFlags::EPHEMERAL));
+    }
+
+    #[test]
+    fn insert_subtree_verifies_descended_leaf_with_marked_children() {
+        assert_eq!(
+            fill_under_leaf("HHHH", RetentionFlags::MARKED),
+            Err(InsertionError::Conflict(Address::from_parts(
+                Level::from(2),
+                0
+            )))
+        );
+
+        let tree = fill_under_leaf("abcd", RetentionFlags::MARKED).unwrap();
+        assert_eq!(
+            tree.root(),
+            &annotated(
+                "abcd",
+                parent(
+                    str_leaf("a", RetentionFlags::MARKED),
+                    str_leaf("b", RetentionFlags::MARKED)
+                ),
+                parent(
+                    str_leaf("c", RetentionFlags::MARKED),
+                    str_leaf("d", RetentionFlags::MARKED)
+                ),
+            )
+        );
+    }
+
+    #[test]
+    fn insert_subtree_verifies_annotation_completed_by_merge() {
+        // The annotated root is completed by a merge at a lower address.
+        let root_addr = Address::from_parts(Level::from(2), 0);
+        let tree: LocatedPrunableTree<String> = LocatedTree::from_parts(
+            root_addr,
+            annotated(
+                "HHHH",
+                parent(
+                    str_leaf("a", RetentionFlags::MARKED),
+                    str_leaf("b", RetentionFlags::MARKED),
+                ),
+                parent(str_leaf("c", RetentionFlags::MARKED), nil()),
+            ),
+        )
+        .unwrap();
+        let incoming = LocatedTree::from_parts(
+            Address::from_parts(Level::from(1), 1),
+            parent(nil(), str_leaf("d", RetentionFlags::MARKED)),
+        )
+        .unwrap();
+        assert_eq!(
+            tree.insert_subtree(incoming, true),
+            Err(InsertionError::Conflict(root_addr))
+        );
     }
 
     proptest! {

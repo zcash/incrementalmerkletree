@@ -38,9 +38,7 @@ impl<
         let (updated_subtree, supertree, tip_subtree) =
             shard.insert_witness_nodes(witness, checkpoint_id)?;
 
-        self.store
-            .put_shard(updated_subtree)
-            .map_err(ShardTreeError::Storage)?;
+        self.put_shard_checked(updated_subtree)?;
 
         if let Some(supertree) = supertree {
             let new_cap = LocatedTree {
@@ -66,9 +64,7 @@ impl<
                 .map_err(ShardTreeError::Storage)?
                 .unwrap_or_else(|| LocatedTree::empty(tip_subtree_addr));
 
-            self.store
-                .put_shard(tip_shard.insert_subtree(tip_subtree, false)?.0)
-                .map_err(ShardTreeError::Storage)?;
+            self.put_shard_checked(tip_shard.insert_subtree(tip_subtree, false)?.0)?;
         }
 
         Ok(())
