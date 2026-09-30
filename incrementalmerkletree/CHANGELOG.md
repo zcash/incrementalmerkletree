@@ -7,9 +7,11 @@ and this project adheres to Rust's notion of
 
 ## Unreleased
 
+## [0.9.0] - 2026-09-29
+
 ### Changed
-- MSRV is now 1.88.0.
 - Migrated to `rand 0.10`, `rand_core 0.10`, and `rand_chacha 0.10`.
+- MSRV is now 1.88.0.
 - `incrementalmerkletree::frontier` (under the `test-dependencies` feature):
   - `NonEmptyFrontier::{random_of_size, random_with_prior_subtree_roots}` and
     `Frontier::{random_of_size, random_with_prior_subtree_roots}` now require
