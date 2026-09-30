@@ -2011,6 +2011,98 @@ mod tests {
     }
 
     #[test]
+    fn insert_shard_root_below_cap_ommer_detects_conflict() {
+        // The level-3 ommer "abcdefgh" of position 8 spans shards 0 and 1. Shard 0 is complete,
+        // and the root of shard 1 is inserted directly.
+        let frontier = NonEmptyFrontier::from_parts(
+            Position::from(8),
+            "i".to_string(),
+            vec!["abcdefgh".to_string()],
+        )
+        .unwrap();
+        let mut tree = empty_tree::<String, 4, 2>();
+        tree.insert_frontier_nodes(frontier, Retention::Ephemeral)
+            .unwrap();
+        tree.batch_insert(
+            Position::from(0),
+            "abcd".chars().map(|c| (c.to_string(), Retention::Marked)),
+        )
+        .unwrap();
+
+        let shard_1 = Address::from_parts(Level::from(2), 1);
+        assert_matches!(
+            tree.insert(shard_1, "wxyz".to_string()),
+            Err(ShardTreeError::Insert(InsertionError::Conflict(addr)))
+                if addr == Address::from_parts(Level::from(3), 0)
+        );
+
+        // The rejected root was not written, so the agreeing root is accepted.
+        tree.insert(shard_1, "efgh".to_string()).unwrap();
+        let root_addr = ShardTree::<MemoryShardStore<String, u32>, 4, 2>::root_addr();
+        assert_eq!(
+            tree.root(root_addr, Position::from(9)).unwrap(),
+            "abcdefghi_______"
+        );
+    }
+
+    #[test]
+    fn insert_root_above_complete_shards_detects_conflict() {
+        let fill = || {
+            let mut tree = empty_tree::<String, 4, 2>();
+            tree.batch_insert(
+                Position::from(0),
+                "abcdefgh"
+                    .chars()
+                    .map(|c| (c.to_string(), Retention::Marked)),
+            )
+            .unwrap();
+            tree
+        };
+        let addr = Address::from_parts(Level::from(3), 0);
+
+        assert_matches!(
+            fill().insert(addr, "XXXXXXXX".to_string()),
+            Err(ShardTreeError::Insert(InsertionError::Conflict(a))) if a == addr
+        );
+        fill().insert(addr, "abcdefgh".to_string()).unwrap();
+    }
+
+    #[test]
+    fn insert_frontier_above_complete_shards_detects_conflict() {
+        // The level-3 ommer of position 8 spans shards 0 and 1, which are filled first.
+        let fill = |ommer: &str| {
+            let mut tree = empty_tree::<String, 4, 2>();
+            tree.batch_insert(
+                Position::from(0),
+                "abcdefgh"
+                    .chars()
+                    .map(|c| (c.to_string(), Retention::Marked)),
+            )
+            .unwrap();
+            let frontier = NonEmptyFrontier::from_parts(
+                Position::from(8),
+                "i".to_string(),
+                vec![ommer.to_string()],
+            )
+            .unwrap();
+            tree.insert_frontier_nodes(frontier, Retention::Ephemeral)
+                .map(|_| tree)
+        };
+
+        assert_matches!(
+            fill("XXXXXXXX"),
+            Err(ShardTreeError::Insert(InsertionError::Conflict(addr)))
+                if addr == Address::from_parts(Level::from(3), 0)
+        );
+        let tree = fill("abcdefgh").unwrap();
+        let root_addr = ShardTree::<MemoryShardStore<String, u32>, 4, 2>::root_addr();
+        assert_eq!(
+            tree.root(root_addr, Position::from(9)).unwrap(),
+            "abcdefghi_______"
+        );
+    }
+
+    #[test]
     fn root_caching_retains_cap_ommer() {
         // The level-3 ommer "abcdefgh" of position 8 is stored only in the cap.
         let frontier = NonEmptyFrontier::from_parts(
