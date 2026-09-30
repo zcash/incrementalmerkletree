@@ -213,8 +213,17 @@ impl<
         &mut self,
         shard: LocatedPrunableTree<H>,
     ) -> Result<(), ShardTreeError<S::Error>> {
-        self.check_shard_against_cap(&self.located_cap()?, &shard)?;
+        // Only a complete shard is compared with the cap. Do not read the cap for other shards.
+        if Self::is_complete(&shard) {
+            self.check_shard_against_cap(&self.located_cap()?, &shard)?;
+        }
         self.store.put_shard(shard).map_err(ShardTreeError::Storage)
+    }
+
+    /// Returns `true` if the root of `tree` can be computed from its contents.
+    fn is_complete(tree: &LocatedPrunableTree<H>) -> bool {
+        // `is_full` is a cheap necessary condition for a computable root.
+        tree.root.is_full() && tree.root.has_computable_root()
     }
 
     /// Inserts `supertree`, if present, into the stored cap and writes the result together with
@@ -260,8 +269,7 @@ impl<
         cap: &LocatedPrunableTree<H>,
         shard: &LocatedPrunableTree<H>,
     ) -> Result<(), ShardTreeError<S::Error>> {
-        // `is_full` is a cheap necessary condition for a computable root.
-        if !(shard.root.is_full() && shard.root.has_computable_root()) {
+        if !Self::is_complete(shard) {
             return Ok(());
         }
         let root = shard
@@ -439,7 +447,7 @@ impl<
                 .store
                 .get_shard(last_shard_addr)
                 .map_err(ShardTreeError::Storage)?
-                .is_some_and(|s| s.root.is_full() && s.root.has_computable_root());
+                .is_some_and(|s| Self::is_complete(&s));
             if !last_shard_complete {
                 return Ok(None);
             }
@@ -578,7 +586,12 @@ impl<
                     .insert_subtree(to_insert, false)
                     .map_err(ShardTreeError::Insert)
                     .map(|(t, _)| t)?;
-                self.check_shard_against_cap(new_cap.as_ref().unwrap_or(&cap), &updated_shard)?;
+                // At the shard level, `check_cap_insertion` has already compared `value` with
+                // the roots above the shard. The root of `updated_shard` is `value`, because
+                // `insert_subtree` fails on a conflict. Do not repeat that comparison.
+                if root_addr.level() != Self::subtree_level() {
+                    self.check_shard_against_cap(new_cap.as_ref().unwrap_or(&cap), &updated_shard)?;
+                }
                 Some(updated_shard)
             } else {
                 None
