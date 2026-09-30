@@ -1809,6 +1809,41 @@ mod tests {
     }
 
     #[test]
+    fn batch_insert_below_frontier_detects_conflicting_leaves() {
+        // Position 7 has ommers "g" at level 0, "ef" at level 1 and "abcd" at level 2.
+        let frontier = NonEmptyFrontier::from_parts(
+            Position::from(7),
+            "h".to_string(),
+            vec!["g".to_string(), "ef".to_string(), "abcd".to_string()],
+        )
+        .unwrap();
+
+        for retention in [Retention::Ephemeral, Retention::Marked] {
+            let fill = |leaves: &str| {
+                let mut tree = empty_tree::<String, 4, 3>();
+                tree.insert_frontier_nodes(frontier.clone(), Retention::Ephemeral)
+                    .unwrap();
+                tree.batch_insert(
+                    Position::from(0),
+                    leaves.chars().map(|c| (c.to_string(), retention)),
+                )
+                .map(|_| tree)
+            };
+
+            assert_matches!(
+                fill("wxyz"),
+                Err(ShardTreeError::Insert(InsertionError::Conflict(_)))
+            );
+
+            let tree = fill("abcd").unwrap();
+            assert_eq!(
+                tree.root_at_checkpoint_depth(None).unwrap(),
+                Some("abcdefgh________".to_string())
+            );
+        }
+    }
+
+    #[test]
     fn frontier_from_appended_leaves() {
         // Append leaves with the last one marked, so it isn't pruned away.
         let mut tree = empty_tree::<String, 4, 3>();

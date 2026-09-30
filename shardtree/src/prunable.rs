@@ -2003,6 +2003,181 @@ mod tests {
         assert!(cleared.flag_positions().is_empty());
     }
 
+    fn str_leaf(v: &str, flags: RetentionFlags) -> PrunableTree<String> {
+        leaf((v.to_string(), flags))
+    }
+
+    fn annotated(
+        ann: &str,
+        left: PrunableTree<String>,
+        right: PrunableTree<String>,
+    ) -> PrunableTree<String> {
+        Tree::parent(Some(Arc::new(ann.to_string())), left, right)
+    }
+
+    #[test]
+    fn merge_checked_verifies_leaf_claim_on_completion() {
+        let addr = Address::from_parts(Level::from(2), 0);
+        let incomplete: PrunableTree<String> = parent(
+            parent(
+                str_leaf("a", RetentionFlags::EPHEMERAL),
+                str_leaf("b", RetentionFlags::EPHEMERAL),
+            ),
+            nil(),
+        );
+        let completion: PrunableTree<String> = parent(
+            nil(),
+            parent(
+                str_leaf("c", RetentionFlags::EPHEMERAL),
+                str_leaf("d", RetentionFlags::EPHEMERAL),
+            ),
+        );
+
+        // A claim that disagrees with the leaves is detected when the leaves complete.
+        let claimed = incomplete
+            .clone()
+            .merge_checked(addr, str_leaf("XXXX", RetentionFlags::EPHEMERAL))
+            .unwrap();
+        assert_eq!(
+            claimed.merge_checked(addr, completion.clone()),
+            Err(MergeError::Conflict(addr))
+        );
+
+        // A claim that agrees with the leaves is accepted.
+        let claimed = incomplete
+            .merge_checked(addr, str_leaf("abcd", RetentionFlags::EPHEMERAL))
+            .unwrap();
+        let completed = claimed.merge_checked(addr, completion).unwrap();
+        assert_eq!(
+            completed.root_hash(addr, Position::from(4)),
+            Ok("abcd".to_string())
+        );
+    }
+
+    #[test]
+    fn insert_subtree_verifies_replaced_leaf() {
+        let root_addr = Address::from_parts(Level::from(2), 0);
+        let existing: LocatedPrunableTree<String> = LocatedTree::from_parts(
+            root_addr,
+            parent(str_leaf("HH", RetentionFlags::EPHEMERAL), nil()),
+        )
+        .unwrap();
+        let incoming = |l: &str, r: &str| {
+            LocatedTree::from_parts(
+                Address::from_parts(Level::from(1), 0),
+                parent(
+                    str_leaf(l, RetentionFlags::EPHEMERAL),
+                    str_leaf(r, RetentionFlags::MARKED),
+                ),
+            )
+            .unwrap()
+        };
+
+        assert_eq!(
+            existing.insert_subtree(incoming("a", "b"), true),
+            Err(InsertionError::Conflict(Address::from_parts(
+                Level::from(1),
+                0
+            )))
+        );
+
+        let (result, incomplete) = existing.insert_subtree(incoming("H", "H"), true).unwrap();
+        assert!(incomplete.is_empty());
+        assert_eq!(result.root_hash(Position::from(2)), Ok("HH__".to_string()));
+        assert_eq!(
+            result.marked_positions(),
+            BTreeSet::from([Position::from(1)])
+        );
+    }
+
+    /// Inserts leaves `a`, `b`, `c` and `d` one at a time under a pruned leaf at level 2.
+    fn fill_under_leaf(
+        claim: &str,
+        flags: RetentionFlags,
+    ) -> Result<LocatedPrunableTree<String>, InsertionError> {
+        let root_addr = Address::from_parts(Level::from(2), 0);
+        ["a", "b", "c", "d"].iter().enumerate().try_fold(
+            LocatedTree::from_parts(root_addr, str_leaf(claim, RetentionFlags::EPHEMERAL)).unwrap(),
+            |tree, (i, v)| {
+                let incoming = LocatedTree::from_parts(
+                    Address::from_parts(Level::from(0), i as u64),
+                    str_leaf(v, flags),
+                )
+                .unwrap();
+                tree.insert_subtree(incoming, flags.is_marked())
+                    .map(|(tree, _)| tree)
+            },
+        )
+    }
+
+    #[test]
+    fn insert_subtree_verifies_descended_leaf_with_ephemeral_children() {
+        assert_eq!(
+            fill_under_leaf("HHHH", RetentionFlags::EPHEMERAL),
+            Err(InsertionError::Conflict(Address::from_parts(
+                Level::from(2),
+                0
+            )))
+        );
+
+        let tree = fill_under_leaf("abcd", RetentionFlags::EPHEMERAL).unwrap();
+        assert_eq!(tree.root(), &str_leaf("abcd", RetentionFlags::EPHEMERAL));
+    }
+
+    #[test]
+    fn insert_subtree_verifies_descended_leaf_with_marked_children() {
+        assert_eq!(
+            fill_under_leaf("HHHH", RetentionFlags::MARKED),
+            Err(InsertionError::Conflict(Address::from_parts(
+                Level::from(2),
+                0
+            )))
+        );
+
+        let tree = fill_under_leaf("abcd", RetentionFlags::MARKED).unwrap();
+        assert_eq!(
+            tree.root(),
+            &annotated(
+                "abcd",
+                parent(
+                    str_leaf("a", RetentionFlags::MARKED),
+                    str_leaf("b", RetentionFlags::MARKED)
+                ),
+                parent(
+                    str_leaf("c", RetentionFlags::MARKED),
+                    str_leaf("d", RetentionFlags::MARKED)
+                ),
+            )
+        );
+    }
+
+    #[test]
+    fn insert_subtree_verifies_annotation_completed_by_merge() {
+        // The annotated root is completed by a merge at a lower address.
+        let root_addr = Address::from_parts(Level::from(2), 0);
+        let tree: LocatedPrunableTree<String> = LocatedTree::from_parts(
+            root_addr,
+            annotated(
+                "HHHH",
+                parent(
+                    str_leaf("a", RetentionFlags::MARKED),
+                    str_leaf("b", RetentionFlags::MARKED),
+                ),
+                parent(str_leaf("c", RetentionFlags::MARKED), nil()),
+            ),
+        )
+        .unwrap();
+        let incoming = LocatedTree::from_parts(
+            Address::from_parts(Level::from(1), 1),
+            parent(nil(), str_leaf("d", RetentionFlags::MARKED)),
+        )
+        .unwrap();
+        assert_eq!(
+            tree.insert_subtree(incoming, true),
+            Err(InsertionError::Conflict(root_addr))
+        );
+    }
+
     proptest! {
         #[test]
         fn clear_flags(
