@@ -1844,6 +1844,24 @@ mod tests {
     }
 
     #[test]
+    fn root_caching_below_shard_level_does_not_replace_shard_root() {
+        let mut tree = empty_tree::<String, 4, 2>();
+        for c in "abcde".chars() {
+            tree.append(c.to_string(), Retention::Marked).unwrap();
+        }
+        let root_addr = ShardTree::<MemoryShardStore<String, u32>, 4, 2>::root_addr();
+        assert_eq!(
+            tree.root_caching(Address::from_parts(Level::from(1), 0), Position::from(16))
+                .unwrap(),
+            "ab"
+        );
+        assert_eq!(
+            tree.root(root_addr, Position::from(5)).unwrap(),
+            "abcde___________"
+        );
+    }
+
+    #[test]
     fn frontier_from_appended_leaves() {
         // Append leaves with the last one marked, so it isn't pruned away.
         let mut tree = empty_tree::<String, 4, 3>();
@@ -3214,8 +3232,9 @@ mod tests {
                 tree.root_internal(&cap, target_addr, truncate_at).unwrap();
 
             assert_eq!(computed_root_hash, expected_root_hash);
-            // Untruncated, so the sub-shard root is written back as a cached leaf.
-            assert_eq!(updated_cap, Some(pleaf(&expected_root_hash)));
+            // The sub-shard root is not the root of the cap node at (2, 0), so it is not
+            // written back.
+            assert_eq!(updated_cap, None);
         }
 
         // ---- Phase 2: `root_from_shards` multi-shard peak fold --------------
