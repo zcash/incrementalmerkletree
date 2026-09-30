@@ -1845,6 +1845,39 @@ mod tests {
     }
 
     #[test]
+    fn root_caching_retains_cap_ommer() {
+        // The level-3 ommer "abcdefgh" of position 8 is stored only in the cap.
+        let frontier = NonEmptyFrontier::from_parts(
+            Position::from(8),
+            "i".to_string(),
+            vec!["abcdefgh".to_string()],
+        )
+        .unwrap();
+        let mut tree = empty_tree::<String, 4, 2>();
+        tree.insert_frontier_nodes(frontier, Retention::Ephemeral)
+            .unwrap();
+        tree.batch_insert(
+            Position::from(0),
+            "abcd"
+                .chars()
+                .map(|c| (c.to_string(), Retention::Ephemeral)),
+        )
+        .unwrap();
+
+        let root_addr = ShardTree::<MemoryShardStore<String, u32>, 4, 2>::root_addr();
+        let expected = "abcdefghi_______".to_string();
+        assert_eq!(tree.root(root_addr, Position::from(9)).unwrap(), expected);
+
+        for _ in 0..2 {
+            assert_eq!(
+                tree.root_caching(root_addr, Position::from(4)).unwrap(),
+                "abcd____________"
+            );
+            assert_eq!(tree.root(root_addr, Position::from(9)).unwrap(), expected);
+        }
+    }
+
+    #[test]
     fn root_caching_below_shard_level_does_not_replace_shard_root() {
         let mut tree = empty_tree::<String, 4, 2>();
         for c in "abcde".chars() {
