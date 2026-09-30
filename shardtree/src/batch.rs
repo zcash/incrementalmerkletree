@@ -34,6 +34,11 @@ impl<
     /// be filled with values in order to produce witnesses for inserted leaves with
     /// [`Retention::Marked`] retention.
     ///
+    /// Each shard is checked and written in turn. If an error is returned, the shards written
+    /// before the one that failed, and their checkpoints, remain in the store. Callers that need
+    /// all-or-nothing behavior should perform the operation within a transaction of the
+    /// underlying [`ShardStore`], and discard it on error.
+    ///
     /// This method operates on a single thread. If you have parallelism available, consider using
     /// [`LocatedPrunableTree::from_iter`] and [`Self::insert_tree`] instead.
     ///

@@ -724,6 +724,11 @@ impl<
 
     /// Insert a tree by decomposing it into its `SHARD_HEIGHT` or smaller parts (if necessary)
     /// and inserting those at their appropriate locations.
+    ///
+    /// When the inserted leaves span several shards, each shard is checked and written in turn.
+    /// If an error is returned, the shards written before the one that failed remain in the
+    /// store. Callers that need all-or-nothing behavior should perform the operation within a
+    /// transaction of the underlying [`ShardStore`], and discard it on error.
     #[tracing::instrument(skip(self, tree, checkpoints))]
     pub fn insert_tree(
         &mut self,
