@@ -8,7 +8,7 @@ and this project adheres to Rust's notion of
 ## [Unreleased]
 
 ### Changed
-- Migrated to `incrementalmerkletree 0.9`.
+- Migrated to `incrementalmerkletree 0.9`, `incrementalmerkletree-testing 0.4`.
 - MSRV is now 1.88.0.
 
 ## [0.7.1] - 2026-07-17
