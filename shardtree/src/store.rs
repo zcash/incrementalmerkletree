@@ -143,7 +143,7 @@ pub trait ShardStore {
     /// pruning excess checkpoints.
     ///
     /// A retained checkpoint is excluded from the `max_checkpoints` budget and is never removed by
-    /// automatic pruning (see [`crate::ShardTree::prune_excess_checkpoints`]). The identifier may
+    /// the automatic pruning of excess checkpoints performed by [`crate::ShardTree`]. The identifier may
     /// be recorded even if no checkpoint with that identifier currently exists in the data store.
     fn add_retained_checkpoint(
         &mut self,

@@ -319,6 +319,13 @@ where
     /// stored root (a leaf or a parent's cached annotation) conflicts with the root computed from
     /// the children beneath it once those children are complete. The returned error contains the
     /// address of the node where such a conflict occurred.
+    ///
+    /// Stored trees are assumed to be internally consistent: where a parent's cached annotation
+    /// sits over children whose roots can be computed, the annotation equals the root of those
+    /// children. The insertion and merge operations of this crate preserve this property, but
+    /// do not establish it for their inputs: a tree constructed directly (for example with
+    /// [`Tree::parent`]) or read from a [`ShardStore`](crate::store::ShardStore) written by other
+    /// code is not checked, and an inconsistency already present in it is not detected.
     #[tracing::instrument()]
     pub fn merge_checked(self, root_addr: Address, other: Self) -> Result<Self, MergeError> {
         /// Pre-condition: `root_addr` must be the address of `t0` and `t1`.
@@ -910,6 +917,9 @@ where
     /// the root node of this tree or if the insertion would result in a conflict between root
     /// hashes. A stored root (a leaf or a parent's cached annotation) conflicts with the root
     /// computed from the leaves inserted beneath it once those leaves form a complete subtree.
+    ///
+    /// The same consistency assumption as for [`PrunableTree::merge_checked`] applies to
+    /// `self`.
     pub fn insert_subtree(
         &self,
         subtree: Self,
@@ -1332,7 +1342,7 @@ where
     ///
     /// The returned ommers cover only the levels within this tree (from level 0 up to
     /// but not including this tree's root level). This is a building block for
-    /// [`ShardTree::frontier`] which extends the ommers to the full tree depth.
+    /// [`crate::ShardTree::frontier`] which extends the ommers to the full tree depth.
     pub(crate) fn frontier_ommers(&self) -> Result<Option<(Position, H, Vec<H>)>, FrontierError> {
         /// Traverses the rightmost path of the tree, collecting the frontier leaf and ommers.
         /// Returns `(position, leaf_hash, ommers)` with ommers ordered from lowest to highest
