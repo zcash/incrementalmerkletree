@@ -36,7 +36,20 @@ and this project adheres to Rust's notion of
   conflicts with a root that the cap holds at or above the shard, such as a
   frontier ommer inserted by `ShardTree::insert_frontier_nodes`. Previously,
   the tree reported the root from the cap while witnesses were computed from
-  the conflicting leaves.
+  the conflicting leaves. The completed shard is compared with every root that
+  the cap holds on the path from the shard to the root of the tree, so a root
+  inserted at the shard level by `ShardTree::insert` no longer masks a
+  conflicting root above it. The error contains the address of the cap node
+  whose root conflicts.
+- `shardtree::ShardTree::insert`, `ShardTree::insert_frontier_nodes`, and
+  `ShardTree::insert_witness_nodes` now return
+  `ShardTreeError::Insert(InsertionError::Conflict(_))` when a root that they
+  write to the cap at or above the shard level conflicts with the root
+  computed from complete shards beneath it, or with a root that the cap holds
+  above it. Previously, a root or frontier ommer inserted after the shards
+  beneath it were complete was never compared with them. `ShardTree::insert`
+  and `ShardTree::insert_frontier_nodes` now perform every check before
+  writing, so the tree is not modified when they return a conflict.
 
 ## [0.7.1] - 2026-07-17
 
