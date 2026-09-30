@@ -1843,6 +1843,88 @@ mod tests {
     }
 
     #[test]
+    fn batch_insert_below_cap_ommer_detects_conflicting_leaves() {
+        // With SHARD_HEIGHT = 2, the level-2 ommer "abcd" of position 7 is the root of shard 0
+        // and is stored only in the cap.
+        let frontier = NonEmptyFrontier::from_parts(
+            Position::from(7),
+            "h".to_string(),
+            vec!["g".to_string(), "ef".to_string(), "abcd".to_string()],
+        )
+        .unwrap();
+        let fill = |leaves: &str| {
+            let mut tree = empty_tree::<String, 4, 2>();
+            tree.insert_frontier_nodes(
+                frontier.clone(),
+                Retention::Checkpoint {
+                    id: 1,
+                    marking: Marking::None,
+                },
+            )
+            .unwrap();
+            tree.batch_insert(
+                Position::from(0),
+                leaves.chars().map(|c| (c.to_string(), Retention::Marked)),
+            )
+            .map(|_| tree)
+        };
+
+        assert_matches!(
+            fill("wxyz"),
+            Err(ShardTreeError::Insert(InsertionError::Conflict(_)))
+        );
+
+        let tree = fill("abcd").unwrap();
+        let root = tree.root_at_checkpoint_depth(Some(0)).unwrap().unwrap();
+        assert_eq!(root, "abcdefgh________");
+        let witness = tree
+            .witness_at_checkpoint_depth(Position::from(0), 0)
+            .unwrap()
+            .unwrap();
+        assert_eq!(witness.root("a".to_string()), root);
+    }
+
+    #[test]
+    fn batch_insert_below_cap_ommer_above_shard_level_detects_conflicting_leaves() {
+        // The level-3 ommer "abcdefgh" of position 8 spans shards 0 and 1 and is stored only
+        // in the cap. It can be checked once both shards are complete, in either order.
+        let frontier = NonEmptyFrontier::from_parts(
+            Position::from(8),
+            "i".to_string(),
+            vec!["abcdefgh".to_string()],
+        )
+        .unwrap();
+        let fill = |first: (u64, &str), second: (u64, &str)| {
+            let mut tree = empty_tree::<String, 4, 2>();
+            tree.insert_frontier_nodes(frontier.clone(), Retention::Ephemeral)
+                .unwrap();
+            for (start, leaves) in [first, second] {
+                tree.batch_insert(
+                    Position::from(start),
+                    leaves.chars().map(|c| (c.to_string(), Retention::Marked)),
+                )?;
+            }
+            Ok::<_, ShardTreeError<Infallible>>(tree)
+        };
+
+        for (first, second) in [((0, "abcd"), (4, "wxyz")), ((4, "wxyz"), (0, "abcd"))] {
+            assert_matches!(
+                fill(first, second),
+                Err(ShardTreeError::Insert(InsertionError::Conflict(addr)))
+                    if addr == Address::from_parts(Level::from(3), 0)
+            );
+        }
+        for (first, second) in [((0, "abcd"), (4, "efgh")), ((4, "efgh"), (0, "abcd"))] {
+            let tree = fill(first, second).unwrap();
+            let root_addr = ShardTree::<MemoryShardStore<String, u32>, 4, 2>::root_addr();
+            assert_eq!(
+                tree.root(root_addr, Position::from(9)).unwrap(),
+                "abcdefghi_______"
+            );
+        }
+    }
+
+    #[test]
     fn root_caching_retains_cap_ommer() {
         // The level-3 ommer "abcdefgh" of position 8 is stored only in the cap.
         let frontier = NonEmptyFrontier::from_parts(
