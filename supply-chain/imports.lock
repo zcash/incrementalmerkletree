@@ -1,6 +1,10 @@
 
 # cargo-vet imports lock
 
+[[unpublished.incrementalmerkletree]]
+version = "0.9.0"
+audited_as = "0.8.2"
+
 [[publisher.incrementalmerkletree]]
 version = "0.8.2"
 when = "2025-02-01"
