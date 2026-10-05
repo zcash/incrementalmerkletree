@@ -1029,10 +1029,7 @@ where
             }
         }
         if let Err(e) = self.check_consistency() {
-            panic!(
-                "Consistency check failed after garbage collection with {:?}",
-                e
-            );
+            panic!("Consistency check failed after garbage collection with {e:?}");
         }
     }
 }
@@ -1246,7 +1243,7 @@ mod tests {
         let mut to_unmark = vec![];
         let mut has_witness = vec![];
         for i in 0u64..100 {
-            let elem: String = format!("{},", i);
+            let elem: String = format!("{i},");
             assert!(t.append(elem), "Append should succeed.");
             if i % 5 == 0 {
                 t.checkpoint(usize::try_from(i).unwrap() + 1);
@@ -1270,7 +1267,7 @@ mod tests {
             .iter()
             .map(|pos| match t.witness(*pos, 0) {
                 Ok(path) => path,
-                Err(e) => panic!("Failed to get auth path: {:?}", e),
+                Err(e) => panic!("Failed to get auth path: {e:?}"),
             })
             .collect::<Vec<_>>();
         t.garbage_collect();
