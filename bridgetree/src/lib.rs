@@ -1083,12 +1083,15 @@ mod tests {
             BridgeTree::marked_positions(self)
         }
 
-        fn root(&self, checkpoint_depth: usize) -> Option<H> {
-            BridgeTree::root(self, checkpoint_depth)
+        // `BridgeTree` indexes checkpoint depths from 1, reserving 0 for the current tree
+        // state; `testing::Tree` indexes checkpoints from 0 and uses `None` for the current
+        // tree state.
+        fn root(&self, checkpoint_depth: Option<usize>) -> Option<H> {
+            BridgeTree::root(self, checkpoint_depth.map_or(0, |depth| depth + 1))
         }
 
         fn witness(&self, position: Position, checkpoint_depth: usize) -> Option<Vec<H>> {
-            BridgeTree::witness(self, position, checkpoint_depth).ok()
+            BridgeTree::witness(self, position, checkpoint_depth + 1).ok()
         }
 
         fn remove_mark(&mut self, position: Position) -> bool {
@@ -1099,8 +1102,25 @@ mod tests {
             BridgeTree::checkpoint(self, id)
         }
 
-        fn rewind(&mut self) -> bool {
-            BridgeTree::rewind(self)
+        fn checkpoint_count(&self) -> usize {
+            self.checkpoints().len()
+        }
+
+        // `testing::Tree::rewind` retains the checkpoint it rewinds to, whereas
+        // `BridgeTree::rewind` removes it; so remove every checkpoint down to and including
+        // the target, then restore the target at the state it recorded.
+        fn rewind(&mut self, checkpoint_depth: usize) -> bool {
+            if self.checkpoints().len() <= checkpoint_depth {
+                return false;
+            }
+
+            let mut target_id = None;
+            for _ in 0..=checkpoint_depth {
+                target_id = self.checkpoints().back().map(|c| *c.id());
+                BridgeTree::rewind(self);
+            }
+
+            target_id.is_some_and(|id| BridgeTree::checkpoint(self, id))
         }
     }
 
