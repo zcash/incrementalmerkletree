@@ -7,6 +7,13 @@ and this project adheres to Rust's notion of
 
 ## Unreleased
 
+### Added
+- `Hashable::combine_pairs`, a provided method hashing a level's pairs in one
+  call (default = `combine` per pair), for implementations with a faster batch path
+- `frontier::{NonEmptyFrontier, Frontier}::append_batch`, appending many leaves
+  with one `combine_pairs` call per level, and `append_batch_visiting`, which also
+  reports every node the batch completes (once, in the batch holding its last leaf)
+
 ## [0.9.0] - 2026-09-29
 
 ### Changed
