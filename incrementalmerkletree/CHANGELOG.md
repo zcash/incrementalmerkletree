@@ -7,6 +7,15 @@ and this project adheres to Rust's notion of
 
 ## Unreleased
 
+### Fixed
+- `incrementalmerkletree::frontier` (under the `test-dependencies` feature):
+  `NonEmptyFrontier::random_with_prior_subtree_roots` and
+  `Frontier::random_with_prior_subtree_roots` now return a frontier that agrees
+  with the returned subtree roots when `tree_size` is a multiple of
+  `2^subtree_depth`. Previously, in this case the subtree roots were written
+  into ommers at the wrong levels, and the last returned root did not agree
+  with the frontier's leaf and lower ommers.
+
 ## [0.9.0] - 2026-09-29
 
 ### Changed
