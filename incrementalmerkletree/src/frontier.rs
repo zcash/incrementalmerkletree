@@ -210,6 +210,14 @@ where
         .unwrap()
     }
 
+    /// Generates a random frontier of a Merkle tree having the specified nonzero size, along
+    /// with the roots of all complete subtrees of depth `subtree_depth` in that tree.
+    ///
+    /// The returned roots are in order of subtree index, and there are
+    /// `tree_size >> subtree_depth` of them. The frontier agrees with these roots: its ommers
+    /// at levels at or above `subtree_depth` are computed from them. If the frontier's leaf
+    /// completes the last subtree, the root of that subtree is computed from the frontier's
+    /// leaf and its ommers below `subtree_depth`.
     pub fn random_with_prior_subtree_roots<R>(
         rng: &mut R,
         tree_size: NonZeroU64,
@@ -218,65 +226,65 @@ where
     where
         R: Rng,
     {
-        let prior_subtree_count: u64 = u64::from(tree_size) >> u8::from(subtree_depth);
-        if prior_subtree_count > 0 {
-            let prior_roots: Vec<H> = core::iter::repeat_with(|| rng.random())
-                .take(prior_subtree_count as usize)
-                .collect();
-
-            let subtree_root_level = Level::from(u8::from(subtree_depth));
-
-            // Generate replacement ommers for the random frontier from the prior subtree roots.
-            let mut replacement_ommers: Vec<(Level, H)> = vec![];
-            let mut roots_iter = prior_roots.iter();
-            loop {
-                if let Some(top) = replacement_ommers.pop() {
-                    if let Some(prev) = replacement_ommers.pop() {
-                        if top.0 == prev.0 {
-                            // Combine, then continue the outer loop so that we eagerly combine as
-                            // many values from the stack as we can before pushing more on.
-                            replacement_ommers
-                                .push((top.0 + 1, H::combine(top.0, &prev.1, &top.1)));
-                            continue;
-                        } else {
-                            // We can't combine yet, so push `prev` back on. `top` will get pushed
-                            // back on or consumed below.
-                            replacement_ommers.push(prev);
-                        }
-                    }
-
-                    if let Some(root) = roots_iter.next() {
-                        if top.0 == subtree_root_level {
-                            replacement_ommers.push((
-                                subtree_root_level + 1,
-                                H::combine(subtree_root_level, &top.1, root),
-                            ));
-                        } else {
-                            replacement_ommers.push(top);
-                            replacement_ommers.push((subtree_root_level, root.clone()));
-                        }
-                    } else {
-                        // No more roots, so we just push `top` back on and break.
-                        replacement_ommers.push(top);
-                        break;
-                    }
-                } else if let Some(root) = roots_iter.next() {
-                    replacement_ommers.push((subtree_root_level, root.clone()));
-                } else {
-                    break;
+        /// Returns the root of the complete subtree whose leaves at `level` are `nodes`.
+        ///
+        /// The length of `nodes` must be a power of two.
+        fn complete_subtree_root<H: Hashable + Clone>(level: Level, nodes: &[H]) -> H {
+            match nodes {
+                [node] => node.clone(),
+                _ => {
+                    let (left, right) = nodes.split_at(nodes.len() / 2);
+                    let child_level = level + (nodes.len().trailing_zeros() - 1) as u8;
+                    H::combine(
+                        child_level,
+                        &complete_subtree_root(level, left),
+                        &complete_subtree_root(level, right),
+                    )
                 }
             }
-
-            let mut result = Self::random_of_size(rng, tree_size);
-            let olen = result.ommers.len();
-            for (idx, (_, ommer)) in replacement_ommers.into_iter().enumerate() {
-                result.ommers[olen - (idx + 1)] = ommer;
-            }
-
-            (prior_roots, result)
-        } else {
-            (vec![], Self::random_of_size(rng, tree_size))
         }
+
+        let depth = u32::from(u8::from(subtree_depth));
+        let subtree_level = Level::from(u8::from(subtree_depth));
+        let below_subtree_mask = 1u64.checked_shl(depth).map_or(u64::MAX, |bit| bit - 1);
+
+        let mut result = Self::random_of_size(rng, tree_size);
+        let position = u64::from(result.position);
+
+        // The subtrees that end before the frontier's leaf. Their roots make the ommers at
+        // and above `subtree_level`.
+        let prior_subtree_count = position.checked_shr(depth).unwrap_or(0);
+        let mut prior_roots: Vec<H> = core::iter::repeat_with(|| rng.random())
+            .take(prior_subtree_count as usize)
+            .collect();
+
+        let mut upper_ommers = Vec::new();
+        let mut remaining_roots = &prior_roots[..];
+        for bit in (0..u64::BITS).rev() {
+            if (prior_subtree_count >> bit) & 1 == 1 {
+                let (block, rest) = remaining_roots.split_at(1usize << bit);
+                upper_ommers.push(complete_subtree_root(subtree_level, block));
+                remaining_roots = rest;
+            }
+        }
+
+        let lower_ommer_count = (position & below_subtree_mask).count_ones() as usize;
+        result.ommers.truncate(lower_ommer_count);
+        result.ommers.extend(upper_ommers.into_iter().rev());
+
+        // If the frontier's leaf completes a subtree, that subtree's root depends on the leaf
+        // and on all ommers below `subtree_level`.
+        if u64::from(tree_size) & below_subtree_mask == 0 {
+            let completed_root = result.ommers[..lower_ommer_count]
+                .iter()
+                .zip(0u8..)
+                .fold(result.leaf.clone(), |node, (ommer, level)| {
+                    H::combine(level.into(), ommer, &node)
+                });
+            prior_roots.push(completed_root);
+        }
+
+        (prior_roots, result)
     }
 }
 
@@ -964,6 +972,66 @@ mod tests {
             TestNode::combine(Level::from(4), &prior_roots[0], &prior_roots[1]);
         assert_eq!(f0.ommers[f0.ommers.len() - 1], expected_largest_ommer);
         assert_eq!(f0.ommers[f0.ommers.len() - 2], prior_roots[2]);
+    }
+
+    #[test]
+    fn test_random_frontier_agrees_with_prior_subtree_roots() {
+        const DEPTH: u8 = 8;
+
+        /// Returns the root of the depth-`DEPTH` tree whose nodes at `level` are `nodes`,
+        /// followed by empty nodes.
+        fn root_from_level(level: Level, mut nodes: Vec<TestNode>) -> TestNode {
+            if level == Level::from(DEPTH) {
+                assert_eq!(nodes.len(), 1);
+                nodes[0]
+            } else {
+                if nodes.len() % 2 == 1 {
+                    nodes.push(TestNode::empty_root(level));
+                }
+                let parents = nodes
+                    .chunks(2)
+                    .map(|pair| TestNode::combine(level, &pair[0], &pair[1]))
+                    .collect();
+                root_from_level(level + 1, parents)
+            }
+        }
+
+        let mut rng = ChaChaRng::seed_from_u64(0);
+        for subtree_depth in 1..=DEPTH {
+            let subtree_level = Level::from(subtree_depth);
+            let below_subtree_mask = (1u64 << subtree_depth) - 1;
+            for tree_size in 1..=(1u64 << DEPTH) {
+                let (prior_roots, frontier) =
+                    Frontier::<TestNode, DEPTH>::random_with_prior_subtree_roots(
+                        &mut rng,
+                        tree_size,
+                        NonZeroU8::new(subtree_depth).unwrap(),
+                    );
+                assert_eq!(prior_roots.len() as u64, tree_size >> subtree_depth);
+
+                // The nodes at `subtree_level`: the complete subtree roots, then the root of
+                // the incomplete last subtree, if there is one.
+                let mut subtree_nodes = prior_roots;
+                let tip = frontier.value().unwrap();
+                if tree_size & below_subtree_mask != 0 {
+                    let position = u64::from(tip.position);
+                    let lower_ommer_count = (position & below_subtree_mask).count_ones() as usize;
+                    let partial_subtree = NonEmptyFrontier::from_parts(
+                        Position::from(position & below_subtree_mask),
+                        tip.leaf,
+                        tip.ommers[..lower_ommer_count].to_vec(),
+                    )
+                    .unwrap();
+                    subtree_nodes.push(partial_subtree.root(Some(subtree_level)));
+                }
+
+                assert_eq!(
+                    frontier.root(),
+                    root_from_level(subtree_level, subtree_nodes),
+                    "tree_size {tree_size}, subtree_depth {subtree_depth}"
+                );
+            }
+        }
     }
 
     #[cfg(feature = "legacy-api")]

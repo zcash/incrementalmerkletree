@@ -499,8 +499,10 @@ impl<
     /// last shard (below `SHARD_HEIGHT`) and from sibling subtree roots above the
     /// shard level.
     ///
-    /// Returns [`Frontier::empty`] if the tree has no shards or if the frontier
-    /// cannot be determined from the available data.
+    /// Returns [`Frontier::empty`] if the tree has no shards, or if its last shard is
+    /// empty. Returns `ShardTreeError::Query(QueryError::TreeIncomplete(_))` if the
+    /// frontier cannot be determined from the available data, for example because the
+    /// frontier's leaf or one of its ommers has been pruned.
     pub fn frontier(&self) -> Result<Frontier<H, DEPTH>, ShardTreeError<S::Error>> {
         let last_shard = self.store.last_shard().map_err(ShardTreeError::Storage)?;
         let last_shard = match last_shard {
