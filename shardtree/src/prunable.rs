@@ -1338,7 +1338,7 @@ where
     }
 
     /// Returns the position, leaf hash, and ommers for the frontier of this tree, `Ok(None)` if
-    /// the tree is empty, or `Err(())` if the frontier cannot be computed due to missing data.
+    /// the tree is empty, or an error if the frontier cannot be computed due to missing data.
     ///
     /// The returned ommers cover only the levels within this tree (from level 0 up to
     /// but not including this tree's root level). This is a building block for
