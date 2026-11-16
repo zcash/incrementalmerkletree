@@ -1091,6 +1091,16 @@ mod tests {
     }
 
     #[test]
+    fn option_forwards_combine_pairs_for_pairs_of_present_nodes() {
+        let node = |value: &str| Some(PairsOnly(value.to_string()));
+        let (a, b, c, d) = (node("a"), node("b"), node("c"), node("d"));
+        assert_eq!(
+            Option::combine_pairs(Level::from(0), [(&a, &b), (&None, &c), (&c, &d)]),
+            vec![node("ab"), None, node("cd")],
+        );
+    }
+
+    #[test]
     fn append_batch_hashes_through_combine_pairs() {
         let mut frontier = super::Frontier::<PairsOnly, 5>::empty();
         let mut expected = super::Frontier::<String, 5>::empty();

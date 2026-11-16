@@ -14,6 +14,10 @@ and this project adheres to Rust's notion of
   `Hashable::combine` once per pair, so existing implementations need no
   change. An implementation that overrides it must return the same nodes as
   the default.
+- `incrementalmerkletree::testing::check_combine_pairs` (under the
+  `test-dependencies` feature). It panics unless `Hashable::combine_pairs`
+  returns the result of `Hashable::combine` for each pair that it is given. A
+  crate that overrides `Hashable::combine_pairs` can call it from its tests.
 - `frontier::{NonEmptyFrontier, Frontier}::append_batch`, appending many leaves
   with one `combine_pairs` call per level, and `append_batch_visiting`, which also
   reports every node the batch completes (once, in the batch holding its last leaf)

@@ -7,6 +7,11 @@ and this project adheres to Rust's notion of
 
 ## [Unreleased]
 
+### Added
+- `shardtree::LevelShifter` overrides `Hashable::combine_pairs`. It passes each
+  call to the wrapped type at the shifted level, so a batch implementation of
+  the wrapped type is used.
+
 ## [0.8.0] - 2026-09-30
 
 ### Changed
