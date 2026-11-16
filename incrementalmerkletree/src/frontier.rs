@@ -730,11 +730,10 @@ where
     /// against empty nodes up to the maximum height of the pruned
     /// tree that the frontier represents.
     pub fn root(&self) -> H {
-        self.frontier
-            .as_ref()
-            .map_or(H::empty_root(DEPTH.into()), |frontier| {
-                frontier.root(Some(DEPTH.into()))
-            })
+        self.frontier.as_ref().map_or_else(
+            || H::empty_root(DEPTH.into()),
+            |frontier| frontier.root(Some(DEPTH.into())),
+        )
     }
 
     /// Constructs a [`MerklePath`] to the leaf at the tip of this frontier, given a source of node
