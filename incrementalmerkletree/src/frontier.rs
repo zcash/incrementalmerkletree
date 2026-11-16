@@ -138,96 +138,272 @@ where
         }
     }
 
-    /// Appends `leaves` in order, equal to [`NonEmptyFrontier::append`] per leaf.
+    /// Appends `leaves` to the tree, in order of position.
     ///
-    /// Hashes level by level: each level's new nodes go through one [`Hashable::combine_pairs`]
-    pub fn append_batch<I: IntoIterator<Item = H>>(&mut self, leaves: I) {
-        self.append_batch_inner(leaves, None::<fn(Address, &[H])>);
+    /// The frontier that results is equal to the frontier that results from one call to
+    /// [`NonEmptyFrontier::append`] for each leaf.
+    ///
+    /// - Preconditions: none.
+    /// - Inputs: `leaves` are the leaves to add after the last leaf of the tree, in order.
+    /// - Outputs: `true` if the frontier now includes every leaf of `leaves`. `false` if the
+    ///   last leaf would have a position greater than `u64::MAX`. The frontier does not change
+    ///   when the result is `false`.
+    /// - Side effects:
+    ///   - Calls [`Hashable::combine_pairs`] at most once for each level of the tree. Does not
+    ///     call [`Hashable::combine`].
+    ///   - Panics if `Hashable::combine_pairs` does not return exactly one node for each pair.
+    ///     The frontier does not change when this method panics.
+    #[must_use = "the leaves are not appended if the result is `false`"]
+    pub fn append_batch<I: IntoIterator<Item = H>>(&mut self, leaves: I) -> bool {
+        self.append_collected(leaves.into_iter().collect(), None::<fn(Address, &[H])>)
     }
 
-    /// As [`NonEmptyFrontier::append_batch`], also passing every node the batch completes to `visit`.
+    /// Appends `leaves` to the tree, in order of position, and passes each node that these
+    /// leaves complete to `visit`.
     ///
-    /// - `visit(first, nodes)`: a run of one level's consecutive nodes, `first` = `nodes[0]`'s address
-    /// - Every node visited once, by the batch holding its last leaf (level 0 = the leaves appended)
-    /// - Extra cost: one hash per trailing one of the new tip's position (nodes the tip completes,
-    ///   which the frontier cannot keep and the next batch hashes again)
-    pub fn append_batch_visiting<I, V>(&mut self, leaves: I, visit: V)
+    /// A node is complete when the tree contains every leaf below it. `leaves` complete a node
+    /// when the last leaf below that node is one of `leaves`. Each leaf completes itself.
+    ///
+    /// `visit` does not receive a node that was complete before this call. This is true even
+    /// if no visitor ever received that node. That is the case for a node that
+    /// [`NonEmptyFrontier::append`] or [`NonEmptyFrontier::append_batch`] completed, and for a
+    /// node that was complete in a frontier that [`NonEmptyFrontier::from_parts`] made. A
+    /// caller that must receive every complete node of a tree must use this method to add
+    /// every leaf of that tree.
+    ///
+    /// The frontier that results is equal to the frontier that results from one call to
+    /// [`NonEmptyFrontier::append`] for each leaf.
+    ///
+    /// - Preconditions: none.
+    /// - Inputs:
+    ///   - `leaves` are the leaves to add after the last leaf of the tree, in order.
+    ///   - `visit` receives the completed nodes. In a call `visit(first, nodes)`, all of
+    ///     `nodes` are at the level of `first`, and `nodes[i]` has the index
+    ///     `first.index() + i`.
+    /// - Outputs: `true` if the frontier now includes every leaf of `leaves`. `false` if the
+    ///   last leaf would have a position greater than `u64::MAX`. The frontier does not change
+    ///   when the result is `false`.
+    /// - Side effects:
+    ///   - Calls `visit` at most once for each level, in ascending order of level. Each call
+    ///     passes every node of that level that `leaves` complete. The call for level 0
+    ///     passes `leaves`. Does not call `visit` if `leaves` is empty or if the result is
+    ///     `false`.
+    ///   - Calls [`Hashable::combine_pairs`] at most once for each level of the tree. Does not
+    ///     call [`Hashable::combine`].
+    ///   - Hashes one more pair than [`NonEmptyFrontier::append_batch`] for each node above
+    ///     level 0 that the last leaf completes. The frontier does not store those nodes, so
+    ///     the next append computes them again.
+    ///   - Panics if `Hashable::combine_pairs` does not return exactly one node for each pair.
+    ///     The frontier does not change when this method panics or when `visit` panics.
+    #[must_use = "the leaves are not appended if the result is `false`"]
+    pub fn append_batch_visiting<I, V>(&mut self, leaves: I, visit: V) -> bool
     where
         I: IntoIterator<Item = H>,
         V: FnMut(Address, &[H]),
     {
-        self.append_batch_inner(leaves, Some(visit));
+        self.append_collected(leaves.into_iter().collect(), Some(visit))
     }
 
-    fn append_batch_inner<I, V>(&mut self, leaves: I, mut visit: Option<V>)
+    /// Appends `leaves` to the tree, in order of position.
+    ///
+    /// - Preconditions: none.
+    /// - Inputs: `leaves` are the leaves to add after the last leaf of the tree, in order.
+    ///   `visit`, if it is present, receives each node that `leaves` complete.
+    /// - Outputs: `true` if the frontier now includes every leaf of `leaves`. `false` if the
+    ///   last leaf would have a position greater than `u64::MAX`. The frontier does not change
+    ///   when the result is `false`.
+    /// - Side effects: calls `visit` and [`Hashable::combine_pairs`] at most once for each
+    ///   level. Panics if `Hashable::combine_pairs` does not return exactly one node for each
+    ///   pair. The frontier does not change when this method panics.
+    fn append_collected<V>(&mut self, leaves: Vec<H>, visit: Option<V>) -> bool
     where
-        I: IntoIterator<Item = H>,
         V: FnMut(Address, &[H]),
     {
-        let prior = u64::from(self.position);
-        let mut nodes: Vec<H> = core::iter::once(self.leaf.clone()).chain(leaves).collect();
-        let appended = nodes.len() as u64 - 1;
-        if appended == 0 {
-            return;
+        if leaves.is_empty() {
+            return true;
         }
-        if let Some(visit) = visit.as_mut() {
-            visit(Address::from_parts(0.into(), prior + 1), &nodes[1..]);
-        }
-        // new tip stays unhashed, as `append` leaves it
-        self.leaf = nodes.pop().expect("the prior leaf is always present");
-
-        // ommers = complete subtrees of a tree of `position` leaves, one per set bit, ascending
-        let mut size = prior;
-        let mut ommers = core::mem::take(&mut self.ommers).into_iter();
-        let mut carry: Vec<Option<H>> = (0..u64::BITS)
-            .map(|level| match (size >> level) & 1 {
-                1 => ommers.next(),
-                _ => None,
-            })
-            .collect();
-
-        for (level, slot) in carry.iter_mut().enumerate() {
-            if nodes.is_empty() {
-                break;
+        match Self::with_appended(Some(self), leaves, visit) {
+            Some(frontier) => {
+                *self = frontier;
+                true
             }
-            if let (Some(visit), true) = (visit.as_mut(), level > 0) {
-                // prior tip's complete ancestors: visited by the batch that completed them
-                let seen = usize::from(level as u32 <= prior.trailing_ones());
-                if nodes.len() > seen {
-                    let first = Address::from_parts(Level::from(level as u8), size + seen as u64);
-                    visit(first, &nodes[seen..]);
+            None => false,
+        }
+    }
+
+    /// Returns the positions of the first leaf and of the last leaf of a batch that is appended
+    /// to a tree.
+    ///
+    /// - Preconditions: none.
+    /// - Inputs: `prior` is the frontier of the tree before the append, or `None` if that tree
+    ///   is empty. `leaf_count` is the number of leaves in the batch.
+    /// - Outputs: the position of the first leaf of the batch, then the position of its last
+    ///   leaf. `None` if `leaf_count` is zero, or if the last leaf would have a position
+    ///   greater than `u64::MAX`.
+    /// - Side effects: none.
+    fn appended_positions(prior: Option<&Self>, leaf_count: usize) -> Option<(Position, Position)> {
+        let first = match prior {
+            Some(frontier) => u64::from(frontier.position).checked_add(1)?,
+            None => 0,
+        };
+        let leaves_after_first = u64::try_from(leaf_count).ok()?.checked_sub(1)?;
+        let last = first.checked_add(leaves_after_first)?;
+        Some((Position::from(first), Position::from(last)))
+    }
+
+    /// Computes the frontier of the tree that results when `leaves` are appended to a tree.
+    ///
+    /// - Preconditions: none.
+    /// - Inputs:
+    ///   - `prior` is the frontier of the tree before the append, or `None` if that tree is
+    ///     empty.
+    ///   - `leaves` are the leaves to append, in order of position.
+    ///   - `visit`, if it is present, receives each node that `leaves` complete. In a call
+    ///     `visit(first, nodes)`, all of `nodes` are at the level of `first`, and `nodes[i]`
+    ///     has the index `first.index() + i`.
+    /// - Outputs: the frontier of the tree after the append. `None` if `leaves` is empty, or if
+    ///   the last leaf would have a position greater than `u64::MAX`.
+    /// - Side effects:
+    ///   - Calls `visit` at most once for each level, in ascending order of level, with every
+    ///     node of that level that `leaves` complete. Does not call `visit` if the result is
+    ///     `None`.
+    ///   - Calls [`Hashable::combine_pairs`] at most once for each level. Does not call
+    ///     [`Hashable::combine`].
+    ///   - Panics if `Hashable::combine_pairs` does not return exactly one node for each pair.
+    fn with_appended<V>(
+        prior: Option<&Self>,
+        mut leaves: Vec<H>,
+        mut visit: Option<V>,
+    ) -> Option<Self>
+    where
+        V: FnMut(Address, &[H]),
+    {
+        let (first_position, tip_position) = Self::appended_positions(prior, leaves.len())?;
+        if let Some(visit) = visit.as_mut() {
+            visit(Address::from(first_position), &leaves);
+        }
+        let tip_leaf = leaves.pop()?;
+
+        // A frontier stores its last leaf, and one ommer for each complete subtree that holds
+        // leaves before the last leaf. The loop below goes up the tree one level at a time and
+        // adds complete nodes to those subtrees.
+        //
+        // At each level, `pending` holds the complete nodes of that level that do not have a
+        // complete parent yet, in order of index. `pending_first` is the address of the first
+        // of them. At level 0 these nodes are the last leaf of the prior tree, then every new
+        // leaf except the last one.
+        let mut pending: Vec<H> = prior
+            .map(|frontier| frontier.leaf.clone())
+            .into_iter()
+            .chain(leaves)
+            .collect();
+        let mut pending_first =
+            Address::from(prior.map_or(Position::from(0), |frontier| frontier.position));
+        let mut prior_ommers = prior.map_or(&[][..], |frontier| &frontier.ommers).iter();
+        let mut ommers: Vec<H> = Vec::with_capacity(tip_position.past_ommer_count().into());
+        // The visitor also receives each ancestor that the new last leaf completes. The
+        // frontier does not store those ancestors. `tip_ancestor` is the ancestor of the new
+        // last leaf at the current level, if the new last leaf completes that ancestor.
+        let mut tip_ancestor: Option<H> = visit.as_ref().map(|_| tip_leaf.clone());
+
+        while !pending.is_empty() || tip_ancestor.is_some() {
+            let level = pending_first.level();
+
+            // If the first pending node is a right child, then its left sibling is the ommer
+            // of the prior frontier at this level.
+            let left_sibling = if pending_first.is_right_child() {
+                prior_ommers.next()
+            } else {
+                None
+            };
+            let mut children: Vec<H> = left_sibling.cloned().into_iter().chain(pending).collect();
+            // A last child that has no right sibling is the ommer of the new frontier at this
+            // level.
+            let ommer = if children.len() % 2 == 1 {
+                children.pop()
+            } else {
+                None
+            };
+            // The new last leaf completes its ancestor at the next level only if the new
+            // frontier has an ommer at this level. That ommer is the left child of the
+            // ancestor.
+            let tip_pair = ommer.as_ref().zip(tip_ancestor.as_ref());
+            let has_tip_pair = tip_pair.is_some();
+
+            let (child_pairs, _) = children.as_chunks::<2>();
+            let pair_count = child_pairs.len() + tip_pair.iter().count();
+            let mut parents = if pair_count == 0 {
+                Vec::new()
+            } else {
+                H::combine_pairs(
+                    level,
+                    child_pairs
+                        .iter()
+                        .map(|[left, right]| (left, right))
+                        .chain(tip_pair),
+                )
+            };
+            assert_eq!(
+                parents.len(),
+                pair_count,
+                "`Hashable::combine_pairs` must return exactly one node for each pair"
+            );
+
+            let parents_first = pending_first.parent();
+            if let Some(visit) = visit.as_mut() {
+                let (first, completed) = Self::completed_by_append(prior, parents_first, &parents);
+                if !completed.is_empty() {
+                    visit(first, completed);
                 }
             }
-            let mut children = Vec::with_capacity(nodes.len() + 1);
-            if size % 2 == 1 {
-                children.push(slot.take().expect("an odd size carries a left sibling"));
-            }
-            children.extend(nodes);
-            if children.len() % 2 == 1 {
-                *slot = children.pop();
-            }
-            let (pairs, _) = children.as_chunks::<2>();
-            nodes = H::combine_pairs(
-                Level::from(level as u8),
-                pairs.iter().map(|[left, right]| (left, right)),
-            );
-            size >>= 1;
+
+            // The parent of the tip pair is the last of `parents`. It is not a pending node,
+            // because the new last leaf stays out of the ommers.
+            tip_ancestor = if has_tip_pair { parents.pop() } else { None };
+            ommers.extend(ommer);
+            pending = parents;
+            pending_first = parents_first;
         }
+        // The append did not reach the remaining ommers of the prior frontier.
+        ommers.extend(prior_ommers.cloned());
 
-        self.position += appended;
-        self.ommers = carry.into_iter().flatten().collect();
+        Some(NonEmptyFrontier {
+            position: tip_position,
+            leaf: tip_leaf,
+            ommers,
+        })
+    }
 
-        if let Some(mut visit) = visit {
-            let tip = u64::from(self.position);
-            let mut node = self.leaf.clone();
-            for (level, ommer) in (0..tip.trailing_ones() as u8).zip(&self.ommers) {
-                node = H::combine(level.into(), ommer, &node);
-                let parent = Level::from(level + 1);
-                visit(
-                    Address::from_parts(parent, tip >> (level + 1)),
-                    core::slice::from_ref(&node),
-                );
+    /// Selects the nodes that an append completed from the nodes that it computed at one level.
+    ///
+    /// An append computes the ancestor of the prior last leaf at each level that it reaches,
+    /// because the nodes above need that ancestor. If the prior last leaf is the last leaf
+    /// below that ancestor, then the ancestor was complete before the append. The frontier
+    /// does not store such an ancestor, so the append computes it again, but the append did
+    /// not complete it. Every other node that the append computes has its last leaf in the
+    /// appended leaves.
+    ///
+    /// - Preconditions: `parents` are the nodes that the append computed at one level, in
+    ///   order of index. `parents_first` is the address of `parents[0]`. If `prior` is present,
+    ///   the last leaf of `prior` is below `parents_first`.
+    /// - Inputs: `prior` is the frontier of the tree before the append, or `None` if that tree
+    ///   is empty. `parents_first` and `parents` are as the preconditions describe.
+    /// - Outputs: the nodes of `parents` that the append completed, after the address of the
+    ///   first of them. These nodes are all of `parents`, or all of `parents` except
+    ///   `parents[0]`.
+    /// - Side effects: none.
+    fn completed_by_append<'a>(
+        prior: Option<&Self>,
+        parents_first: Address,
+        parents: &'a [H],
+    ) -> (Address, &'a [H]) {
+        let first_was_complete = prior
+            .is_some_and(|frontier| frontier.position.is_complete_subtree(parents_first.level()));
+        match parents.split_first() {
+            Some((_, after_first)) if first_was_complete => {
+                (parents_first.next_at_level(), after_first)
             }
+            _ => (parents_first, parents),
         }
     }
 
@@ -452,55 +628,102 @@ where
         }
     }
 
-    /// Appends `leaves` in order, as [`NonEmptyFrontier::append_batch`].
+    /// Appends `leaves` to the tree, in order of position.
     ///
-    /// Returns false, appending nothing, if the tree would exceed `2^DEPTH` leaves
+    /// The frontier that results is equal to the frontier that results from one call to
+    /// [`Frontier::append`] for each leaf.
+    ///
+    /// - Preconditions: none.
+    /// - Inputs: `leaves` are the leaves to add after the last leaf of the tree, in order.
+    /// - Outputs: `true` if the frontier now includes every leaf of `leaves`. `false` if the
+    ///   tree would have more than `2^DEPTH` leaves, or if the last leaf would have a position
+    ///   greater than `u64::MAX`. The frontier does not change when the result is `false`.
+    /// - Side effects:
+    ///   - Calls [`Hashable::combine_pairs`] at most once for each level of the tree. Does not
+    ///     call [`Hashable::combine`].
+    ///   - Panics if `Hashable::combine_pairs` does not return exactly one node for each pair.
+    ///     The frontier does not change when this method panics.
+    #[must_use = "the leaves are not appended if the result is `false`"]
     pub fn append_batch<I: IntoIterator<Item = H>>(&mut self, leaves: I) -> bool {
-        self.append_batch_inner(leaves.into_iter().collect(), None::<fn(Address, &[H])>)
+        self.append_collected(leaves.into_iter().collect(), None::<fn(Address, &[H])>)
     }
 
-    /// Appends `leaves` in order, as [`NonEmptyFrontier::append_batch_visiting`].
+    /// Appends `leaves` to the tree, in order of position, and passes each node that these
+    /// leaves complete to `visit`.
     ///
-    /// Returns false, appending and visiting nothing, if the tree would exceed `2^DEPTH` leaves
+    /// A node is complete when the tree contains every leaf below it. `leaves` complete a node
+    /// when the last leaf below that node is one of `leaves`. Each leaf completes itself.
+    ///
+    /// `visit` does not receive a node that was complete before this call. This is true even
+    /// if no visitor ever received that node. That is the case for a node that
+    /// [`Frontier::append`] or [`Frontier::append_batch`] completed, and for a node that was
+    /// complete in a frontier that [`Frontier::from_parts`] made. A caller that must receive
+    /// every complete node of a tree must use this method to add every leaf of that tree.
+    ///
+    /// The frontier that results is equal to the frontier that results from one call to
+    /// [`Frontier::append`] for each leaf.
+    ///
+    /// - Preconditions: none.
+    /// - Inputs:
+    ///   - `leaves` are the leaves to add after the last leaf of the tree, in order.
+    ///   - `visit` receives the completed nodes. In a call `visit(first, nodes)`, all of
+    ///     `nodes` are at the level of `first`, and `nodes[i]` has the index
+    ///     `first.index() + i`.
+    /// - Outputs: `true` if the frontier now includes every leaf of `leaves`. `false` if the
+    ///   tree would have more than `2^DEPTH` leaves, or if the last leaf would have a position
+    ///   greater than `u64::MAX`. The frontier does not change when the result is `false`.
+    /// - Side effects:
+    ///   - Calls `visit` at most once for each level, in ascending order of level. Each call
+    ///     passes every node of that level that `leaves` complete. The call for level 0
+    ///     passes `leaves`. Does not call `visit` if `leaves` is empty or if the result is
+    ///     `false`.
+    ///   - Calls [`Hashable::combine_pairs`] at most once for each level of the tree. Does not
+    ///     call [`Hashable::combine`].
+    ///   - Hashes one more pair than [`Frontier::append_batch`] for each node above level 0
+    ///     that the last leaf completes. The frontier does not store those nodes, so the next
+    ///     append computes them again.
+    ///   - Panics if `Hashable::combine_pairs` does not return exactly one node for each pair.
+    ///     The frontier does not change when this method panics or when `visit` panics.
+    #[must_use = "the leaves are not appended if the result is `false`"]
     pub fn append_batch_visiting<I, V>(&mut self, leaves: I, visit: V) -> bool
     where
         I: IntoIterator<Item = H>,
         V: FnMut(Address, &[H]),
     {
-        self.append_batch_inner(leaves.into_iter().collect(), Some(visit))
+        self.append_collected(leaves.into_iter().collect(), Some(visit))
     }
 
-    fn append_batch_inner<V: FnMut(Address, &[H])>(
-        &mut self,
-        leaves: Vec<H>,
-        mut visit: Option<V>,
-    ) -> bool {
-        let capacity = 1u128 << DEPTH.min(64);
-        let current_size = self
-            .frontier
-            .as_ref()
-            .map_or(0, |frontier| u128::from(u64::from(frontier.position())) + 1);
-        if current_size + leaves.len() as u128 > capacity {
-            return false;
+    /// Appends `leaves` to the tree, in order of position.
+    ///
+    /// - Preconditions: none.
+    /// - Inputs: `leaves` are the leaves to add after the last leaf of the tree, in order.
+    ///   `visit`, if it is present, receives each node that `leaves` complete.
+    /// - Outputs: `true` if the frontier now includes every leaf of `leaves`. `false` if the
+    ///   tree would have more than `2^DEPTH` leaves, or if the last leaf would have a position
+    ///   greater than `u64::MAX`. The frontier does not change when the result is `false`.
+    /// - Side effects: calls `visit` and [`Hashable::combine_pairs`] at most once for each
+    ///   level. Does not call either of them if the result is `false`. Panics if
+    ///   `Hashable::combine_pairs` does not return exactly one node for each pair. The frontier
+    ///   does not change when this method panics.
+    fn append_collected<V>(&mut self, leaves: Vec<H>, visit: Option<V>) -> bool
+    where
+        V: FnMut(Address, &[H]),
+    {
+        if leaves.is_empty() {
+            return true;
         }
-        let mut leaves = leaves.into_iter();
-        let frontier = match self.frontier.as_mut() {
-            Some(frontier) => frontier,
-            None => match leaves.next() {
-                Some(first) => {
-                    if let Some(visit) = visit.as_mut() {
-                        visit(
-                            Address::from_parts(0.into(), 0),
-                            core::slice::from_ref(&first),
-                        );
-                    }
-                    self.frontier.insert(NonEmptyFrontier::new(first))
-                }
-                None => return true,
-            },
-        };
-        frontier.append_batch_inner(leaves, visit);
-        true
+        let prior = self.frontier.as_ref();
+        // A tree of depth `DEPTH` holds the positions that have a root level of at most `DEPTH`.
+        let appended = NonEmptyFrontier::appended_positions(prior, leaves.len())
+            .filter(|(_, tip_position)| tip_position.root_level() <= Level::from(DEPTH))
+            .and_then(|_| NonEmptyFrontier::with_appended(prior, leaves, visit));
+        match appended {
+            Some(frontier) => {
+                self.frontier = Some(frontier);
+                true
+            }
+            None => false,
+        }
     }
 
     /// Obtains the current root of this Merkle frontier by hashing
@@ -1040,14 +1263,21 @@ mod tests {
             .collect()
     }
 
-    /// Returns the address of each node in `calls`, in ascending order of level and then index.
+    /// Returns the address of each node in `calls`, in the order of the calls.
     fn visited_addresses<H: Clone>(calls: &[(Address, Vec<H>)]) -> Vec<Address> {
-        let mut addresses: Vec<Address> = visited_nodes(calls)
+        visited_nodes(calls)
             .into_iter()
             .map(|(address, _)| address)
-            .collect();
-        addresses.sort();
-        addresses
+            .collect()
+    }
+
+    /// Returns whether each call in `calls` passed at least one node, and passed nodes of a
+    /// higher level than the call before it.
+    fn has_one_call_per_level<H>(calls: &[(Address, Vec<H>)]) -> bool {
+        calls.iter().all(|(_, nodes)| !nodes.is_empty())
+            && calls
+                .windows(2)
+                .all(|calls| calls[0].0.level() < calls[1].0.level())
     }
 
     /// Returns the number of nodes above level 0 in the complete subtrees of a tree of
@@ -1249,11 +1479,12 @@ mod tests {
             }
 
             let mut batched = frontier.clone();
-            batched.append_batch(leaves.clone());
+            prop_assert!(batched.append_batch(leaves.clone()));
             prop_assert_eq!(&batched, &expected);
 
             let mut visiting = frontier.clone();
-            visiting.append_batch_visiting(leaves, |_, _| {});
+            let appended = visiting.append_batch_visiting(leaves, |_, _| {});
+            prop_assert!(appended);
             prop_assert_eq!(&visiting, &expected);
         }
 
@@ -1268,11 +1499,12 @@ mod tests {
 
             let mut calls: VisitCalls<TestNode> = vec![];
             let mut visiting = frontier.clone();
-            visiting.append_batch_visiting(leaves, |first, nodes| {
+            let appended = visiting.append_batch_visiting(leaves, |first, nodes| {
                 calls.push((first, nodes.to_vec()))
             });
+            prop_assert!(appended);
 
-            prop_assert!(calls.iter().all(|(_, nodes)| !nodes.is_empty()));
+            prop_assert!(has_one_call_per_level(&calls));
             prop_assert_eq!(
                 visited_addresses(&calls),
                 nodes_completed_after(Some(frontier.position()), new_tip)
@@ -1291,9 +1523,9 @@ mod tests {
             let append_and_record =
                 |frontier: &mut NonEmptyFrontier<TestNode>, leaves: Vec<TestNode>| {
                     let mut calls: VisitCalls<TestNode> = vec![];
-                    frontier.append_batch_visiting(leaves, |first, nodes| {
+                    assert!(frontier.append_batch_visiting(leaves, |first, nodes| {
                         calls.push((first, nodes.to_vec()))
-                    });
+                    }));
                     visited_nodes(&calls)
                 };
 
@@ -1323,7 +1555,7 @@ mod tests {
 
             take_combine_pairs_calls();
             let mut batched = frontier.clone();
-            batched.append_batch(leaves);
+            prop_assert!(batched.append_batch(leaves));
             let calls = take_combine_pairs_calls();
 
             // The frontier holds the complete subtrees of the leaves before its last leaf.
@@ -1348,7 +1580,8 @@ mod tests {
 
             take_combine_pairs_calls();
             let mut visiting = frontier.clone();
-            visiting.append_batch_visiting(leaves, |_, _| {});
+            let appended = visiting.append_batch_visiting(leaves, |_, _| {});
+            prop_assert!(appended);
             let calls = take_combine_pairs_calls();
 
             // The visitor also receives each node that has the new last leaf as its last leaf.
@@ -1390,8 +1623,7 @@ mod tests {
                 prop_assert_eq!(&frontier, &expected);
 
                 // A `String` node is the concatenation of the leaves below it.
-                let mut visited = visited_nodes(&calls);
-                visited.sort();
+                prop_assert!(has_one_call_per_level(&calls));
                 let prior_tip = start.checked_sub(1).map(Position::from);
                 let completed = (start + leaf_count)
                     .checked_sub(1)
@@ -1405,7 +1637,7 @@ mod tests {
                         (address, positions.map(leaf).collect())
                     })
                     .collect();
-                prop_assert_eq!(visited, expected_visits);
+                prop_assert_eq!(visited_nodes(&calls), expected_visits);
             } else {
                 prop_assert!(!appended);
                 prop_assert_eq!(&frontier, &expected);
@@ -1418,7 +1650,7 @@ mod tests {
     fn append_batch_visiting_leaves_the_frontier_unchanged_when_the_visitor_panics() {
         let leaf = |position: u64| format!("<{position}>");
         let mut frontier = NonEmptyFrontier::new(leaf(0));
-        frontier.append_batch((1..12).map(leaf));
+        assert!(frontier.append_batch((1..12).map(leaf)));
         let before = frontier.clone();
 
         let result = catch_unwind(AssertUnwindSafe(|| {
@@ -1488,6 +1720,7 @@ mod tests {
                 .push((first, nodes.to_vec())))
         );
 
+        assert!(has_one_call_per_level(&calls));
         assert_eq!(
             visited_addresses(&calls),
             nodes_completed_after(Some(prior_tip), Position::from(u64::MAX))
@@ -1497,7 +1730,14 @@ mod tests {
             .into_iter()
             .find(|(address, _)| *address == root_address)
             .map(|(_, root)| root);
-        assert_eq!(visited_root, Some(frontier.root()));
+        // A `String` node is the concatenation of its children. The ommers are the left
+        // children on the path from the root to the two leaves "y" and "z".
+        let expected_root: String = (1..64)
+            .rev()
+            .map(|level| format!("<{level}>"))
+            .chain(["yz".to_string()])
+            .collect();
+        assert_eq!(visited_root, Some(expected_root));
     }
 
     #[test]
@@ -1510,11 +1750,11 @@ mod tests {
             let before = frontier.clone();
             let leaves = || (0..leaf_count).map(|leaf| leaf.to_string());
 
-            frontier.append_batch(leaves());
+            assert!(!frontier.append_batch(leaves()));
             assert_eq!(frontier, before);
 
             let mut visits = 0;
-            frontier.append_batch_visiting(leaves(), |_, _| visits += 1);
+            assert!(!frontier.append_batch_visiting(leaves(), |_, _| visits += 1));
             assert_eq!(visits, 0);
             assert_eq!(frontier, before);
         }

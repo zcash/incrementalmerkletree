@@ -18,9 +18,18 @@ and this project adheres to Rust's notion of
   `test-dependencies` feature). It panics unless `Hashable::combine_pairs`
   returns the result of `Hashable::combine` for each pair that it is given. A
   crate that overrides `Hashable::combine_pairs` can call it from its tests.
-- `frontier::{NonEmptyFrontier, Frontier}::append_batch`, appending many leaves
-  with one `combine_pairs` call per level, and `append_batch_visiting`, which also
-  reports every node the batch completes (once, in the batch holding its last leaf)
+- `incrementalmerkletree::frontier::NonEmptyFrontier::append_batch` and
+  `incrementalmerkletree::frontier::Frontier::append_batch`. Each appends the
+  leaves of an iterator and returns `true`. Each returns `false`, and does not
+  change the frontier, if the leaves do not fit in the tree. They hash with
+  `Hashable::combine_pairs`, at most one call per level, and do not call
+  `Hashable::combine`.
+- `incrementalmerkletree::frontier::NonEmptyFrontier::append_batch_visiting`
+  and `incrementalmerkletree::frontier::Frontier::append_batch_visiting`. Each
+  appends leaves with the same result as `append_batch`. Each also passes
+  every node that the appended leaves complete to a visitor function, with at
+  most one call per level. The visitor does not receive a node that was
+  complete before the call.
 
 ## [0.9.0] - 2026-09-29
 
