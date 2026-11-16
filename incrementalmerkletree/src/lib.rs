@@ -670,19 +670,25 @@ pub trait Hashable: fmt::Debug {
     /// producing a new node at level `level + 1`.
     fn combine(level: Level, a: &Self, b: &Self) -> Self;
 
-    /// Combines `children` taken pairwise, producing one node at level `level + 1` per pair.
+    /// Combines each pair of sibling nodes into the parent of that pair.
     ///
-    /// - Must equal [`Hashable::combine`] on each pair, in order
-    /// - Override to hash a batch faster than one pair at a time
-    /// - Panics if `children` has an odd length
-    fn combine_pairs(level: Level, children: &[Self]) -> Vec<Self>
+    /// A type can override this method to hash many pairs faster than one pair at a time.
+    ///
+    /// - Preconditions: both nodes of each pair are at `level`.
+    /// - Inputs: `level` is the level of the nodes in `pairs`. Each item of `pairs` holds the
+    ///   left child and then the right child of one parent.
+    /// - Outputs: one node at `level + 1` for each pair, in the order of `pairs`. Each node is
+    ///   equal to the result of [`Hashable::combine`] for `level` and the two children of that
+    ///   pair. An override must return the same nodes as this default implementation.
+    /// - Side effects: none.
+    fn combine_pairs<'a, I>(level: Level, pairs: I) -> Vec<Self>
     where
-        Self: Sized,
+        Self: Sized + 'a,
+        I: IntoIterator<Item = (&'a Self, &'a Self)>,
     {
-        assert!(children.len() % 2 == 0, "children pair up");
-        children
-            .chunks_exact(2)
-            .map(|pair| Self::combine(level, &pair[0], &pair[1]))
+        pairs
+            .into_iter()
+            .map(|(left, right)| Self::combine(level, left, right))
             .collect()
     }
 

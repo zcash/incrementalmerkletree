@@ -206,7 +206,11 @@ where
             if children.len() % 2 == 1 {
                 *slot = children.pop();
             }
-            nodes = H::combine_pairs(Level::from(level as u8), &children);
+            let (pairs, _) = children.as_chunks::<2>();
+            nodes = H::combine_pairs(
+                Level::from(level as u8),
+                pairs.iter().map(|[left, right]| (left, right)),
+            );
             size >>= 1;
         }
 
@@ -1070,10 +1074,14 @@ mod tests {
             unreachable!("hashed outside combine_pairs")
         }
 
-        fn combine_pairs(level: Level, children: &[Self]) -> Vec<Self> {
-            children
-                .chunks_exact(2)
-                .map(|pair| PairsOnly(String::combine(level, &pair[0].0, &pair[1].0)))
+        fn combine_pairs<'a, I>(level: Level, pairs: I) -> Vec<Self>
+        where
+            Self: 'a,
+            I: IntoIterator<Item = (&'a Self, &'a Self)>,
+        {
+            pairs
+                .into_iter()
+                .map(|(left, right)| PairsOnly(String::combine(level, &left.0, &right.0)))
                 .collect()
         }
 

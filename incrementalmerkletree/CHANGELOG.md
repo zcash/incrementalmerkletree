@@ -8,8 +8,12 @@ and this project adheres to Rust's notion of
 ## Unreleased
 
 ### Added
-- `Hashable::combine_pairs`, a provided method hashing a level's pairs in one
-  call (default = `combine` per pair), for implementations with a faster batch path
+- `incrementalmerkletree::Hashable::combine_pairs`, a provided method. It takes
+  an iterator of `(left, right)` pairs of sibling node references and returns
+  the parent of each pair, in order. The default implementation calls
+  `Hashable::combine` once per pair, so existing implementations need no
+  change. An implementation that overrides it must return the same nodes as
+  the default.
 - `frontier::{NonEmptyFrontier, Frontier}::append_batch`, appending many leaves
   with one `combine_pairs` call per level, and `append_batch_visiting`, which also
   reports every node the batch completes (once, in the batch holding its last leaf)
