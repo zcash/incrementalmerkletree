@@ -455,19 +455,19 @@ where
     /// Appends `leaves` in order, as [`NonEmptyFrontier::append_batch`].
     ///
     /// Returns false, appending nothing, if the tree would exceed `2^DEPTH` leaves
-    pub fn append_batch(&mut self, leaves: Vec<H>) -> bool {
-        self.append_batch_inner(leaves, None::<fn(Address, &[H])>)
+    pub fn append_batch<I: IntoIterator<Item = H>>(&mut self, leaves: I) -> bool {
+        self.append_batch_inner(leaves.into_iter().collect(), None::<fn(Address, &[H])>)
     }
 
     /// Appends `leaves` in order, as [`NonEmptyFrontier::append_batch_visiting`].
     ///
     /// Returns false, appending and visiting nothing, if the tree would exceed `2^DEPTH` leaves
-    pub fn append_batch_visiting<V: FnMut(Address, &[H])>(
-        &mut self,
-        leaves: Vec<H>,
-        visit: V,
-    ) -> bool {
-        self.append_batch_inner(leaves, Some(visit))
+    pub fn append_batch_visiting<I, V>(&mut self, leaves: I, visit: V) -> bool
+    where
+        I: IntoIterator<Item = H>,
+        V: FnMut(Address, &[H]),
+    {
+        self.append_batch_inner(leaves.into_iter().collect(), Some(visit))
     }
 
     fn append_batch_inner<V: FnMut(Address, &[H])>(
@@ -972,8 +972,8 @@ mod tests {
                     assert!(expected.append(leaf(i)));
                 }
                 let mut batched = super::Frontier::<String, DEPTH>::empty();
-                assert!(batched.append_batch((0..start).map(leaf).collect()));
-                assert!(batched.append_batch((start..start + batch).map(leaf).collect()));
+                assert!(batched.append_batch((0..start).map(leaf)));
+                assert!(batched.append_batch((start..start + batch).map(leaf)));
                 assert_eq!(batched, expected, "{start} then {batch}");
                 assert_eq!(batched.root(), expected.root(), "{start} then {batch}");
             }
@@ -994,16 +994,15 @@ mod tests {
                     let mut visited = alloc::collections::BTreeMap::new();
                     let mut frontier = super::Frontier::<String, DEPTH>::empty();
                     for range in [0..a, a..a + b, a + b..size] {
-                        assert!(frontier.append_batch_visiting(
-                            range.map(leaf).collect(),
-                            |first, nodes| {
+                        assert!(
+                            frontier.append_batch_visiting(range.map(leaf), |first, nodes| {
                                 for (index, node) in (first.index()..).zip(nodes) {
                                     let at = (u8::from(first.level()), index);
                                     let again = visited.insert(at, node.clone());
                                     assert_eq!(again, None, "{at:?} visited twice, {a}/{b}/{c}");
                                 }
-                            }
-                        ));
+                            })
+                        );
                     }
 
                     let mut expected = alloc::collections::BTreeMap::new();
@@ -1027,7 +1026,7 @@ mod tests {
 
     #[test]
     fn append_batch_past_capacity_appends_nothing() {
-        let leaves = |range: core::ops::Range<u8>| range.map(|i| i.to_string()).collect();
+        let leaves = |range: core::ops::Range<u8>| range.map(|i| i.to_string());
         let mut frontier = super::Frontier::<String, 3>::empty();
         assert!(frontier.append_batch(leaves(0..5)));
         let before = frontier.clone();
@@ -1106,8 +1105,7 @@ mod tests {
         let mut expected = super::Frontier::<String, 5>::empty();
         for batch in [13, 6, 1, 3] {
             let leaves: Vec<String> = (0..batch).map(|i| format!("<{batch}.{i}>")).collect();
-            let pairs_only = leaves.iter().cloned().map(PairsOnly).collect();
-            assert!(frontier.append_batch(pairs_only));
+            assert!(frontier.append_batch(leaves.iter().cloned().map(PairsOnly)));
             for leaf in leaves {
                 assert!(expected.append(leaf));
             }
