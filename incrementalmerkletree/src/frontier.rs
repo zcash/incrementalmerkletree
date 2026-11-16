@@ -1772,6 +1772,30 @@ mod tests {
         assert_eq!(frontier.root(None), "abc_");
     }
 
+    /// A node whose `empty_leaf` panics. A test that uses it fails if the code under test
+    /// computes the root of an empty subtree.
+    #[derive(Clone, Debug, PartialEq, Eq)]
+    struct NoEmptyLeaf(String);
+
+    impl Hashable for NoEmptyLeaf {
+        fn empty_leaf() -> Self {
+            panic!("the root of an empty subtree was computed")
+        }
+
+        fn combine(level: Level, a: &Self, b: &Self) -> Self {
+            NoEmptyLeaf(String::combine(level, &a.0, &b.0))
+        }
+    }
+
+    #[test]
+    fn frontier_root_of_a_full_tree_computes_no_empty_root() {
+        let mut frontier = super::Frontier::<NoEmptyLeaf, 2>::empty();
+        for leaf in ["a", "b", "c", "d"] {
+            assert!(frontier.append(NoEmptyLeaf(leaf.to_string())));
+        }
+        assert_eq!(frontier.root(), NoEmptyLeaf("abcd".to_string()));
+    }
+
     #[test]
     fn frontier_from_parts() {
         assert!(super::Frontier::<(), 1>::from_parts(0.into(), (), vec![]).is_ok());
