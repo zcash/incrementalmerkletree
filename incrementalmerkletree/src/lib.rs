@@ -726,6 +726,9 @@ pub(crate) mod tests {
         assert!(!Position(4).is_complete_subtree(Level(2)));
         assert!(Position(7).is_complete_subtree(Level(3)));
         assert!(Position(u32::MAX as u64).is_complete_subtree(Level(32)));
+        assert!(Position(u64::MAX).is_complete_subtree(Level(64)));
+        assert!(!Position(u64::MAX).is_complete_subtree(Level(65)));
+        assert!(!Position(u64::MAX).is_complete_subtree(Level(128)));
     }
 
     #[test]

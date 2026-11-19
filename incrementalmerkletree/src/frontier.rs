@@ -1371,6 +1371,18 @@ mod tests {
     }
 
     #[test]
+    fn frontier_append_at_position_u64_max_appends_nothing_for_depth_128() {
+        let position = Position::from(u64::MAX);
+        let ommers = vec![String::new(); position.past_ommer_count().into()];
+        let mut frontier =
+            super::Frontier::<String, 128>::from_parts(position, "tip".to_string(), ommers)
+                .expect("the number of ommers matches the position");
+        let before = frontier.clone();
+        assert!(!frontier.append("next".to_string()));
+        assert_eq!(frontier, before);
+    }
+
+    #[test]
     fn append_batch_depth_128_does_not_overflow_capacity() {
         let mut frontier = super::Frontier::<String, 128>::empty();
         assert!(frontier.append_batch(vec!["a".to_string(), "b".to_string()]));
