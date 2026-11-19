@@ -35,11 +35,6 @@ and this project adheres to Rust's notion of
   most one call per level. The visitor does not receive a node that was
   complete before the call.
 
-### Fixed
-- `incrementalmerkletree::frontier::Frontier::root` no longer computes the root
-  of an empty tree of depth `DEPTH` when the frontier has leaves. The root that
-  it returns is unchanged.
-
 ## [0.9.0] - 2026-09-29
 
 ### Changed
