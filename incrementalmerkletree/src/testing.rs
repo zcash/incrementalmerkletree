@@ -51,7 +51,14 @@ where
             .into_iter()
             .map(|(left, right)| left.as_ref().zip(right.as_ref()))
             .collect();
-        let mut parents = H::combine_pairs(level, pairs.iter().flatten().copied()).into_iter();
+        let present_pairs = pairs.iter().flatten().count();
+        let parents = H::combine_pairs(level, pairs.iter().flatten().copied());
+        assert_eq!(
+            parents.len(),
+            present_pairs,
+            "`Hashable::combine_pairs` must return exactly one node for each pair"
+        );
+        let mut parents = parents.into_iter();
         pairs
             .iter()
             .map(|pair| pair.and_then(|_| parents.next()))
@@ -95,6 +102,44 @@ mod tests {
 
     fn arb_node() -> impl Strategy<Value = String> {
         "[a-z]{1,3}"
+    }
+
+    /// A node with a `combine_pairs` that does not return the parent of the last pair.
+    #[derive(Clone, Debug, PartialEq, Eq)]
+    struct DropsLastParent(String);
+
+    impl crate::Hashable for DropsLastParent {
+        fn empty_leaf() -> Self {
+            DropsLastParent(String::empty_leaf())
+        }
+
+        fn combine(level: Level, a: &Self, b: &Self) -> Self {
+            DropsLastParent(String::combine(level, &a.0, &b.0))
+        }
+
+        fn combine_pairs<'a, I>(level: Level, pairs: I) -> alloc::vec::Vec<Self>
+        where
+            Self: 'a,
+            I: IntoIterator<Item = (&'a Self, &'a Self)>,
+        {
+            let mut parents: alloc::vec::Vec<Self> = pairs
+                .into_iter()
+                .map(|(left, right)| Self::combine(level, left, right))
+                .collect();
+            parents.pop();
+            parents
+        }
+    }
+
+    #[test]
+    #[should_panic(expected = "must return exactly one node for each pair")]
+    fn option_combine_pairs_panics_when_the_inner_type_drops_a_parent() {
+        let node = |value: &str| Some(DropsLastParent(value.into()));
+        let (a, b, c, d) = (node("a"), node("b"), node("c"), node("d"));
+        <Option<DropsLastParent> as crate::Hashable>::combine_pairs(
+            Level::from(0),
+            [(&a, &b), (&c, &d)],
+        );
     }
 
     proptest! {

@@ -18,6 +18,10 @@ and this project adheres to Rust's notion of
   `test-dependencies` feature). It panics unless `Hashable::combine_pairs`
   returns the result of `Hashable::combine` for each pair that it is given. A
   crate that overrides `Hashable::combine_pairs` can call it from its tests.
+- The `Hashable` implementation for `Option<H>` (under the `test-dependencies`
+  feature) overrides `Hashable::combine_pairs`. It passes the pairs that have
+  two `Some` children to `H::combine_pairs`, and gives `None` as the parent of
+  every other pair.
 - `incrementalmerkletree::frontier::NonEmptyFrontier::append_batch` and
   `incrementalmerkletree::frontier::Frontier::append_batch`. Each appends the
   leaves of an iterator and returns `true`. Each returns `false`, and does not
