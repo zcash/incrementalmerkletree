@@ -85,6 +85,16 @@ impl<H> NonEmptyFrontier<H> {
     }
 }
 
+/// The result of appending a batch of leaves to a tree.
+enum BatchAppend<H> {
+    /// The batch was empty. The tree does not change.
+    Empty,
+    /// The batch did not fit in the tree. The tree does not change.
+    Rejected,
+    /// The frontier of the tree after the append.
+    Appended(NonEmptyFrontier<H>),
+}
+
 impl<H> NonEmptyFrontier<H>
 where
     H: Hashable + Clone,
@@ -155,7 +165,7 @@ where
     ///     The frontier does not change when this method panics.
     #[must_use = "the leaves are not appended if the result is `false`"]
     pub fn append_batch<I: IntoIterator<Item = H>>(&mut self, leaves: I) -> bool {
-        self.append_collected(leaves.into_iter().collect(), None::<fn(Address, &[H])>)
+        self.append_batch_with(leaves, None::<fn(Address, &[H])>)
     }
 
     /// Appends `leaves` to the tree, in order of position, and passes each node that these
@@ -205,7 +215,7 @@ where
         I: IntoIterator<Item = H>,
         V: FnMut(Address, &[H]),
     {
-        self.append_collected(leaves.into_iter().collect(), Some(visit))
+        self.append_batch_with(leaves, Some(visit))
     }
 
     /// Appends `leaves` to the tree, in order of position.
@@ -219,20 +229,63 @@ where
     /// - Side effects: calls `visit` and [`Hashable::combine_pairs`] at most once for each
     ///   level. Panics if `Hashable::combine_pairs` does not return exactly one node for each
     ///   pair. The frontier does not change when this method panics.
-    fn append_collected<V>(&mut self, leaves: Vec<H>, visit: Option<V>) -> bool
+    fn append_batch_with<I, V>(&mut self, leaves: I, visit: Option<V>) -> bool
     where
+        I: IntoIterator<Item = H>,
         V: FnMut(Address, &[H]),
     {
-        if leaves.is_empty() {
-            return true;
-        }
-        match Self::with_appended(Some(self), leaves, visit) {
-            Some(frontier) => {
+        // The positions after the last leaf run up to `u64::MAX`.
+        let capacity = u128::from(u64::MAX - u64::from(self.position));
+        match Self::append_bounded(Some(self), leaves, capacity, visit) {
+            BatchAppend::Empty => true,
+            BatchAppend::Rejected => false,
+            BatchAppend::Appended(frontier) => {
                 *self = frontier;
                 true
             }
-            None => false,
         }
+    }
+
+    /// Computes the frontier of the tree that results when `leaves` are appended to a tree
+    /// that can take at most `capacity` more leaves.
+    ///
+    /// - Preconditions: `capacity` is at most the number of positions after the last leaf of
+    ///   `prior`, or at most `2^64` if `prior` is `None`.
+    /// - Inputs:
+    ///   - `prior` is the frontier of the tree before the append, or `None` if that tree is
+    ///     empty.
+    ///   - `leaves` are the leaves to append, in order of position.
+    ///   - `capacity` is the number of leaves that the tree can still take.
+    ///   - `visit`, if it is present, receives each node that `leaves` complete.
+    /// - Outputs: [`BatchAppend::Empty`] if `leaves` is empty. [`BatchAppend::Rejected`] if
+    ///   `leaves` has more than `capacity` leaves. Otherwise, [`BatchAppend::Appended`] with the
+    ///   frontier of the tree after the append.
+    /// - Side effects:
+    ///   - Takes at most `capacity + 1` leaves from `leaves`, so an oversized batch is rejected
+    ///     without collecting all of it.
+    ///   - Calls `visit` and [`Hashable::combine_pairs`] at most once for each level. Does not
+    ///     call either of them unless the result is `Appended`.
+    ///   - Panics if `Hashable::combine_pairs` does not return exactly one node for each pair.
+    fn append_bounded<I, V>(
+        prior: Option<&Self>,
+        leaves: I,
+        capacity: u128,
+        visit: Option<V>,
+    ) -> BatchAppend<H>
+    where
+        I: IntoIterator<Item = H>,
+        V: FnMut(Address, &[H]),
+    {
+        let leaf_limit = usize::try_from(capacity).map_or(usize::MAX, |c| c.saturating_add(1));
+        let leaves: Vec<H> = leaves.into_iter().take(leaf_limit).collect();
+        if leaves.is_empty() {
+            return BatchAppend::Empty;
+        }
+        if u128::try_from(leaves.len()).map_or(true, |leaf_count| leaf_count > capacity) {
+            return BatchAppend::Rejected;
+        }
+        Self::with_appended(prior, leaves, visit)
+            .map_or(BatchAppend::Rejected, BatchAppend::Appended)
     }
 
     /// Returns the positions of the first leaf and of the last leaf of a batch that is appended
@@ -292,17 +345,15 @@ where
         // leaves before the last leaf. The loop below goes up the tree one level at a time and
         // adds complete nodes to those subtrees.
         //
-        // At each level, `pending` holds the complete nodes of that level that do not have a
-        // complete parent yet, in order of index. `pending_first` is the address of the first
-        // of them. At level 0 these nodes are the last leaf of the prior tree, then every new
-        // leaf except the last one.
-        let mut pending: Vec<H> = prior
-            .map(|frontier| frontier.leaf.clone())
-            .into_iter()
-            .chain(leaves)
-            .collect();
+        // At each level, the pending nodes are the complete nodes of that level that do not
+        // have a complete parent yet, in order of index. `pending_first` is the address of the
+        // first of them. At level 0 the pending nodes are the last leaf of the prior tree
+        // (`prior_leaf`), then `pending`, which holds every new leaf except the last one. At
+        // each higher level, `pending` holds all of the pending nodes.
+        let mut prior_leaf: Option<&H> = prior.map(|frontier| &frontier.leaf);
+        let mut pending: Vec<H> = leaves;
         let mut pending_first =
-            Address::from(prior.map_or(Position::from(0), |frontier| frontier.position));
+            Address::from(prior.map_or(first_position, |frontier| frontier.position));
         let mut prior_ommers = prior.map_or(&[][..], |frontier| &frontier.ommers).iter();
         let mut ommers: Vec<H> = Vec::with_capacity(tip_position.past_ommer_count().into());
         // The visitor also receives each ancestor that the new last leaf completes. The
@@ -310,7 +361,7 @@ where
         // last leaf at the current level, if the new last leaf completes that ancestor.
         let mut tip_ancestor: Option<H> = visit.as_ref().map(|_| tip_leaf.clone());
 
-        while !pending.is_empty() || tip_ancestor.is_some() {
+        while prior_leaf.is_some() || !pending.is_empty() || tip_ancestor.is_some() {
             let level = pending_first.level();
 
             // If the first pending node is a right child, then its left sibling is the ommer
@@ -320,36 +371,37 @@ where
             } else {
                 None
             };
-            let mut children: Vec<H> = left_sibling.cloned().into_iter().chain(pending).collect();
+            let mut children: Vec<&H> = left_sibling
+                .into_iter()
+                .chain(prior_leaf.take())
+                .chain(&pending)
+                .collect();
             // A last child that has no right sibling is the ommer of the new frontier at this
             // level.
-            let ommer = if children.len() % 2 == 1 {
-                children.pop()
+            let ommer: Option<H> = if children.len() % 2 == 1 {
+                children.pop().cloned()
             } else {
                 None
             };
             // The new last leaf completes its ancestor at the next level only if the new
             // frontier has an ommer at this level. That ommer is the left child of the
-            // ancestor.
+            // ancestor. Its pair goes last, so its parent is the last of `parents`.
             let tip_pair = ommer.as_ref().zip(tip_ancestor.as_ref());
-            let has_tip_pair = tip_pair.is_some();
-
             let (child_pairs, _) = children.as_chunks::<2>();
-            let pair_count = child_pairs.len() + tip_pair.iter().count();
-            let mut parents = if pair_count == 0 {
+            let pairs: Vec<(&H, &H)> = child_pairs
+                .iter()
+                .map(|[left, right]| (*left, *right))
+                .chain(tip_pair)
+                .collect();
+
+            let mut parents = if pairs.is_empty() {
                 Vec::new()
             } else {
-                H::combine_pairs(
-                    level,
-                    child_pairs
-                        .iter()
-                        .map(|[left, right]| (left, right))
-                        .chain(tip_pair),
-                )
+                H::combine_pairs(level, pairs.iter().copied())
             };
             assert_eq!(
                 parents.len(),
-                pair_count,
+                pairs.len(),
                 "`Hashable::combine_pairs` must return exactly one node for each pair"
             );
 
@@ -361,9 +413,9 @@ where
                 }
             }
 
-            // The parent of the tip pair is the last of `parents`. It is not a pending node,
-            // because the new last leaf stays out of the ommers.
-            tip_ancestor = if has_tip_pair { parents.pop() } else { None };
+            // The parent of the tip pair is not a pending node, because the new last leaf
+            // stays out of the ommers.
+            tip_ancestor = tip_pair.and_then(|_| parents.pop());
             ommers.extend(ommer);
             pending = parents;
             pending_first = parents_first;
@@ -662,7 +714,7 @@ where
     ///     The frontier does not change when this method panics.
     #[must_use = "the leaves are not appended if the result is `false`"]
     pub fn append_batch<I: IntoIterator<Item = H>>(&mut self, leaves: I) -> bool {
-        self.append_collected(leaves.into_iter().collect(), None::<fn(Address, &[H])>)
+        self.append_batch_with(leaves, None::<fn(Address, &[H])>)
     }
 
     /// Appends `leaves` to the tree, in order of position, and passes each node that these
@@ -711,7 +763,7 @@ where
         I: IntoIterator<Item = H>,
         V: FnMut(Address, &[H]),
     {
-        self.append_collected(leaves.into_iter().collect(), Some(visit))
+        self.append_batch_with(leaves, Some(visit))
     }
 
     /// Appends `leaves` to the tree, in order of position.
@@ -726,24 +778,19 @@ where
     ///   level. Does not call either of them if the result is `false`. Panics if
     ///   `Hashable::combine_pairs` does not return exactly one node for each pair. The frontier
     ///   does not change when this method panics.
-    fn append_collected<V>(&mut self, leaves: Vec<H>, visit: Option<V>) -> bool
+    fn append_batch_with<I, V>(&mut self, leaves: I, visit: Option<V>) -> bool
     where
+        I: IntoIterator<Item = H>,
         V: FnMut(Address, &[H]),
     {
-        if leaves.is_empty() {
-            return true;
-        }
-        let prior = self.frontier.as_ref();
-        // A tree of depth `DEPTH` holds the positions that have a root level of at most `DEPTH`.
-        let appended = NonEmptyFrontier::appended_positions(prior, leaves.len())
-            .filter(|(_, tip_position)| tip_position.root_level() <= Level::from(DEPTH))
-            .and_then(|_| NonEmptyFrontier::with_appended(prior, leaves, visit));
-        match appended {
-            Some(frontier) => {
+        let capacity = self.remaining_capacity();
+        match NonEmptyFrontier::append_bounded(self.frontier.as_ref(), leaves, capacity, visit) {
+            BatchAppend::Empty => true,
+            BatchAppend::Rejected => false,
+            BatchAppend::Appended(frontier) => {
                 self.frontier = Some(frontier);
                 true
             }
-            None => false,
         }
     }
 
@@ -1393,6 +1440,30 @@ mod tests {
         let before = frontier.clone();
         assert!(!frontier.append("next".to_string()));
         assert_eq!(frontier, before);
+    }
+
+    #[test]
+    fn append_batch_rejects_an_endless_iterator_without_collecting_it() {
+        let mut frontier = super::Frontier::<String, 4>::empty();
+        assert!(frontier.append_batch((0..3).map(|i| i.to_string())));
+        let before = frontier.clone();
+        assert!(!frontier.append_batch(core::iter::repeat("x".to_string())));
+        assert!(
+            !frontier.append_batch_visiting(core::iter::repeat("x".to_string()), |_, _| {
+                panic!("the visitor was called for a rejected batch")
+            })
+        );
+        assert_eq!(frontier, before);
+
+        let mut nonempty = NonEmptyFrontier::from_parts(
+            Position::from(u64::MAX - 2),
+            "tip".to_string(),
+            vec![String::new(); Position::from(u64::MAX - 2).past_ommer_count().into()],
+        )
+        .expect("the number of ommers matches the position");
+        let before = nonempty.clone();
+        assert!(!nonempty.append_batch(core::iter::repeat("x".to_string())));
+        assert_eq!(nonempty, before);
     }
 
     #[test]
