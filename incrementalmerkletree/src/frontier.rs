@@ -195,6 +195,10 @@ where
     ///     the next append computes them again.
     ///   - Panics if `Hashable::combine_pairs` does not return exactly one node for each pair.
     ///     The frontier does not change when this method panics or when `visit` panics.
+    ///   - `visit` receives the nodes of each level before the next level is hashed. If this
+    ///     method panics, `visit` has already received the nodes of the levels below the
+    ///     panic, although the frontier does not change. A visitor that stores nodes must
+    ///     discard what it received in this call when the call panics.
     #[must_use = "the leaves are not appended if the result is `false`"]
     pub fn append_batch_visiting<I, V>(&mut self, leaves: I, visit: V) -> bool
     where
@@ -684,6 +688,10 @@ where
     ///     append computes them again.
     ///   - Panics if `Hashable::combine_pairs` does not return exactly one node for each pair.
     ///     The frontier does not change when this method panics or when `visit` panics.
+    ///   - `visit` receives the nodes of each level before the next level is hashed. If this
+    ///     method panics, `visit` has already received the nodes of the levels below the
+    ///     panic, although the frontier does not change. A visitor that stores nodes must
+    ///     discard what it received in this call when the call panics.
     #[must_use = "the leaves are not appended if the result is `false`"]
     pub fn append_batch_visiting<I, V>(&mut self, leaves: I, visit: V) -> bool
     where
