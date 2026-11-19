@@ -217,7 +217,9 @@ impl Position {
     /// contains a perfect balanced tree with a root at level `root_level` that contains the
     /// aforesaid leaf.
     pub fn is_complete_subtree(&self, root_level: Level) -> bool {
-        !(0..(root_level.0)).any(|l| self.0 & (1 << l) == 0)
+        // The leaf is the last leaf of that subtree exactly when the low `root_level` bits of
+        // its position are all one.
+        self.0.trailing_ones() >= u32::from(root_level.0)
     }
 
     /// Returns an iterator over the addresses of nodes required to create a witness for this

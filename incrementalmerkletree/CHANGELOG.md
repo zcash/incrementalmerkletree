@@ -35,6 +35,13 @@ and this project adheres to Rust's notion of
   most one call per level. The visitor does not receive a node that was
   complete before the call.
 
+### Fixed
+- `incrementalmerkletree::Position::is_complete_subtree` returns `false` for a
+  root level above 64. It overflowed before, and panicked in debug builds at
+  position `u64::MAX`. As a result, `incrementalmerkletree::frontier::Frontier::append`
+  with `DEPTH` greater than 64 returns `false` at position `u64::MAX` instead of
+  panicking.
+
 ## [0.9.0] - 2026-09-29
 
 ### Changed

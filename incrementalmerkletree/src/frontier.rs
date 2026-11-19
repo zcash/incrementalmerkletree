@@ -619,17 +619,30 @@ where
     /// Returns true if successful and false if the frontier would exceed
     /// the maximum allowed depth.
     pub fn append(&mut self, value: H) -> bool {
-        if let Some(frontier) = self.frontier.as_mut() {
-            if frontier.position().is_complete_subtree(DEPTH.into()) {
-                false
-            } else {
-                frontier.append(value);
-                true
-            }
-        } else {
-            self.frontier = Some(NonEmptyFrontier::new(value));
-            true
+        if self.remaining_capacity() == 0 {
+            return false;
         }
+        match self.frontier.as_mut() {
+            Some(frontier) => frontier.append(value),
+            None => self.frontier = Some(NonEmptyFrontier::new(value)),
+        }
+        true
+    }
+
+    /// Returns the number of leaves that can still be appended to the tree.
+    ///
+    /// - Preconditions: none.
+    /// - Inputs: none.
+    /// - Outputs: `2^DEPTH` minus the number of leaves in the tree. A position is a `u64`, so a
+    ///   tree holds at most `2^64` leaves for any `DEPTH` of 64 or more.
+    /// - Side effects: none.
+    fn remaining_capacity(&self) -> u128 {
+        let max_tree_size = 1u128 << DEPTH.min(64);
+        let tree_size = self
+            .frontier
+            .as_ref()
+            .map_or(0, |frontier| u128::from(u64::from(frontier.position)) + 1);
+        max_tree_size.saturating_sub(tree_size)
     }
 
     /// Appends `leaves` to the tree, in order of position.
