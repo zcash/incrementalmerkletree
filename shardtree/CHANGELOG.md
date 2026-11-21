@@ -7,6 +7,17 @@ and this project adheres to Rust's notion of
 
 ## [Unreleased]
 
+### Changed
+- A parent node of a `shardtree::PrunableTree` now caches its root as its
+  annotation when it is constructed from two children whose roots are both
+  already known (each child is a leaf or an annotated parent). Previously such
+  parents were left unannotated, so `PrunableTree::root_hash`, and therefore
+  `PrunableTree::merge_checked` and `LocatedPrunableTree::insert_subtree`,
+  recomputed the hash of the whole subtree on every call. Trees produced by
+  `LocatedTree::from_iter`, `ShardTree::batch_insert`, `ShardTree::insert_tree`
+  and pruning therefore contain more annotated parents than before; the leaves,
+  retention flags, roots and witnesses are unchanged.
+
 ## [0.8.0] - 2026-09-30
 
 ### Changed

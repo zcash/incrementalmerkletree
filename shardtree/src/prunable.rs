@@ -465,7 +465,13 @@ where
             {
                 Tree::leaf((H::combine(level, &lv.0, &rv.0), rv.1))
             }
-            (left, right) => Tree::parent(ann, left, right),
+            (left, right) => {
+                let ann = ann.or_else(|| match (left.node_value(), right.node_value()) {
+                    (Some(l), Some(r)) => Some(Arc::new(H::combine(level, l, r))),
+                    _ => None,
+                });
+                Tree::parent(ann, left, right)
+            }
         }
     }
 }
@@ -1517,6 +1523,7 @@ mod tests {
                 leaf(("c".to_string(), RetentionFlags::MARKED)),
                 leaf(("ab".to_string(), RetentionFlags::EPHEMERAL))
             )
+            .reannotate_root(Some(Arc::new("cab".to_string())))
         );
     }
 
@@ -2204,11 +2211,13 @@ mod tests {
             tree.root(),
             &annotated(
                 "abcd",
-                parent(
+                annotated(
+                    "ab",
                     str_leaf("a", RetentionFlags::MARKED),
                     str_leaf("b", RetentionFlags::MARKED)
                 ),
-                parent(
+                annotated(
+                    "cd",
                     str_leaf("c", RetentionFlags::MARKED),
                     str_leaf("d", RetentionFlags::MARKED)
                 ),
