@@ -26,12 +26,10 @@ and this project adheres to Rust's notion of
   every other pair.
 - `incrementalmerkletree::frontier::NonEmptyFrontier::append_batch` and
   `incrementalmerkletree::frontier::Frontier::append_batch`. Each appends the
-  leaves of an iterator and returns `true`. Each returns `false`, and does not
+  leaves of a slice and returns `true`. Each returns `false`, and does not
   change the frontier, if the leaves do not fit in the tree. They hash with
   `Hashable::combine_pairs`, at most one call per level, and do not call
-  `Hashable::combine`. Each holds the leaves that it takes from the iterator
-  in memory, takes at most one leaf more than the tree has room for, and does
-  not give the leaves back.
+  `Hashable::combine`.
 - `incrementalmerkletree::frontier::NonEmptyFrontier::append_batch_visiting`
   and `incrementalmerkletree::frontier::Frontier::append_batch_visiting`. Each
   appends leaves as `append_batch` does, and returns `Result<bool, E>`. Each

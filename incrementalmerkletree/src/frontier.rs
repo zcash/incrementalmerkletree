@@ -169,23 +169,19 @@ where
     /// When the result is `true`, the frontier is equal to the frontier that results from one
     /// call to [`NonEmptyFrontier::append`] for each leaf.
     ///
-    /// - Preconditions: the leaves that this method takes from `leaves` fit in memory. The side
-    ///   effects state how many leaves it takes.
+    /// - Preconditions: none.
     /// - Inputs: `leaves` are the leaves to add after the last leaf of the tree, in order.
     /// - Outputs: `true` if the frontier now includes every leaf of `leaves`. `false` if the
     ///   last leaf would have a position greater than `u64::MAX`. The frontier does not change
     ///   when the result is `false`. [`NonEmptyFrontier::append`] returns no value, so it
     ///   panics in that case.
     /// - Side effects:
-    ///   - Takes leaves from `leaves` and holds them in memory until it returns. It stops when
-    ///     `leaves` ends, or when it holds one more leaf than the tree has room for.
-    ///   - Does not give back the leaves that it took, whatever the result is.
     ///   - Calls [`Hashable::combine_pairs`] at most once for each level of the tree. Does not
     ///     call [`Hashable::combine`].
     ///   - Panics if `Hashable::combine_pairs` does not return exactly one node for each pair.
     ///     The frontier does not change when this method panics.
     #[must_use = "the leaves are not appended if the result is `false`"]
-    pub fn append_batch<I: IntoIterator<Item = H>>(&mut self, leaves: I) -> bool {
+    pub fn append_batch(&mut self, leaves: &[H]) -> bool {
         let Ok(appended) = self.append_batch_with(leaves, None::<NoVisitor<H>>);
         appended
     }
@@ -206,8 +202,7 @@ where
     /// When the result is `Ok(true)`, the frontier is equal to the frontier that results from
     /// one call to [`NonEmptyFrontier::append`] for each leaf.
     ///
-    /// - Preconditions: the leaves that this method takes from `leaves` fit in memory. The side
-    ///   effects state how many leaves it takes.
+    /// - Preconditions: none.
     /// - Inputs:
     ///   - `leaves` are the leaves to add after the last leaf of the tree, in order.
     ///   - `visit` receives the completed nodes. In a call `visit(first, nodes)`, all of
@@ -220,9 +215,6 @@ where
     ///   - `Err(error)` if a call to `visit` returned `Err(error)`.
     ///   - The frontier does not change when the result is `Ok(false)` or an error.
     /// - Side effects:
-    ///   - Takes leaves from `leaves` and holds them in memory until it returns. It stops when
-    ///     `leaves` ends, or when it holds one more leaf than the tree has room for.
-    ///   - Does not give back the leaves that it took, whatever the result is.
     ///   - Calls `visit` at most once for each level, in ascending order of level. Each call
     ///     passes every node of that level that `leaves` complete. The call for level 0
     ///     passes `leaves`. Does not call `visit` if `leaves` is empty or if the result is
@@ -239,9 +231,8 @@ where
     ///     method returns an error or panics, `visit` has already received the nodes of the
     ///     lower levels, although the frontier does not change. A visitor that stores nodes
     ///     must then discard the nodes that it received in this call.
-    pub fn append_batch_visiting<I, V, E>(&mut self, leaves: I, visit: V) -> Result<bool, E>
+    pub fn append_batch_visiting<V, E>(&mut self, leaves: &[H], visit: V) -> Result<bool, E>
     where
-        I: IntoIterator<Item = H>,
         V: FnMut(Address, &[H]) -> Result<(), E>,
     {
         self.append_batch_with(leaves, Some(visit))
@@ -249,8 +240,7 @@ where
 
     /// Appends `leaves` to the tree, in order of position.
     ///
-    /// - Preconditions: the leaves that this method takes from `leaves` fit in memory. The side
-    ///   effects state how many leaves it takes.
+    /// - Preconditions: none.
     /// - Inputs: `leaves` are the leaves to add after the last leaf of the tree, in order.
     ///   `visit`, if it is present, receives each node that `leaves` complete.
     /// - Outputs:
@@ -259,17 +249,13 @@ where
     ///   - `Err(error)` if a call to `visit` returned `Err(error)`.
     ///   - The frontier does not change when the result is `Ok(false)` or an error.
     /// - Side effects:
-    ///   - Takes leaves from `leaves` and holds them in memory until it returns. It stops when
-    ///     `leaves` ends, or when it holds one more leaf than the tree has room for.
-    ///   - Does not give back the leaves that it took, whatever the result is.
     ///   - Calls `visit` and [`Hashable::combine_pairs`] at most once for each level. Does not
     ///     call either of them if the result is `Ok(false)`. Does not call `visit` again after
     ///     a call to `visit` returns an error.
     ///   - Panics if `Hashable::combine_pairs` does not return exactly one node for each pair.
     ///     The frontier does not change when this method panics.
-    fn append_batch_with<I, V, E>(&mut self, leaves: I, visit: Option<V>) -> Result<bool, E>
+    fn append_batch_with<V, E>(&mut self, leaves: &[H], visit: Option<V>) -> Result<bool, E>
     where
-        I: IntoIterator<Item = H>,
         V: FnMut(Address, &[H]) -> Result<(), E>,
     {
         match Self::append_bounded(Some(self), leaves, Position::from(u64::MAX), visit)? {
@@ -284,8 +270,7 @@ where
 
     /// Computes the frontier of the tree that results when `leaves` are appended to a tree.
     ///
-    /// - Preconditions: the leaves that this function takes from `leaves` fit in memory. The
-    ///   side effects state how many leaves it takes.
+    /// - Preconditions: none.
     /// - Inputs:
     ///   - `prior` is the frontier of the tree before the append, or `None` if that tree is
     ///     empty.
@@ -302,8 +287,6 @@ where
     ///   - Otherwise, `Ok(BatchAppend::Appended)` with the frontier of the tree after the
     ///     append.
     /// - Side effects:
-    ///   - Takes leaves from `leaves` and holds them in memory until it returns. It stops when
-    ///     `leaves` ends, or when it holds one more leaf than the tree has room for.
     ///   - Calls `visit` at most once for each level, in ascending order of level, with every
     ///     node of that level that `leaves` complete. Does not call `visit` again after a call
     ///     to `visit` returns an error.
@@ -312,26 +295,15 @@ where
     ///   - Does not call `visit` or `Hashable::combine_pairs` if the result is `Ok(Empty)` or
     ///     `Ok(Rejected)`.
     ///   - Panics if `Hashable::combine_pairs` does not return exactly one node for each pair.
-    fn append_bounded<I, V, E>(
+    fn append_bounded<V, E>(
         prior: Option<&Self>,
-        leaves: I,
+        leaves: &[H],
         max_position: Position,
         mut visit: Option<V>,
     ) -> Result<BatchAppend<H>, E>
     where
-        I: IntoIterator<Item = H>,
         V: FnMut(Address, &[H]) -> Result<(), E>,
     {
-        // One leaf more than the tree has room for is enough to show that a batch does not fit.
-        let free_positions = match prior {
-            Some(frontier) => {
-                u128::from(u64::from(max_position).saturating_sub(u64::from(frontier.position)))
-            }
-            None => u128::from(u64::from(max_position)) + 1,
-        };
-        let leaf_limit = usize::try_from(free_positions + 1).unwrap_or(usize::MAX);
-        let leaves: Vec<H> = leaves.into_iter().take(leaf_limit).collect();
-
         let Some((tip_leaf, earlier_leaves)) = leaves.split_last() else {
             return Ok(BatchAppend::Empty);
         };
@@ -341,7 +313,7 @@ where
             return Ok(BatchAppend::Rejected);
         };
         if let Some(visit) = visit.as_mut() {
-            visit(Address::from(first_position), &leaves)?;
+            visit(Address::from(first_position), leaves)?;
         }
         Self::with_appended(prior, earlier_leaves, tip_leaf, tip_position, visit)
             .map(BatchAppend::Appended)
@@ -767,22 +739,18 @@ where
     /// The frontier that results is equal to the frontier that results from one call to
     /// [`Frontier::append`] for each leaf.
     ///
-    /// - Preconditions: the leaves that this method takes from `leaves` fit in memory. The side
-    ///   effects state how many leaves it takes.
+    /// - Preconditions: none.
     /// - Inputs: `leaves` are the leaves to add after the last leaf of the tree, in order.
     /// - Outputs: `true` if the frontier now includes every leaf of `leaves`. `false` if the
     ///   tree would have more than `2^DEPTH` leaves, or if the last leaf would have a position
     ///   greater than `u64::MAX`. The frontier does not change when the result is `false`.
     /// - Side effects:
-    ///   - Takes leaves from `leaves` and holds them in memory until it returns. It stops when
-    ///     `leaves` ends, or when it holds one more leaf than the tree has room for.
-    ///   - Does not give back the leaves that it took, whatever the result is.
     ///   - Calls [`Hashable::combine_pairs`] at most once for each level of the tree. Does not
     ///     call [`Hashable::combine`].
     ///   - Panics if `Hashable::combine_pairs` does not return exactly one node for each pair.
     ///     The frontier does not change when this method panics.
     #[must_use = "the leaves are not appended if the result is `false`"]
-    pub fn append_batch<I: IntoIterator<Item = H>>(&mut self, leaves: I) -> bool {
+    pub fn append_batch(&mut self, leaves: &[H]) -> bool {
         let Ok(appended) = self.append_batch_with(leaves, None::<NoVisitor<H>>);
         appended
     }
@@ -802,8 +770,7 @@ where
     /// The frontier that results is equal to the frontier that results from one call to
     /// [`Frontier::append`] for each leaf.
     ///
-    /// - Preconditions: the leaves that this method takes from `leaves` fit in memory. The side
-    ///   effects state how many leaves it takes.
+    /// - Preconditions: none.
     /// - Inputs:
     ///   - `leaves` are the leaves to add after the last leaf of the tree, in order.
     ///   - `visit` receives the completed nodes. In a call `visit(first, nodes)`, all of
@@ -816,9 +783,6 @@ where
     ///   - `Err(error)` if a call to `visit` returned `Err(error)`.
     ///   - The frontier does not change when the result is `Ok(false)` or an error.
     /// - Side effects:
-    ///   - Takes leaves from `leaves` and holds them in memory until it returns. It stops when
-    ///     `leaves` ends, or when it holds one more leaf than the tree has room for.
-    ///   - Does not give back the leaves that it took, whatever the result is.
     ///   - Calls `visit` at most once for each level, in ascending order of level. Each call
     ///     passes every node of that level that `leaves` complete. The call for level 0
     ///     passes `leaves`. Does not call `visit` if `leaves` is empty or if the result is
@@ -835,9 +799,8 @@ where
     ///     method returns an error or panics, `visit` has already received the nodes of the
     ///     lower levels, although the frontier does not change. A visitor that stores nodes
     ///     must then discard the nodes that it received in this call.
-    pub fn append_batch_visiting<I, V, E>(&mut self, leaves: I, visit: V) -> Result<bool, E>
+    pub fn append_batch_visiting<V, E>(&mut self, leaves: &[H], visit: V) -> Result<bool, E>
     where
-        I: IntoIterator<Item = H>,
         V: FnMut(Address, &[H]) -> Result<(), E>,
     {
         self.append_batch_with(leaves, Some(visit))
@@ -845,8 +808,7 @@ where
 
     /// Appends `leaves` to the tree, in order of position.
     ///
-    /// - Preconditions: the leaves that this method takes from `leaves` fit in memory. The side
-    ///   effects state how many leaves it takes.
+    /// - Preconditions: none.
     /// - Inputs: `leaves` are the leaves to add after the last leaf of the tree, in order.
     ///   `visit`, if it is present, receives each node that `leaves` complete.
     /// - Outputs:
@@ -856,17 +818,13 @@ where
     ///   - `Err(error)` if a call to `visit` returned `Err(error)`.
     ///   - The frontier does not change when the result is `Ok(false)` or an error.
     /// - Side effects:
-    ///   - Takes leaves from `leaves` and holds them in memory until it returns. It stops when
-    ///     `leaves` ends, or when it holds one more leaf than the tree has room for.
-    ///   - Does not give back the leaves that it took, whatever the result is.
     ///   - Calls `visit` and [`Hashable::combine_pairs`] at most once for each level. Does not
     ///     call either of them if the result is `Ok(false)`. Does not call `visit` again after
     ///     a call to `visit` returns an error.
     ///   - Panics if `Hashable::combine_pairs` does not return exactly one node for each pair.
     ///     The frontier does not change when this method panics.
-    fn append_batch_with<I, V, E>(&mut self, leaves: I, visit: Option<V>) -> Result<bool, E>
+    fn append_batch_with<V, E>(&mut self, leaves: &[H], visit: Option<V>) -> Result<bool, E>
     where
-        I: IntoIterator<Item = H>,
         V: FnMut(Address, &[H]) -> Result<(), E>,
     {
         let prior = self.frontier.as_ref();
@@ -1493,9 +1451,11 @@ mod tests {
                 for i in 0..start + batch {
                     assert!(expected.append(leaf(i)));
                 }
+                let first_batch: Vec<String> = (0..start).map(leaf).collect();
+                let second_batch: Vec<String> = (start..start + batch).map(leaf).collect();
                 let mut batched = super::Frontier::<String, DEPTH>::empty();
-                assert!(batched.append_batch((0..start).map(leaf)));
-                assert!(batched.append_batch((start..start + batch).map(leaf)));
+                assert!(batched.append_batch(&first_batch));
+                assert!(batched.append_batch(&second_batch));
                 assert_eq!(batched, expected, "{start} then {batch}");
                 assert_eq!(batched.root(), expected.root(), "{start} then {batch}");
             }
@@ -1519,15 +1479,15 @@ mod tests {
                     let mut visited = alloc::collections::BTreeMap::new();
                     let mut frontier = super::Frontier::<String, DEPTH>::empty();
                     for range in [0..a, a..a + b, a + b..size] {
-                        let appended =
-                            frontier.append_batch_visiting(range.map(leaf), |first, nodes| {
-                                for (index, node) in (first.index()..).zip(nodes) {
-                                    let at = (u8::from(first.level()), index);
-                                    let again = visited.insert(at, node.clone());
-                                    assert_eq!(again, None, "{at:?} visited twice, {a}/{b}/{c}");
-                                }
-                                Ok::<(), Infallible>(())
-                            });
+                        let leaves: Vec<String> = range.map(leaf).collect();
+                        let appended = frontier.append_batch_visiting(&leaves, |first, nodes| {
+                            for (index, node) in (first.index()..).zip(nodes) {
+                                let at = (u8::from(first.level()), index);
+                                let again = visited.insert(at, node.clone());
+                                assert_eq!(again, None, "{at:?} visited twice, {a}/{b}/{c}");
+                            }
+                            Ok::<(), Infallible>(())
+                        });
                         assert_eq!(appended, Ok(true));
                     }
 
@@ -1552,24 +1512,24 @@ mod tests {
 
     #[test]
     fn append_batch_past_capacity_appends_nothing() {
-        let leaves = |range: core::ops::Range<u8>| range.map(|i| i.to_string());
+        let leaves = |range: core::ops::Range<u8>| range.map(|i| i.to_string()).collect::<Vec<_>>();
         let mut frontier = super::Frontier::<String, 3>::empty();
-        assert!(frontier.append_batch(leaves(0..5)));
+        assert!(frontier.append_batch(&leaves(0..5)));
         let before = frontier.clone();
-        assert!(!frontier.append_batch(leaves(5..9)));
+        assert!(!frontier.append_batch(&leaves(5..9)));
         assert_eq!(frontier, before);
-        assert!(frontier.append_batch(leaves(5..8)));
+        assert!(frontier.append_batch(&leaves(5..8)));
         assert_eq!(frontier.root(), "01234567");
-        assert!(!frontier.append_batch(leaves(8..9)));
+        assert!(!frontier.append_batch(&leaves(8..9)));
     }
 
     #[test]
     fn frontier_of_depth_0_holds_one_leaf() {
         let mut frontier = super::Frontier::<String, 0>::empty();
-        assert!(!frontier.append_batch(["a".to_string(), "b".to_string()]));
-        assert!(frontier.append_batch(["a".to_string()]));
+        assert!(!frontier.append_batch(&["a".to_string(), "b".to_string()]));
+        assert!(frontier.append_batch(&["a".to_string()]));
         assert!(!frontier.append("b".to_string()));
-        assert!(!frontier.append_batch(["b".to_string()]));
+        assert!(!frontier.append_batch(&["b".to_string()]));
         assert_eq!(frontier.root(), "a");
     }
 
@@ -1586,48 +1546,9 @@ mod tests {
     }
 
     #[test]
-    fn frontier_append_batch_takes_one_leaf_more_than_the_tree_has_room_for() {
-        let mut frontier = super::Frontier::<String, 4>::empty();
-        assert!(frontier.append_batch((0..3).map(|i| i.to_string())));
-        let before = frontier.clone();
-
-        // A tree of depth 4 that holds 3 leaves has room for 13 more leaves. A rejected batch
-        // takes the leaves "0" to "13" from an iterator that does not end.
-        let mut leaves = (0u32..).map(|i| i.to_string());
-        assert!(!frontier.append_batch(&mut leaves));
-        assert_eq!(leaves.next(), Some("14".to_string()));
-        assert_eq!(frontier, before);
-
-        let mut leaves = (0u32..).map(|i| i.to_string());
-        let appended =
-            frontier.append_batch_visiting(&mut leaves, |_, _| -> Result<(), Infallible> {
-                panic!("the visitor was called for a rejected batch")
-            });
-        assert_eq!(appended, Ok(false));
-        assert_eq!(leaves.next(), Some("14".to_string()));
-        assert_eq!(frontier, before);
-    }
-
-    #[test]
-    fn nonempty_frontier_append_batch_takes_one_leaf_more_than_the_tree_has_room_for() {
-        let position = Position::from(u64::MAX - 2);
-        let ommers = vec![String::new(); position.past_ommer_count().into()];
-        let mut frontier = NonEmptyFrontier::from_parts(position, "tip".to_string(), ommers)
-            .expect("the number of ommers matches the position");
-        let before = frontier.clone();
-
-        // Two positions follow the last leaf of the tree. A rejected batch takes the leaves
-        // "0" to "2" from an iterator that does not end.
-        let mut leaves = (0u32..).map(|i| i.to_string());
-        assert!(!frontier.append_batch(&mut leaves));
-        assert_eq!(leaves.next(), Some("3".to_string()));
-        assert_eq!(frontier, before);
-    }
-
-    #[test]
     fn append_batch_depth_128_does_not_overflow_capacity() {
         let mut frontier = super::Frontier::<String, 128>::empty();
-        assert!(frontier.append_batch(vec!["a".to_string(), "b".to_string()]));
+        assert!(frontier.append_batch(&["a".to_string(), "b".to_string()]));
         assert_eq!(frontier.tree_size(), 2);
     }
 
@@ -1642,7 +1563,7 @@ mod tests {
         .expect("valid frontier");
         let before = frontier.clone();
         let mut visits = 0;
-        let appended = frontier.append_batch_visiting(vec!["next".to_string()], |_, _| {
+        let appended = frontier.append_batch_visiting(&["next".to_string()], |_, _| {
             visits += 1;
             Ok::<(), Infallible>(())
         });
@@ -1712,7 +1633,8 @@ mod tests {
         let mut expected = super::Frontier::<String, 5>::empty();
         for batch in [13, 6, 1, 3] {
             let leaves: Vec<String> = (0..batch).map(|i| format!("<{batch}.{i}>")).collect();
-            assert!(frontier.append_batch(leaves.iter().cloned().map(PairsOnly)));
+            let nodes: Vec<PairsOnly> = leaves.iter().cloned().map(PairsOnly).collect();
+            assert!(frontier.append_batch(&nodes));
             for leaf in leaves {
                 assert!(expected.append(leaf));
             }
@@ -1750,11 +1672,11 @@ mod tests {
             }
 
             let mut batched = frontier.clone();
-            prop_assert!(batched.append_batch(leaves.clone()));
+            prop_assert!(batched.append_batch(&leaves));
             prop_assert_eq!(&batched, &expected);
 
             let mut visiting = frontier.clone();
-            let appended = visiting.append_batch_visiting(leaves, |_, _| Ok::<(), Infallible>(()));
+            let appended = visiting.append_batch_visiting(&leaves, |_, _| Ok::<(), Infallible>(()));
             prop_assert_eq!(appended, Ok(true));
             prop_assert_eq!(&visiting, &expected);
         }
@@ -1770,7 +1692,7 @@ mod tests {
 
             let mut calls: VisitCalls<TestNode> = vec![];
             let mut visiting = frontier.clone();
-            let appended = visiting.append_batch_visiting(leaves, record_calls(&mut calls));
+            let appended = visiting.append_batch_visiting(&leaves, record_calls(&mut calls));
             prop_assert_eq!(appended, Ok(true));
 
             prop_assert!(has_one_call_per_level(&calls));
@@ -1790,7 +1712,7 @@ mod tests {
                 tip_after(&frontier, first_leaves.len() + second_leaves.len()).is_some()
             );
             let append_and_record =
-                |frontier: &mut NonEmptyFrontier<TestNode>, leaves: Vec<TestNode>| {
+                |frontier: &mut NonEmptyFrontier<TestNode>, leaves: &[TestNode]| {
                     let mut calls: VisitCalls<TestNode> = vec![];
                     let appended = frontier.append_batch_visiting(leaves, record_calls(&mut calls));
                     assert_eq!(appended, Ok(true));
@@ -1798,12 +1720,13 @@ mod tests {
                 };
 
             let mut joined = frontier.clone();
-            let all_leaves = first_leaves.iter().chain(&second_leaves).copied().collect();
-            let mut joined_visits = append_and_record(&mut joined, all_leaves);
+            let all_leaves: Vec<TestNode> =
+                first_leaves.iter().chain(&second_leaves).copied().collect();
+            let mut joined_visits = append_and_record(&mut joined, &all_leaves);
 
             let mut split = frontier.clone();
-            let mut split_visits = append_and_record(&mut split, first_leaves);
-            split_visits.extend(append_and_record(&mut split, second_leaves));
+            let mut split_visits = append_and_record(&mut split, &first_leaves);
+            split_visits.extend(append_and_record(&mut split, &second_leaves));
 
             joined_visits.sort();
             split_visits.sort();
@@ -1823,7 +1746,7 @@ mod tests {
 
             take_combine_pairs_calls();
             let mut batched = frontier.clone();
-            prop_assert!(batched.append_batch(leaves));
+            prop_assert!(batched.append_batch(&leaves));
             let calls = take_combine_pairs_calls();
 
             // The frontier holds the complete subtrees of the leaves before its last leaf.
@@ -1848,7 +1771,7 @@ mod tests {
 
             take_combine_pairs_calls();
             let mut visiting = frontier.clone();
-            let appended = visiting.append_batch_visiting(leaves, |_, _| Ok::<(), Infallible>(()));
+            let appended = visiting.append_batch_visiting(&leaves, |_, _| Ok::<(), Infallible>(()));
             prop_assert_eq!(appended, Ok(true));
             let calls = take_combine_pairs_calls();
 
@@ -1878,10 +1801,8 @@ mod tests {
 
             let mut calls: VisitCalls<String> = vec![];
             let mut frontier = expected.clone();
-            let Ok(appended) = frontier.append_batch_visiting(
-                (start..start + leaf_count).map(leaf),
-                record_calls(&mut calls),
-            );
+            let leaves: Vec<String> = (start..start + leaf_count).map(leaf).collect();
+            let Ok(appended) = frontier.append_batch_visiting(&leaves, record_calls(&mut calls));
 
             if start + leaf_count <= 1 << DEPTH {
                 prop_assert!(appended);
@@ -1917,12 +1838,13 @@ mod tests {
     #[test]
     fn append_batch_visiting_leaves_the_frontier_unchanged_when_the_visitor_panics() {
         let leaf = |position: u64| format!("<{position}>");
+        let leaves = |positions: core::ops::Range<u64>| positions.map(leaf).collect::<Vec<_>>();
         let mut frontier = NonEmptyFrontier::new(leaf(0));
-        assert!(frontier.append_batch((1..12).map(leaf)));
+        assert!(frontier.append_batch(&leaves(1..12)));
         let before = frontier.clone();
 
         let result = catch_unwind(AssertUnwindSafe(|| {
-            frontier.append_batch_visiting((12..17).map(leaf), |first, _| {
+            frontier.append_batch_visiting(&leaves(12..17), |first, _| {
                 if first.level() > Level::from(0) {
                     panic!("the visitor panicked")
                 }
@@ -1937,14 +1859,15 @@ mod tests {
     #[test]
     fn nonempty_frontier_append_batch_visiting_stops_at_the_error_of_the_visitor() {
         let leaf = |position: u64| format!("<{position}>");
+        let leaves = |positions: core::ops::Range<u64>| positions.map(leaf).collect::<Vec<_>>();
         let mut frontier = NonEmptyFrontier::new(leaf(0));
-        assert!(frontier.append_batch((1..12).map(leaf)));
+        assert!(frontier.append_batch(&leaves(1..12)));
         let before = frontier.clone();
 
         // Leaves 12 to 16 complete nodes at each level from 0 to 4.
         for failing_level in (0..=4).map(Level::from) {
             let mut visited_levels = vec![];
-            let result = frontier.append_batch_visiting((12..17).map(leaf), |first, _| {
+            let result = frontier.append_batch_visiting(&leaves(12..17), |first, _| {
                 visited_levels.push(first.level());
                 if first.level() == failing_level {
                     Err(VisitFailed(failing_level))
@@ -1964,6 +1887,7 @@ mod tests {
     #[test]
     fn frontier_append_batch_visiting_returns_the_error_of_the_visitor_and_changes_nothing() {
         let leaf = |position: u64| format!("<{position}>");
+        let leaves = |positions: core::ops::Range<u64>| positions.map(leaf).collect::<Vec<_>>();
         let fail_at = |failing_level: Level| {
             move |first: Address, _: &[String]| {
                 if first.level() == failing_level {
@@ -1975,14 +1899,14 @@ mod tests {
         };
 
         let mut empty = super::Frontier::<String, 5>::empty();
-        let result = empty.append_batch_visiting((0..4).map(leaf), fail_at(Level::from(0)));
+        let result = empty.append_batch_visiting(&leaves(0..4), fail_at(Level::from(0)));
         assert_eq!(result, Err(VisitFailed(Level::from(0))));
         assert_eq!(empty, super::Frontier::empty());
 
         let mut frontier = super::Frontier::<String, 5>::empty();
-        assert!(frontier.append_batch((0..12).map(leaf)));
+        assert!(frontier.append_batch(&leaves(0..12)));
         let before = frontier.clone();
-        let result = frontier.append_batch_visiting((12..17).map(leaf), fail_at(Level::from(2)));
+        let result = frontier.append_batch_visiting(&leaves(12..17), fail_at(Level::from(2)));
         assert_eq!(result, Err(VisitFailed(Level::from(2))));
         assert_eq!(frontier, before);
     }
@@ -1994,7 +1918,7 @@ mod tests {
         let before = frontier.clone();
 
         let result = catch_unwind(AssertUnwindSafe(|| {
-            frontier.append_batch(["b", "c", "d", "e"].map(node))
+            frontier.append_batch(&["b", "c", "d", "e"].map(node))
         }));
 
         let message = panic_message(result);
@@ -2015,7 +1939,7 @@ mod tests {
                 .expect("the number of ommers matches the position");
 
         let mut calls: VisitCalls<String> = vec![];
-        let appended = frontier.append_batch_visiting(["z".to_string()], record_calls(&mut calls));
+        let appended = frontier.append_batch_visiting(&["z".to_string()], record_calls(&mut calls));
         assert_eq!(appended, Ok(true));
 
         assert!(has_one_call_per_level(&calls));
@@ -2046,13 +1970,13 @@ mod tests {
             let mut frontier = NonEmptyFrontier::from_parts(position, "tip".to_string(), ommers)
                 .expect("the number of ommers matches the position");
             let before = frontier.clone();
-            let leaves = || (0..leaf_count).map(|leaf| leaf.to_string());
+            let leaves: Vec<String> = (0..leaf_count).map(|leaf| leaf.to_string()).collect();
 
-            assert!(!frontier.append_batch(leaves()));
+            assert!(!frontier.append_batch(&leaves));
             assert_eq!(frontier, before);
 
             let mut visits = 0;
-            let appended = frontier.append_batch_visiting(leaves(), |_, _| {
+            let appended = frontier.append_batch_visiting(&leaves, |_, _| {
                 visits += 1;
                 Ok::<(), Infallible>(())
             });
