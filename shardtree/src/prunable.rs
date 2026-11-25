@@ -1436,14 +1436,21 @@ mod tests {
     use std::collections::{BTreeMap, BTreeSet};
     use std::sync::Arc;
 
-    use incrementalmerkletree::{frontier::NonEmptyFrontier, Address, Level, Position};
+    use incrementalmerkletree::{
+        frontier::{
+            testing::{arb_test_node, TestNode},
+            NonEmptyFrontier,
+        },
+        Address, Hashable, Level, Position,
+    };
+    use proptest::prelude::{prop_assert, prop_assert_eq, Just, Strategy};
     use proptest::proptest;
 
     use super::{LocatedPrunableTree, PrunableTree, RetentionFlags};
     use crate::{
         error::{InsertionError, QueryError},
         prunable::{FrontierError, MergeError},
-        testing::{arb_char_str, arb_prunable_tree},
+        testing::{arb_char_str, arb_prunable_tree, arb_retention_flags},
         tree::{
             tests::{leaf, nil, parent},
             LocatedTree, Tree,
@@ -1518,6 +1525,62 @@ mod tests {
                 leaf(("ab".to_string(), RetentionFlags::EPHEMERAL))
             )
         );
+    }
+
+    #[test]
+    fn prune_hashes_merged_leaves_at_their_own_level() {
+        // `TestNode::combine` depends on the level, so a hash at the level of the parent gives
+        // another value.
+        let (a, b) = (TestNode(1), TestNode(2));
+        let tree: PrunableTree<TestNode> = parent(
+            leaf((a, RetentionFlags::EPHEMERAL)),
+            leaf((b, RetentionFlags::EPHEMERAL)),
+        );
+
+        assert_eq!(
+            tree.prune(Level::from(1)),
+            leaf((
+                TestNode::combine(Level::from(0), &a, &b),
+                RetentionFlags::EPHEMERAL
+            ))
+        );
+    }
+
+    /// Returns the complete tree that has `leaves` as its leaves, in order.
+    ///
+    /// - Preconditions: the number of leaves is a power of two.
+    /// - Inputs: `leaves` holds the value and the retention flags of each leaf.
+    /// - Outputs: the tree. No parent node of the tree has an annotation.
+    /// - Side effects: none.
+    fn complete_tree<H: Clone>(leaves: &[(H, RetentionFlags)]) -> PrunableTree<H> {
+        match leaves {
+            [] => nil(),
+            [single] => leaf(single.clone()),
+            _ => {
+                let (left, right) = leaves.split_at(leaves.len() / 2);
+                parent(complete_tree(left), complete_tree(right))
+            }
+        }
+    }
+
+    proptest! {
+        #[test]
+        fn prune_keeps_the_root_of_a_complete_tree(
+            (height, leaves) in (0u8..=6).prop_flat_map(|height| {
+                let leaf = (arb_test_node(), arb_retention_flags());
+                (Just(height), proptest::collection::vec(leaf, 1usize << height))
+            })
+        ) {
+            let root_addr = Address::from_parts(Level::from(height), 0);
+            let root_of = |tree: &PrunableTree<TestNode>| {
+                tree.root_hash(root_addr, root_addr.position_range_end())
+            };
+
+            let tree = complete_tree(&leaves);
+            let root = root_of(&tree);
+            prop_assert!(root.is_ok());
+            prop_assert_eq!(root_of(&tree.prune(Level::from(height))), root);
+        }
     }
 
     #[test]
