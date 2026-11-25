@@ -30,10 +30,12 @@ and this project adheres to Rust's notion of
   `Hashable::combine`.
 - `incrementalmerkletree::frontier::NonEmptyFrontier::append_batch_visiting`
   and `incrementalmerkletree::frontier::Frontier::append_batch_visiting`. Each
-  appends leaves with the same result as `append_batch`. Each also passes
-  every node that the appended leaves complete to a visitor function, with at
-  most one call per level. The visitor does not receive a node that was
-  complete before the call.
+  appends leaves as `append_batch` does, and returns `Result<bool, E>`. Each
+  also passes every node that the appended leaves complete to a visitor
+  function, with at most one call per level. The visitor does not receive a
+  node that was complete before the call. The visitor returns a `Result`. If
+  it returns an error, the method returns that error and does not change the
+  frontier.
 
 ### Fixed
 - `incrementalmerkletree::Position::is_complete_subtree` returns `false` for a
