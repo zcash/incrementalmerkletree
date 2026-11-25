@@ -47,3 +47,7 @@ test-dependencies = [
 
 [target.'cfg(unix)'.dev-dependencies]
 tempfile.workspace = true
+
+[[bench]]
+name = "shardtree"
+harness = false
