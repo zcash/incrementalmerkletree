@@ -354,7 +354,13 @@ where
                 }
                 (Tree(Node::Leaf { value }), parent @ Tree(Node::Parent { .. }))
                 | (parent @ Tree(Node::Parent { .. }), Tree(Node::Leaf { value })) => {
-                    let parent_hash = parent.root_hash(addr, no_default_fill);
+                    // The leaf is compared with the root of the parent only if that root can
+                    // be computed. `root_hash` hashes the complete parts of a tree before it
+                    // finds that the tree is incomplete, so do not call it in that case.
+                    let parent_hash = parent
+                        .has_computable_root()
+                        .then(|| parent.root_hash(addr, no_default_fill).ok())
+                        .flatten();
                     if parent_hash.iter().all(|r| r == &value.0) {
                         Ok(parent.reannotate_root(Some(Arc::new(value.0))))
                     } else {
@@ -363,8 +369,17 @@ where
                     }
                 }
                 (lparent, rparent) => {
-                    let lroot = lparent.root_hash(addr, no_default_fill).ok();
-                    let rroot = rparent.root_hash(addr, no_default_fill).ok();
+                    // The roots are compared only if both can be computed. `root_hash` hashes
+                    // the complete parts of a tree before it finds that the tree is
+                    // incomplete, so do not call it unless both trees are complete.
+                    let both_complete =
+                        lparent.has_computable_root() && rparent.has_computable_root();
+                    let lroot = both_complete
+                        .then(|| lparent.root_hash(addr, no_default_fill).ok())
+                        .flatten();
+                    let rroot = both_complete
+                        .then(|| rparent.root_hash(addr, no_default_fill).ok())
+                        .flatten();
                     // If both parents share the same root hash (or if one of them is absent),
                     // they can be merged
                     if lroot.iter().zip(&rroot).all(|(l, r)| l == r) {
