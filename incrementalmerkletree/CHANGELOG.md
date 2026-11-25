@@ -37,10 +37,13 @@ and this project adheres to Rust's notion of
 
 ### Fixed
 - `incrementalmerkletree::Position::is_complete_subtree` returns `false` for a
-  root level above 64. It overflowed before, and panicked in debug builds at
-  position `u64::MAX`. As a result, `incrementalmerkletree::frontier::Frontier::append`
-  with `DEPTH` greater than 64 returns `false` at position `u64::MAX` instead of
-  panicking.
+  root level above 64. Before, at position `u64::MAX` and a root level above
+  64, a debug build panicked and a release build returned `true`. A caller
+  that used that `true` result to detect a full tree must compare the position
+  with `u64::MAX` instead.
+- `incrementalmerkletree::frontier::Frontier::append` with `DEPTH` greater
+  than 64 returns `false` at position `u64::MAX` in every build. Before, a
+  debug build panicked.
 - `incrementalmerkletree::frontier::NonEmptyFrontier::append` panics, and does
   not change the frontier, when the last leaf of the tree has the position
   `u64::MAX`. Before, a debug build panicked on arithmetic overflow, and a
