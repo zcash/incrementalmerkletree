@@ -297,17 +297,31 @@ where
         }
     }
 
-    /// Prunes the tree by hashing together ephemeral sibling nodes.
+    /// Prunes the tree: merges each pair of sibling leaves that does not have to be retained
+    /// into one leaf.
     ///
-    /// `level` must be the level of the root of the node being pruned.
+    /// Two sibling leaves are merged when the left leaf is ephemeral and the right leaf is
+    /// neither marked nor a reference. The merged leaf holds the hash of the two leaves and the
+    /// retention flags of the right leaf. A merged leaf can then be merged with its own sibling.
+    ///
+    /// - Preconditions: `level` is the level of the root node of this tree. A parent node is
+    ///   at level 1 or above.
+    /// - Inputs: `level` is the level of the root node of this tree.
+    /// - Outputs: the pruned tree. It has the same root as this tree.
+    /// - Side effects: calls [`Hashable::combine`] once for each pair of leaves that it merges.
+    ///   Panics if a parent node is at level 0.
     pub fn prune(self, level: Level) -> Self {
         match self {
-            Tree(Node::Parent { ann, left, right }) => Tree::unite(
-                level,
-                ann,
-                left.as_ref().clone().prune(level - 1),
-                right.as_ref().clone().prune(level - 1),
-            ),
+            Tree(Node::Parent { ann, left, right }) => {
+                // `Tree::unite` takes the level of the two children.
+                let child_level = level - 1;
+                Tree::unite(
+                    child_level,
+                    ann,
+                    left.as_ref().clone().prune(child_level),
+                    right.as_ref().clone().prune(child_level),
+                )
+            }
             other => other,
         }
     }

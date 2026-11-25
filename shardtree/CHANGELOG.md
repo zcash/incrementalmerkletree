@@ -7,6 +7,11 @@ and this project adheres to Rust's notion of
 
 ## [Unreleased]
 
+### Fixed
+- `shardtree::PrunableTree::prune` hashes two merged leaves at their own
+  level. Before, it hashed them at the level of their parent, so the pruned
+  tree had a different root for a hash function that depends on the level.
+
 ## [0.8.1] - 2026-11-25
 
 ### Added
