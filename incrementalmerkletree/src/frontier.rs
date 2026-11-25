@@ -1353,6 +1353,25 @@ mod tests {
         leaf_count - u64::from(leaf_count.count_ones())
     }
 
+    /// Returns the message of the panic that `result` holds.
+    ///
+    /// - Preconditions: none.
+    /// - Inputs: `result` is the result of a call to `catch_unwind`.
+    /// - Outputs: the message of the panic.
+    /// - Side effects: panics if `result` holds no panic, or if the panic has no message.
+    fn panic_message<T: core::fmt::Debug>(result: std::thread::Result<T>) -> String {
+        let payload = result.expect_err("the call panics");
+        payload
+            .downcast_ref::<String>()
+            .cloned()
+            .or_else(|| {
+                payload
+                    .downcast_ref::<&str>()
+                    .map(|message| message.to_string())
+            })
+            .expect("the panic has a message")
+    }
+
     /// Every start size and batch length up to past two carries of depth 6, against `append`
     #[test]
     fn append_batch_equals_append_per_leaf() {
@@ -1861,6 +1880,23 @@ mod tests {
             assert_eq!(visits, 0);
             assert_eq!(frontier, before);
         }
+    }
+
+    #[test]
+    fn nonempty_frontier_append_panics_and_changes_nothing_at_position_u64_max() {
+        let position = Position::from(u64::MAX);
+        let ommers = vec![String::new(); position.past_ommer_count().into()];
+        let mut frontier = NonEmptyFrontier::from_parts(position, "tip".to_string(), ommers)
+            .expect("the number of ommers matches the position");
+        let before = frontier.clone();
+
+        let result = catch_unwind(AssertUnwindSafe(|| frontier.append("next".to_string())));
+
+        assert_eq!(
+            panic_message(result),
+            "the appended leaf would have a position greater than `u64::MAX`"
+        );
+        assert_eq!(frontier, before);
     }
 
     #[test]
