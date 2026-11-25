@@ -1336,6 +1336,7 @@ mod tests {
         testing::{arb_test_node, TestNode},
         *,
     };
+    use crate::testing::DropsLastParent;
 
     #[cfg(feature = "legacy-api")]
     use super::testing::arb_commitment_tree;
@@ -1403,8 +1404,12 @@ mod tests {
     /// The arguments of each call that a batch append made to its visitor.
     type VisitCalls<H> = Vec<(Address, Vec<H>)>;
 
-    /// Returns a visitor for a batch append that adds the arguments of each call to `calls`.
-    /// The visitor does not fail.
+    /// Returns a visitor for a batch append that records its calls and does not fail.
+    ///
+    /// - Preconditions: none.
+    /// - Inputs: `calls` receives the arguments of each call to the visitor, in order.
+    /// - Outputs: a visitor that adds its arguments to `calls` and returns `Ok(())`.
+    /// - Side effects: none.
     fn record_calls<H: Clone>(
         calls: &mut VisitCalls<H>,
     ) -> impl FnMut(Address, &[H]) -> Result<(), Infallible> + '_ {
@@ -1475,7 +1480,9 @@ mod tests {
             .expect("the panic has a message")
     }
 
-    /// Every start size and batch length up to past two carries of depth 6, against `append`
+    /// Appends a first batch of 0 to 40 leaves to an empty tree of depth 6, and then a second
+    /// batch of 0 to 24 leaves. Checks that the frontier and the root are equal to those that
+    /// result from one `append` for each leaf.
     #[test]
     fn append_batch_equals_append_per_leaf() {
         const DEPTH: u8 = 6;
@@ -1495,13 +1502,16 @@ mod tests {
         }
     }
 
-    /// Three consecutive batches of every small length: every complete node visited exactly once,
-    /// by value (a `String` node = its leaves concatenated), and the frontier = `append`'s
+    /// Appends three batches in turn to an empty tree of depth 5. Each batch has 0 to 10
+    /// leaves. Checks that the visitor receives each complete node of the tree exactly once,
+    /// with the correct value. A `String` node is the concatenation of the leaves below it.
+    /// Also checks that the frontier is equal to the frontier that results from one `append`
+    /// for each leaf.
     #[test]
     fn append_batch_visiting_visits_every_complete_node_once() {
         const DEPTH: u8 = 5;
         let leaf = |i: u64| format!("<{i}>");
-        // 3 × 10 leaves stays within a depth-5 tree's 32
+        // Three batches of at most 10 leaves fit in a tree of depth 5, which holds 32 leaves.
         for a in 0..=10 {
             for b in 0..=10 {
                 for c in 0..=10 {
@@ -1717,6 +1727,12 @@ mod tests {
         }
     }
 
+    /// Generates a `PairsOnly` node that holds one lowercase letter.
+    ///
+    /// - Preconditions: none.
+    /// - Inputs: none.
+    /// - Outputs: a strategy that generates such nodes.
+    /// - Side effects: none.
     fn arb_pairs_only() -> impl Strategy<Value = PairsOnly> + Clone {
         "[a-z]".prop_map(PairsOnly)
     }
@@ -1971,33 +1987,6 @@ mod tests {
         assert_eq!(frontier, before);
     }
 
-    /// A node with a `combine_pairs` that does not return the parent of the last pair.
-    #[derive(Clone, Debug, PartialEq, Eq)]
-    struct DropsLastParent(String);
-
-    impl Hashable for DropsLastParent {
-        fn empty_leaf() -> Self {
-            DropsLastParent(String::empty_leaf())
-        }
-
-        fn combine(level: Level, a: &Self, b: &Self) -> Self {
-            DropsLastParent(String::combine(level, &a.0, &b.0))
-        }
-
-        fn combine_pairs<'a, I>(level: Level, pairs: I) -> Vec<Self>
-        where
-            Self: 'a,
-            I: IntoIterator<Item = (&'a Self, &'a Self)>,
-        {
-            let mut parents: Vec<Self> = pairs
-                .into_iter()
-                .map(|(left, right)| Self::combine(level, left, right))
-                .collect();
-            parents.pop();
-            parents
-        }
-    }
-
     #[test]
     fn append_batch_panics_and_leaves_the_frontier_unchanged_when_combine_pairs_drops_a_node() {
         let node = |value: &str| DropsLastParent(value.to_string());
@@ -2008,7 +1997,12 @@ mod tests {
             frontier.append_batch(["b", "c", "d", "e"].map(node))
         }));
 
-        assert!(result.is_err());
+        let message = panic_message(result);
+        assert!(
+            message
+                .contains("`Hashable::combine_pairs` must return exactly one node for each pair"),
+            "the panic has another message: {message}"
+        );
         assert_eq!(frontier, before);
     }
 

@@ -100,43 +100,47 @@ where
     );
 }
 
+/// A node with a `combine_pairs` that does not return the parent of the last pair. The tests
+/// of this crate use it to show what a caller of `Hashable::combine_pairs` does when the result
+/// has too few nodes.
+#[cfg(test)]
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct DropsLastParent(pub(crate) String);
+
+#[cfg(test)]
+impl Hashable for DropsLastParent {
+    fn empty_leaf() -> Self {
+        DropsLastParent(String::empty_leaf())
+    }
+
+    fn combine(level: Level, a: &Self, b: &Self) -> Self {
+        DropsLastParent(String::combine(level, &a.0, &b.0))
+    }
+
+    fn combine_pairs<'a, I>(level: Level, pairs: I) -> Vec<Self>
+    where
+        Self: 'a,
+        I: IntoIterator<Item = (&'a Self, &'a Self)>,
+    {
+        let mut parents: Vec<Self> = pairs
+            .into_iter()
+            .map(|(left, right)| Self::combine(level, left, right))
+            .collect();
+        parents.pop();
+        parents
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use alloc::string::String;
     use proptest::prelude::*;
 
-    use super::check_combine_pairs;
+    use super::{check_combine_pairs, DropsLastParent};
     use crate::Level;
 
     fn arb_node() -> impl Strategy<Value = String> {
         "[a-z]{1,3}"
-    }
-
-    /// A node with a `combine_pairs` that does not return the parent of the last pair.
-    #[derive(Clone, Debug, PartialEq, Eq)]
-    struct DropsLastParent(String);
-
-    impl crate::Hashable for DropsLastParent {
-        fn empty_leaf() -> Self {
-            DropsLastParent(String::empty_leaf())
-        }
-
-        fn combine(level: Level, a: &Self, b: &Self) -> Self {
-            DropsLastParent(String::combine(level, &a.0, &b.0))
-        }
-
-        fn combine_pairs<'a, I>(level: Level, pairs: I) -> alloc::vec::Vec<Self>
-        where
-            Self: 'a,
-            I: IntoIterator<Item = (&'a Self, &'a Self)>,
-        {
-            let mut parents: alloc::vec::Vec<Self> = pairs
-                .into_iter()
-                .map(|(left, right)| Self::combine(level, left, right))
-                .collect();
-            parents.pop();
-            parents
-        }
     }
 
     #[test]
