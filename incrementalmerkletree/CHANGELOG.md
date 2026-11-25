@@ -7,6 +7,8 @@ and this project adheres to Rust's notion of
 
 ## Unreleased
 
+## [0.9.1] - 2026-11-25
+
 ### Added
 - `incrementalmerkletree::Hashable::combine_pairs`, a provided method. It takes
   an iterator of `(left, right)` pairs of sibling node references and returns
