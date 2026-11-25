@@ -169,13 +169,17 @@ where
     /// When the result is `true`, the frontier is equal to the frontier that results from one
     /// call to [`NonEmptyFrontier::append`] for each leaf.
     ///
-    /// - Preconditions: none.
+    /// - Preconditions: the leaves that this method takes from `leaves` fit in memory. The side
+    ///   effects state how many leaves it takes.
     /// - Inputs: `leaves` are the leaves to add after the last leaf of the tree, in order.
     /// - Outputs: `true` if the frontier now includes every leaf of `leaves`. `false` if the
     ///   last leaf would have a position greater than `u64::MAX`. The frontier does not change
     ///   when the result is `false`. [`NonEmptyFrontier::append`] returns no value, so it
     ///   panics in that case.
     /// - Side effects:
+    ///   - Takes leaves from `leaves` and holds them in memory until it returns. It stops when
+    ///     `leaves` ends, or when it holds one more leaf than the tree has room for.
+    ///   - Does not give back the leaves that it took, whatever the result is.
     ///   - Calls [`Hashable::combine_pairs`] at most once for each level of the tree. Does not
     ///     call [`Hashable::combine`].
     ///   - Panics if `Hashable::combine_pairs` does not return exactly one node for each pair.
@@ -202,7 +206,8 @@ where
     /// When the result is `Ok(true)`, the frontier is equal to the frontier that results from
     /// one call to [`NonEmptyFrontier::append`] for each leaf.
     ///
-    /// - Preconditions: none.
+    /// - Preconditions: the leaves that this method takes from `leaves` fit in memory. The side
+    ///   effects state how many leaves it takes.
     /// - Inputs:
     ///   - `leaves` are the leaves to add after the last leaf of the tree, in order.
     ///   - `visit` receives the completed nodes. In a call `visit(first, nodes)`, all of
@@ -215,6 +220,9 @@ where
     ///   - `Err(error)` if a call to `visit` returned `Err(error)`.
     ///   - The frontier does not change when the result is `Ok(false)` or an error.
     /// - Side effects:
+    ///   - Takes leaves from `leaves` and holds them in memory until it returns. It stops when
+    ///     `leaves` ends, or when it holds one more leaf than the tree has room for.
+    ///   - Does not give back the leaves that it took, whatever the result is.
     ///   - Calls `visit` at most once for each level, in ascending order of level. Each call
     ///     passes every node of that level that `leaves` complete. The call for level 0
     ///     passes `leaves`. Does not call `visit` if `leaves` is empty or if the result is
@@ -241,7 +249,8 @@ where
 
     /// Appends `leaves` to the tree, in order of position.
     ///
-    /// - Preconditions: none.
+    /// - Preconditions: the leaves that this method takes from `leaves` fit in memory. The side
+    ///   effects state how many leaves it takes.
     /// - Inputs: `leaves` are the leaves to add after the last leaf of the tree, in order.
     ///   `visit`, if it is present, receives each node that `leaves` complete.
     /// - Outputs:
@@ -250,6 +259,9 @@ where
     ///   - `Err(error)` if a call to `visit` returned `Err(error)`.
     ///   - The frontier does not change when the result is `Ok(false)` or an error.
     /// - Side effects:
+    ///   - Takes leaves from `leaves` and holds them in memory until it returns. It stops when
+    ///     `leaves` ends, or when it holds one more leaf than the tree has room for.
+    ///   - Does not give back the leaves that it took, whatever the result is.
     ///   - Calls `visit` and [`Hashable::combine_pairs`] at most once for each level. Does not
     ///     call either of them if the result is `Ok(false)`. Does not call `visit` again after
     ///     a call to `visit` returns an error.
@@ -272,7 +284,8 @@ where
 
     /// Computes the frontier of the tree that results when `leaves` are appended to a tree.
     ///
-    /// - Preconditions: none.
+    /// - Preconditions: the leaves that this function takes from `leaves` fit in memory. The
+    ///   side effects state how many leaves it takes.
     /// - Inputs:
     ///   - `prior` is the frontier of the tree before the append, or `None` if that tree is
     ///     empty.
@@ -289,8 +302,8 @@ where
     ///   - Otherwise, `Ok(BatchAppend::Appended)` with the frontier of the tree after the
     ///     append.
     /// - Side effects:
-    ///   - Collects leaves from `leaves` in memory. It stops when `leaves` ends, or when it
-    ///     holds one more leaf than the tree has room for.
+    ///   - Takes leaves from `leaves` and holds them in memory until it returns. It stops when
+    ///     `leaves` ends, or when it holds one more leaf than the tree has room for.
     ///   - Calls `visit` at most once for each level, in ascending order of level, with every
     ///     node of that level that `leaves` complete. Does not call `visit` again after a call
     ///     to `visit` returns an error.
@@ -754,12 +767,16 @@ where
     /// The frontier that results is equal to the frontier that results from one call to
     /// [`Frontier::append`] for each leaf.
     ///
-    /// - Preconditions: none.
+    /// - Preconditions: the leaves that this method takes from `leaves` fit in memory. The side
+    ///   effects state how many leaves it takes.
     /// - Inputs: `leaves` are the leaves to add after the last leaf of the tree, in order.
     /// - Outputs: `true` if the frontier now includes every leaf of `leaves`. `false` if the
     ///   tree would have more than `2^DEPTH` leaves, or if the last leaf would have a position
     ///   greater than `u64::MAX`. The frontier does not change when the result is `false`.
     /// - Side effects:
+    ///   - Takes leaves from `leaves` and holds them in memory until it returns. It stops when
+    ///     `leaves` ends, or when it holds one more leaf than the tree has room for.
+    ///   - Does not give back the leaves that it took, whatever the result is.
     ///   - Calls [`Hashable::combine_pairs`] at most once for each level of the tree. Does not
     ///     call [`Hashable::combine`].
     ///   - Panics if `Hashable::combine_pairs` does not return exactly one node for each pair.
@@ -785,7 +802,8 @@ where
     /// The frontier that results is equal to the frontier that results from one call to
     /// [`Frontier::append`] for each leaf.
     ///
-    /// - Preconditions: none.
+    /// - Preconditions: the leaves that this method takes from `leaves` fit in memory. The side
+    ///   effects state how many leaves it takes.
     /// - Inputs:
     ///   - `leaves` are the leaves to add after the last leaf of the tree, in order.
     ///   - `visit` receives the completed nodes. In a call `visit(first, nodes)`, all of
@@ -798,6 +816,9 @@ where
     ///   - `Err(error)` if a call to `visit` returned `Err(error)`.
     ///   - The frontier does not change when the result is `Ok(false)` or an error.
     /// - Side effects:
+    ///   - Takes leaves from `leaves` and holds them in memory until it returns. It stops when
+    ///     `leaves` ends, or when it holds one more leaf than the tree has room for.
+    ///   - Does not give back the leaves that it took, whatever the result is.
     ///   - Calls `visit` at most once for each level, in ascending order of level. Each call
     ///     passes every node of that level that `leaves` complete. The call for level 0
     ///     passes `leaves`. Does not call `visit` if `leaves` is empty or if the result is
@@ -824,7 +845,8 @@ where
 
     /// Appends `leaves` to the tree, in order of position.
     ///
-    /// - Preconditions: none.
+    /// - Preconditions: the leaves that this method takes from `leaves` fit in memory. The side
+    ///   effects state how many leaves it takes.
     /// - Inputs: `leaves` are the leaves to add after the last leaf of the tree, in order.
     ///   `visit`, if it is present, receives each node that `leaves` complete.
     /// - Outputs:
@@ -834,6 +856,9 @@ where
     ///   - `Err(error)` if a call to `visit` returned `Err(error)`.
     ///   - The frontier does not change when the result is `Ok(false)` or an error.
     /// - Side effects:
+    ///   - Takes leaves from `leaves` and holds them in memory until it returns. It stops when
+    ///     `leaves` ends, or when it holds one more leaf than the tree has room for.
+    ///   - Does not give back the leaves that it took, whatever the result is.
     ///   - Calls `visit` and [`Hashable::combine_pairs`] at most once for each level. Does not
     ///     call either of them if the result is `Ok(false)`. Does not call `visit` again after
     ///     a call to `visit` returns an error.
@@ -1551,29 +1576,42 @@ mod tests {
     }
 
     #[test]
-    fn append_batch_rejects_an_endless_iterator_without_collecting_it() {
+    fn frontier_append_batch_takes_one_leaf_more_than_the_tree_has_room_for() {
         let mut frontier = super::Frontier::<String, 4>::empty();
         assert!(frontier.append_batch((0..3).map(|i| i.to_string())));
         let before = frontier.clone();
-        assert!(!frontier.append_batch(core::iter::repeat("x".to_string())));
-        let appended = frontier.append_batch_visiting(
-            core::iter::repeat("x".to_string()),
-            |_, _| -> Result<(), Infallible> {
-                panic!("the visitor was called for a rejected batch")
-            },
-        );
-        assert_eq!(appended, Ok(false));
+
+        // A tree of depth 4 that holds 3 leaves has room for 13 more leaves. A rejected batch
+        // takes the leaves "0" to "13" from an iterator that does not end.
+        let mut leaves = (0u32..).map(|i| i.to_string());
+        assert!(!frontier.append_batch(&mut leaves));
+        assert_eq!(leaves.next(), Some("14".to_string()));
         assert_eq!(frontier, before);
 
-        let mut nonempty = NonEmptyFrontier::from_parts(
-            Position::from(u64::MAX - 2),
-            "tip".to_string(),
-            vec![String::new(); Position::from(u64::MAX - 2).past_ommer_count().into()],
-        )
-        .expect("the number of ommers matches the position");
-        let before = nonempty.clone();
-        assert!(!nonempty.append_batch(core::iter::repeat("x".to_string())));
-        assert_eq!(nonempty, before);
+        let mut leaves = (0u32..).map(|i| i.to_string());
+        let appended =
+            frontier.append_batch_visiting(&mut leaves, |_, _| -> Result<(), Infallible> {
+                panic!("the visitor was called for a rejected batch")
+            });
+        assert_eq!(appended, Ok(false));
+        assert_eq!(leaves.next(), Some("14".to_string()));
+        assert_eq!(frontier, before);
+    }
+
+    #[test]
+    fn nonempty_frontier_append_batch_takes_one_leaf_more_than_the_tree_has_room_for() {
+        let position = Position::from(u64::MAX - 2);
+        let ommers = vec![String::new(); position.past_ommer_count().into()];
+        let mut frontier = NonEmptyFrontier::from_parts(position, "tip".to_string(), ommers)
+            .expect("the number of ommers matches the position");
+        let before = frontier.clone();
+
+        // Two positions follow the last leaf of the tree. A rejected batch takes the leaves
+        // "0" to "2" from an iterator that does not end.
+        let mut leaves = (0u32..).map(|i| i.to_string());
+        assert!(!frontier.append_batch(&mut leaves));
+        assert_eq!(leaves.next(), Some("3".to_string()));
+        assert_eq!(frontier, before);
     }
 
     #[test]
