@@ -161,14 +161,15 @@ where
 
     /// Appends `leaves` to the tree, in order of position.
     ///
-    /// The frontier that results is equal to the frontier that results from one call to
-    /// [`NonEmptyFrontier::append`] for each leaf.
+    /// When the result is `true`, the frontier is equal to the frontier that results from one
+    /// call to [`NonEmptyFrontier::append`] for each leaf.
     ///
     /// - Preconditions: none.
     /// - Inputs: `leaves` are the leaves to add after the last leaf of the tree, in order.
     /// - Outputs: `true` if the frontier now includes every leaf of `leaves`. `false` if the
     ///   last leaf would have a position greater than `u64::MAX`. The frontier does not change
-    ///   when the result is `false`.
+    ///   when the result is `false`. [`NonEmptyFrontier::append`] returns no value, so it
+    ///   panics in that case.
     /// - Side effects:
     ///   - Calls [`Hashable::combine_pairs`] at most once for each level of the tree. Does not
     ///     call [`Hashable::combine`].
@@ -192,8 +193,8 @@ where
     /// caller that must receive every complete node of a tree must use this method to add
     /// every leaf of that tree.
     ///
-    /// The frontier that results is equal to the frontier that results from one call to
-    /// [`NonEmptyFrontier::append`] for each leaf.
+    /// When the result is `true`, the frontier is equal to the frontier that results from one
+    /// call to [`NonEmptyFrontier::append`] for each leaf.
     ///
     /// - Preconditions: none.
     /// - Inputs:
@@ -203,7 +204,8 @@ where
     ///     `first.index() + i`.
     /// - Outputs: `true` if the frontier now includes every leaf of `leaves`. `false` if the
     ///   last leaf would have a position greater than `u64::MAX`. The frontier does not change
-    ///   when the result is `false`.
+    ///   when the result is `false`. [`NonEmptyFrontier::append`] returns no value, so it
+    ///   panics in that case.
     /// - Side effects:
     ///   - Calls `visit` at most once for each level, in ascending order of level. Each call
     ///     passes every node of that level that `leaves` complete. The call for level 0
