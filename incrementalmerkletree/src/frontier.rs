@@ -99,12 +99,23 @@ impl<H> NonEmptyFrontier<H>
 where
     H: Hashable + Clone,
 {
-    /// Append a new leaf to the frontier, and recompute ommers by hashing together full subtrees
-    /// until an empty ommer slot is found.
+    /// Appends `leaf` to the tree, after the last leaf of the tree.
+    ///
+    /// - Preconditions: the last leaf of the tree has a position less than `u64::MAX`.
+    /// - Inputs: `leaf` is the leaf to add.
+    /// - Outputs: none.
+    /// - Side effects:
+    ///   - Calls [`Hashable::combine`] once for each node above level 0 that has the prior last
+    ///     leaf as its last leaf.
+    ///   - Panics if the last leaf of the tree has the position `u64::MAX`. This panic occurs
+    ///     before the frontier changes.
     pub fn append(&mut self, leaf: H) {
         let prior_position = self.position;
+        let Some(position) = u64::from(prior_position).checked_add(1) else {
+            panic!("the appended leaf would have a position greater than `u64::MAX`");
+        };
         let prior_leaf = self.leaf.clone();
-        self.position += 1;
+        self.position = Position::from(position);
         self.leaf = leaf;
         if self.position.is_right_child() {
             // if the new position is a right-hand leaf, the current leaf will directly become an

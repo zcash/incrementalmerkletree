@@ -41,6 +41,10 @@ and this project adheres to Rust's notion of
   position `u64::MAX`. As a result, `incrementalmerkletree::frontier::Frontier::append`
   with `DEPTH` greater than 64 returns `false` at position `u64::MAX` instead of
   panicking.
+- `incrementalmerkletree::frontier::NonEmptyFrontier::append` panics, and does
+  not change the frontier, when the last leaf of the tree has the position
+  `u64::MAX`. Before, a debug build panicked on arithmetic overflow, and a
+  release build set the position to 0 and returned.
 
 ## [0.9.0] - 2026-09-29
 
