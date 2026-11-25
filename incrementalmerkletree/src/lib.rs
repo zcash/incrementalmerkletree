@@ -217,7 +217,9 @@ impl Position {
     /// contains a perfect balanced tree with a root at level `root_level` that contains the
     /// aforesaid leaf.
     pub fn is_complete_subtree(&self, root_level: Level) -> bool {
-        !(0..(root_level.0)).any(|l| self.0 & (1 << l) == 0)
+        // The leaf is the last leaf of that subtree exactly when the low `root_level` bits of
+        // its position are all one.
+        self.0.trailing_ones() >= u32::from(root_level.0)
     }
 
     /// Returns an iterator over the addresses of nodes required to create a witness for this
@@ -670,6 +672,29 @@ pub trait Hashable: fmt::Debug {
     /// producing a new node at level `level + 1`.
     fn combine(level: Level, a: &Self, b: &Self) -> Self;
 
+    /// Combines each pair of sibling nodes into the parent of that pair.
+    ///
+    /// A type can override this method to hash many pairs faster than one pair at a time.
+    ///
+    /// - Preconditions: both nodes of each pair are at `level`.
+    /// - Inputs: `level` is the level of the nodes in `pairs`. Each item of `pairs` holds the
+    ///   left child and then the right child of one parent. `pairs` can have no items.
+    /// - Outputs: one node at `level + 1` for each pair, in the order of `pairs`. Each node is
+    ///   equal to the result of [`Hashable::combine`] for `level` and the two children of that
+    ///   pair. The result has no nodes if `pairs` has no items. An override must return the
+    ///   same nodes as this default implementation.
+    /// - Side effects: none.
+    fn combine_pairs<'a, I>(level: Level, pairs: I) -> Vec<Self>
+    where
+        Self: Sized + 'a,
+        I: IntoIterator<Item = (&'a Self, &'a Self)>,
+    {
+        pairs
+            .into_iter()
+            .map(|(left, right)| Self::combine(level, left, right))
+            .collect()
+    }
+
     /// Produces an empty root at the specified level of the tree by combining empty leaf values.
     ///
     /// At each successive level, the value is produced by combining the value at the level below
@@ -704,6 +729,9 @@ pub(crate) mod tests {
         assert!(!Position(4).is_complete_subtree(Level(2)));
         assert!(Position(7).is_complete_subtree(Level(3)));
         assert!(Position(u32::MAX as u64).is_complete_subtree(Level(32)));
+        assert!(Position(u64::MAX).is_complete_subtree(Level(64)));
+        assert!(!Position(u64::MAX).is_complete_subtree(Level(65)));
+        assert!(!Position(u64::MAX).is_complete_subtree(Level(128)));
     }
 
     #[test]

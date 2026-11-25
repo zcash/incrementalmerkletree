@@ -7,6 +7,52 @@ and this project adheres to Rust's notion of
 
 ## Unreleased
 
+### Added
+- `incrementalmerkletree::Hashable::combine_pairs`, a provided method. It takes
+  an iterator of `(left, right)` pairs of sibling node references and returns
+  the parent of each pair, in order. The default implementation calls
+  `Hashable::combine` once per pair, so existing implementations need no
+  change. An implementation that overrides it must return the same nodes as
+  the default. It must accept an iterator that has no pairs, and return no
+  nodes for it.
+- `incrementalmerkletree::testing::check_combine_pairs` (under the
+  `test-dependencies` feature). It panics unless `Hashable::combine_pairs`
+  returns the result of `Hashable::combine` for each pair that it is given,
+  and returns no nodes when it is given no pairs. A crate that overrides
+  `Hashable::combine_pairs` can call it from its tests.
+- The `Hashable` implementation for `Option<H>` (under the `test-dependencies`
+  feature) overrides `Hashable::combine_pairs`. It passes the pairs that have
+  two `Some` children to `H::combine_pairs`, and gives `None` as the parent of
+  every other pair.
+- `incrementalmerkletree::frontier::NonEmptyFrontier::append_batch` and
+  `incrementalmerkletree::frontier::Frontier::append_batch`. Each appends the
+  leaves of a slice and returns `true`. Each returns `false`, and does not
+  change the frontier, if the leaves do not fit in the tree. They hash with
+  `Hashable::combine_pairs`, at most one call per level, and do not call
+  `Hashable::combine`.
+- `incrementalmerkletree::frontier::NonEmptyFrontier::append_batch_visiting`
+  and `incrementalmerkletree::frontier::Frontier::append_batch_visiting`. Each
+  appends leaves as `append_batch` does, and returns `Result<bool, E>`. Each
+  also passes every node that the appended leaves complete to a visitor
+  function, with at most one call per level. The visitor does not receive a
+  node that was complete before the call. The visitor returns a `Result`. If
+  it returns an error, the method returns that error and does not change the
+  frontier.
+
+### Fixed
+- `incrementalmerkletree::Position::is_complete_subtree` returns `false` for a
+  root level above 64. Before, at position `u64::MAX` and a root level above
+  64, a debug build panicked and a release build returned `true`. A caller
+  that used that `true` result to detect a full tree must compare the position
+  with `u64::MAX` instead.
+- `incrementalmerkletree::frontier::Frontier::append` with `DEPTH` greater
+  than 64 returns `false` at position `u64::MAX` in every build. Before, a
+  debug build panicked.
+- `incrementalmerkletree::frontier::NonEmptyFrontier::append` panics, and does
+  not change the frontier, when the last leaf of the tree has the position
+  `u64::MAX`. Before, a debug build panicked on arithmetic overflow, and a
+  release build set the position to 0 and returned.
+
 ## [0.9.0] - 2026-09-29
 
 ### Changed

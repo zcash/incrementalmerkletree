@@ -116,6 +116,20 @@ impl<H: Hashable, const SHARD_HEIGHT: u8> Hashable for LevelShifter<H, SHARD_HEI
         Self(H::combine(level + SHARD_HEIGHT, &a.0, &b.0))
     }
 
+    fn combine_pairs<'a, I>(level: Level, pairs: I) -> Vec<Self>
+    where
+        Self: 'a,
+        I: IntoIterator<Item = (&'a Self, &'a Self)>,
+    {
+        H::combine_pairs(
+            level + SHARD_HEIGHT,
+            pairs.into_iter().map(|(left, right)| (&left.0, &right.0)),
+        )
+        .into_iter()
+        .map(Self)
+        .collect()
+    }
+
     fn empty_root(level: Level) -> Self
     where
         Self: Sized,
@@ -1924,7 +1938,8 @@ mod tests {
     use proptest::prelude::*;
 
     use incrementalmerkletree::{
-        frontier::{Frontier, NonEmptyFrontier},
+        frontier::{testing::arb_test_node, Frontier, NonEmptyFrontier},
+        testing::check_combine_pairs,
         Address, Hashable, Level, Marking, MerklePath, Position, Retention,
     };
     use incrementalmerkletree_testing::{
@@ -1940,8 +1955,61 @@ mod tests {
             arb_char_str, arb_shard_layout, arb_shardtree_sized, check_shard_sizes,
             check_shardtree_insertion, check_witness_with_pruned_subtrees,
         },
-        InsertionError, LocatedPrunableTree, LocatedTree, RetentionFlags, ShardTree, Tree,
+        InsertionError, LevelShifter, LocatedPrunableTree, LocatedTree, RetentionFlags, ShardTree,
+        Tree,
     };
+
+    /// A node that shows whether a wrapper type forwards `Hashable::combine_pairs`. Its `combine`
+    /// panics, and each node that its `combine_pairs` returns records the level of the call.
+    #[derive(Clone, Debug, PartialEq, Eq)]
+    struct BatchOnly(String);
+
+    impl Hashable for BatchOnly {
+        fn empty_leaf() -> Self {
+            BatchOnly("_".to_string())
+        }
+
+        fn combine(_: Level, _: &Self, _: &Self) -> Self {
+            panic!("`combine` was called instead of `combine_pairs`")
+        }
+
+        fn combine_pairs<'a, I>(level: Level, pairs: I) -> Vec<Self>
+        where
+            Self: 'a,
+            I: IntoIterator<Item = (&'a Self, &'a Self)>,
+        {
+            pairs
+                .into_iter()
+                .map(|(left, right)| {
+                    BatchOnly(format!("{}({}{})", u8::from(level), left.0, right.0))
+                })
+                .collect()
+        }
+    }
+
+    #[test]
+    fn level_shifter_forwards_combine_pairs_at_the_shifted_level() {
+        let node = |value: &str| LevelShifter::<BatchOnly, 4>(BatchOnly(value.to_string()));
+        let (a, b, c, d) = (node("a"), node("b"), node("c"), node("d"));
+        assert_eq!(
+            LevelShifter::combine_pairs(Level::from(1), [(&a, &b), (&c, &d)]),
+            vec![node("5(ab)"), node("5(cd)")],
+        );
+    }
+
+    proptest! {
+        #[test]
+        fn level_shifter_combine_pairs_agrees_with_combine(
+            level in 0u8..60,
+            pairs in proptest::collection::vec((arb_test_node(), arb_test_node()), 0..16),
+        ) {
+            let pairs: Vec<_> = pairs
+                .into_iter()
+                .map(|(left, right)| (LevelShifter::<_, 4>(left), LevelShifter::<_, 4>(right)))
+                .collect();
+            check_combine_pairs(Level::from(level), &pairs);
+        }
+    }
 
     #[test]
     fn shardtree_insertion() {
