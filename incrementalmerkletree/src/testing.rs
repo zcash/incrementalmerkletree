@@ -75,12 +75,20 @@ where
 /// - Inputs: `level` is the level of the nodes in `pairs`. Each item of `pairs` holds a left
 ///   child and then a right child.
 /// - Outputs: none.
-/// - Side effects: panics unless `H::combine_pairs` returns one node for each pair, in order,
-///   and each node is equal to the result of `H::combine` for that pair.
+/// - Side effects:
+///   - Panics unless `H::combine_pairs` returns one node for each pair, in order, and each
+///     node is equal to the result of `H::combine` for that pair.
+///   - Panics unless `H::combine_pairs` returns no nodes when it is given no pairs.
 pub fn check_combine_pairs<H>(level: Level, pairs: &[(H, H)])
 where
     H: Hashable + PartialEq,
 {
+    let parents_of_no_pairs = H::combine_pairs(level, core::iter::empty());
+    assert!(
+        parents_of_no_pairs.is_empty(),
+        "`combine_pairs` must return no nodes when it is given no pairs (at {level:?})"
+    );
+
     let expected: Vec<H> = pairs
         .iter()
         .map(|(left, right)| H::combine(level, left, right))
@@ -140,6 +148,43 @@ mod tests {
             Level::from(0),
             [(&a, &b), (&c, &d)],
         );
+    }
+
+    /// A node with a `combine_pairs` that returns one node when it is given no pairs.
+    #[derive(Clone, Debug, PartialEq, Eq)]
+    struct ReturnsANodeForNoPairs(String);
+
+    impl crate::Hashable for ReturnsANodeForNoPairs {
+        fn empty_leaf() -> Self {
+            ReturnsANodeForNoPairs(String::empty_leaf())
+        }
+
+        fn combine(level: Level, a: &Self, b: &Self) -> Self {
+            ReturnsANodeForNoPairs(String::combine(level, &a.0, &b.0))
+        }
+
+        fn combine_pairs<'a, I>(level: Level, pairs: I) -> alloc::vec::Vec<Self>
+        where
+            Self: 'a,
+            I: IntoIterator<Item = (&'a Self, &'a Self)>,
+        {
+            let parents: alloc::vec::Vec<Self> = pairs
+                .into_iter()
+                .map(|(left, right)| Self::combine(level, left, right))
+                .collect();
+            if parents.is_empty() {
+                vec![Self::empty_leaf()]
+            } else {
+                parents
+            }
+        }
+    }
+
+    #[test]
+    #[should_panic(expected = "`combine_pairs` must return no nodes when it is given no pairs")]
+    fn check_combine_pairs_panics_when_combine_pairs_returns_a_node_for_no_pairs() {
+        let node = |value: &str| ReturnsANodeForNoPairs(value.into());
+        check_combine_pairs(Level::from(0), &[(node("a"), node("b"))]);
     }
 
     proptest! {

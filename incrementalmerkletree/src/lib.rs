@@ -678,10 +678,11 @@ pub trait Hashable: fmt::Debug {
     ///
     /// - Preconditions: both nodes of each pair are at `level`.
     /// - Inputs: `level` is the level of the nodes in `pairs`. Each item of `pairs` holds the
-    ///   left child and then the right child of one parent.
+    ///   left child and then the right child of one parent. `pairs` can have no items.
     /// - Outputs: one node at `level + 1` for each pair, in the order of `pairs`. Each node is
     ///   equal to the result of [`Hashable::combine`] for `level` and the two children of that
-    ///   pair. An override must return the same nodes as this default implementation.
+    ///   pair. The result has no nodes if `pairs` has no items. An override must return the
+    ///   same nodes as this default implementation.
     /// - Side effects: none.
     fn combine_pairs<'a, I>(level: Level, pairs: I) -> Vec<Self>
     where

@@ -13,11 +13,13 @@ and this project adheres to Rust's notion of
   the parent of each pair, in order. The default implementation calls
   `Hashable::combine` once per pair, so existing implementations need no
   change. An implementation that overrides it must return the same nodes as
-  the default.
+  the default. It must accept an iterator that has no pairs, and return no
+  nodes for it.
 - `incrementalmerkletree::testing::check_combine_pairs` (under the
   `test-dependencies` feature). It panics unless `Hashable::combine_pairs`
-  returns the result of `Hashable::combine` for each pair that it is given. A
-  crate that overrides `Hashable::combine_pairs` can call it from its tests.
+  returns the result of `Hashable::combine` for each pair that it is given,
+  and returns no nodes when it is given no pairs. A crate that overrides
+  `Hashable::combine_pairs` can call it from its tests.
 - The `Hashable` implementation for `Option<H>` (under the `test-dependencies`
   feature) overrides `Hashable::combine_pairs`. It passes the pairs that have
   two `Some` children to `H::combine_pairs`, and gives `None` as the parent of
