@@ -483,18 +483,46 @@ where
     ///
     /// `level` must be the level of the two nodes that are being joined.
     pub(crate) fn unite(level: Level, ann: Option<Arc<H>>, left: Self, right: Self) -> Self {
-        match (left, right) {
-            (Tree(Node::Nil), Tree(Node::Nil)) if ann.is_none() => Tree::empty(),
-            (Tree(Node::Leaf { value: lv }), Tree(Node::Leaf { value: rv }))
-                // we can prune right-hand leaves that are not marked or reference leaves; if a
-                // leaf is a checkpoint then that information will be propagated to the replacement
-                // leaf
-                if lv.1 == RetentionFlags::EPHEMERAL &&
-                    (rv.1 & (RetentionFlags::MARKED | RetentionFlags::REFERENCE)) == RetentionFlags::EPHEMERAL =>
-            {
-                Tree::leaf((H::combine(level, &lv.0, &rv.0), rv.1))
+        if ann.is_none() && left.is_nil() && right.is_nil() {
+            return Tree::empty();
+        }
+        match Self::mergeable_leaves(&left, &right) {
+            Some((left_hash, right_hash, flags)) => {
+                Tree::leaf((H::combine(level, left_hash, right_hash), flags))
             }
-            (left, right) => Tree::parent(ann, left, right),
+            None => Tree::parent(ann, left, right),
+        }
+    }
+
+    /// Returns the hashes of two sibling leaves that [`Self::unite`] replaces with one leaf, and
+    /// the retention flags of that leaf.
+    ///
+    /// - Preconditions: `left` and `right` are siblings.
+    /// - Inputs: `left` is the left sibling, and `right` is the right sibling.
+    /// - Outputs: `None` if either node is not a leaf, if `left` has a retention flag, or if
+    ///   `right` is marked or is a reference. Otherwise the hash of `left`, the hash of `right`,
+    ///   and the flags of `right`. The replacement leaf has the flags of `right`, so it keeps a
+    ///   checkpoint at the last position of `right`.
+    /// - Side effects: none.
+    pub(crate) fn mergeable_leaves<'a>(
+        left: &'a Self,
+        right: &'a Self,
+    ) -> Option<(&'a H, &'a H, RetentionFlags)> {
+        match (&left.0, &right.0) {
+            (
+                Node::Leaf {
+                    value: (left_hash, left_flags),
+                },
+                Node::Leaf {
+                    value: (right_hash, right_flags),
+                },
+            ) if *left_flags == RetentionFlags::EPHEMERAL
+                && (*right_flags & (RetentionFlags::MARKED | RetentionFlags::REFERENCE))
+                    == RetentionFlags::EPHEMERAL =>
+            {
+                Some((left_hash, right_hash, *right_flags))
+            }
+            _ => None,
         }
     }
 }

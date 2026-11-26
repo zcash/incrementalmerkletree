@@ -8,7 +8,7 @@ use tracing::trace;
 use crate::{
     error::{InsertionError, ShardTreeError},
     store::{Checkpoint, ShardStore},
-    IncompleteAt, LocatedPrunableTree, LocatedTree, RetentionFlags, ShardTree, Tree,
+    IncompleteAt, LocatedPrunableTree, LocatedTree, PrunableTree, RetentionFlags, ShardTree, Tree,
 };
 
 impl<
@@ -277,6 +277,193 @@ where
             None
         }
     }
+
+    /// Builds a [`LocatedPrunableTree`] from a slice of level-0 leaves.
+    ///
+    /// This method returns the same tree as [`Self::from_iter`] returns for the same leaves. It
+    /// hashes the tree one level at a time, so a [`Hashable`] type that overrides
+    /// [`Hashable::combine_pairs`] can hash many pairs in one call.
+    ///
+    /// - Preconditions: none.
+    /// - Inputs:
+    ///   - `start` is the position of the first leaf.
+    ///   - `prune_below` is a level of the tree. This method prunes a node only if the address
+    ///     of the node is below this level, as [`Self::from_iter`] does.
+    ///   - `leaves` holds the hash and the retention of each leaf, in order of position.
+    /// - Outputs:
+    ///   - `None` if `leaves` is empty, or if the last leaf would have a position greater than
+    ///     `u64::MAX`.
+    ///   - Otherwise, the result that [`Self::from_iter`] returns for the same leaves at the
+    ///     same positions. The `remainder` of the result has no items.
+    /// - Side effects:
+    ///   - Calls [`Hashable::combine_pairs`] at most once for each level below `prune_below`.
+    ///     Does not call [`Hashable::combine`].
+    ///   - Panics if `Hashable::combine_pairs` does not return exactly one node for each pair.
+    #[allow(clippy::type_complexity)]
+    pub fn from_leaves<C>(
+        start: Position,
+        prune_below: Level,
+        leaves: &[(H, Retention<C>)],
+    ) -> Option<BatchInsertionResult<H, C, core::iter::Empty<(H, Retention<C>)>>>
+    where
+        C: Clone + Ord,
+    {
+        let first_position = u64::from(start);
+        let leaf_count = u64::try_from(leaves.len()).ok()?;
+        // This is `None` if there are no leaves, or if the last position is too great.
+        let last_position = first_position.checked_add(leaf_count.checked_sub(1)?)?;
+
+        let checkpoints: BTreeMap<C, Position> = leaves
+            .iter()
+            .zip(first_position..=last_position)
+            .filter_map(|((_, retention), position)| match retention {
+                Retention::Checkpoint { id, .. } => Some((id.clone(), Position::from(position))),
+                _ => None,
+            })
+            .collect();
+
+        // `from_iter` records for each complete subtree whether its last leaf is marked.
+        let is_marked = |offset: usize| {
+            leaves
+                .get(offset)
+                .is_some_and(|(_, retention)| RetentionFlags::from(retention).is_marked())
+        };
+
+        // `nodes` holds the root of each complete subtree at `level` that the leaves form, in
+        // order of position. `first_index` and `last_index` are the indices, at `level`, of the
+        // first and the last of these subtrees. `leaf_offsets` holds the offsets in `leaves` of
+        // the leaves of these subtrees.
+        let mut level = Level::from(0);
+        let (mut first_index, mut last_index) = (first_position, last_position);
+        let mut leaf_offsets = 0..leaves.len();
+        let mut nodes: Vec<PrunableTree<H>> = leaves
+            .iter()
+            .map(|(value, retention)| Tree::leaf((value.clone(), RetentionFlags::from(retention))))
+            .collect();
+
+        // The complete subtrees that have no sibling among the leaves. `left_fragments` is in
+        // order of position, and `right_fragments` is in reverse order of position.
+        let mut left_fragments: Vec<(Self, bool)> = vec![];
+        let mut right_fragments: Vec<(Self, bool)> = vec![];
+        while !nodes.is_empty() {
+            // Each subtree at `level` has this number of leaves.
+            let subtree_size = leaf_offsets.len() / nodes.len();
+
+            // If the last subtree is a left child, its right sibling is not among the leaves.
+            if last_index % 2 == 0 {
+                if let Some(root) = nodes.pop() {
+                    let root_addr = Address::from_parts(level, last_index);
+                    let marked = is_marked(leaf_offsets.end - 1);
+                    right_fragments.push((LocatedTree { root_addr, root }, marked));
+                    leaf_offsets.end -= subtree_size;
+                }
+            }
+            // If the first subtree is a right child, its left sibling is not among the leaves.
+            let mut siblings = nodes.into_iter();
+            if first_index % 2 == 1 {
+                if let Some(root) = siblings.next() {
+                    let root_addr = Address::from_parts(level, first_index);
+                    let marked = is_marked(leaf_offsets.start + subtree_size - 1);
+                    left_fragments.push((LocatedTree { root_addr, root }, marked));
+                    leaf_offsets.start += subtree_size;
+                }
+            }
+
+            nodes = unite_pairs(level, prune_below, siblings.collect());
+            first_index = first_index / 2 + first_index % 2;
+            last_index = last_index.saturating_sub(1) / 2;
+            level = level + 1;
+        }
+        let fragments: Vec<(Self, bool)> = left_fragments
+            .into_iter()
+            .chain(right_fragments.into_iter().rev())
+            .collect();
+
+        let last_position = Position::from(last_position);
+        let minimal_tree_addr = Address::from(start).common_ancestor(&last_position.into());
+        build_minimal_tree(fragments, minimal_tree_addr, prune_below).map(
+            |(subtree, contains_marked, incomplete)| BatchInsertionResult {
+                subtree,
+                contains_marked,
+                incomplete,
+                max_insert_position: last_position,
+                checkpoints,
+                remainder: core::iter::empty(),
+            },
+        )
+    }
+}
+
+/// Unites each pair of sibling trees into one tree at the next level.
+///
+/// - Preconditions: `children` holds an even number of trees, and none of them is
+///   [`Node::Nil`]. Each tree at an even index is the left sibling of the tree after it.
+/// - Inputs:
+///   - `level` is the level of the root of each tree in `children`.
+///   - `prune_below` is the level below which a pair of leaves can become one leaf.
+///   - `children` holds the trees to unite, in order of position.
+/// - Outputs: one tree for each pair, in order of position. Each tree is equal to the root that
+///   [`unite`] returns for that pair and `prune_below`.
+/// - Side effects:
+///   - Calls [`Hashable::combine_pairs`] at most once. Does not call [`Hashable::combine`].
+///   - Panics if `Hashable::combine_pairs` does not return exactly one node for each pair.
+///
+/// [`Node::Nil`]: crate::tree::Node::Nil
+fn unite_pairs<H>(
+    level: Level,
+    prune_below: Level,
+    children: Vec<PrunableTree<H>>,
+) -> Vec<PrunableTree<H>>
+where
+    H: Hashable + Clone + PartialEq,
+{
+    // For each pair that becomes one leaf: the two hashes to combine, and the flags of the leaf.
+    let (pairs, _) = children.as_chunks::<2>();
+    let mergeable: Vec<Option<(&H, &H, RetentionFlags)>> = pairs
+        .iter()
+        .map(|[left, right]| {
+            if level < prune_below {
+                PrunableTree::mergeable_leaves(left, right)
+            } else {
+                None
+            }
+        })
+        .collect();
+
+    let pair_count = mergeable.iter().flatten().count();
+    let hashes = if pair_count == 0 {
+        Vec::new()
+    } else {
+        H::combine_pairs(
+            level,
+            mergeable
+                .iter()
+                .flatten()
+                .map(|(left, right, _)| (*left, *right)),
+        )
+    };
+    assert_eq!(
+        hashes.len(),
+        pair_count,
+        "`Hashable::combine_pairs` must return exactly one node for each pair"
+    );
+
+    let mut hashes = hashes.into_iter();
+    let merged_leaves: Vec<Option<(H, RetentionFlags)>> = mergeable
+        .into_iter()
+        .map(|pair| pair.and_then(|(_, _, flags)| hashes.next().map(|hash| (hash, flags))))
+        .collect();
+
+    let mut children = children.into_iter();
+    let pairs = core::iter::from_fn(|| Some((children.next()?, children.next()?)));
+    merged_leaves
+        .into_iter()
+        .zip(pairs)
+        .map(|(merged_leaf, (left, right))| match merged_leaf {
+            Some(value) => Tree::leaf(value),
+            None => Tree::parent(None, left, right),
+        })
+        .collect()
 }
 
 // Unite two subtrees by either adding a parent node, or a leaf containing the Merkle root
@@ -596,6 +783,312 @@ mod proptests {
 
             // Check that the resulting trees are equal.
             assert_eq!(left.root_at_checkpoint_depth(None), right.root_at_checkpoint_depth(None));
+        }
+    }
+}
+
+/// Tests of [`LocatedPrunableTree::from_leaves`].
+#[cfg(test)]
+mod from_leaves_tests {
+    use std::collections::BTreeMap;
+
+    use incrementalmerkletree::{
+        frontier::testing::{arb_test_node, TestNode},
+        Address, Hashable, Level, Marking, Position, Retention,
+    };
+    use proptest::prelude::*;
+
+    use super::{BatchInsertionResult, LocatedPrunableTree, RetentionFlags};
+    use crate::{
+        tests::{take_batch_only_calls, BatchOnly},
+        tree::tests::{leaf, parent},
+        IncompleteAt, LocatedTree,
+    };
+
+    /// The fields of a [`BatchInsertionResult`], without the remainder.
+    type ResultParts<H, C> = (
+        LocatedPrunableTree<H>,
+        bool,
+        Vec<IncompleteAt>,
+        Position,
+        BTreeMap<C, Position>,
+    );
+
+    /// Returns the fields of `result`, without the remainder. Two results that come from
+    /// different types of leaf source can then be compared.
+    fn result_parts<H, C, I>(
+        result: Option<BatchInsertionResult<H, C, I>>,
+    ) -> Option<ResultParts<H, C>>
+    where
+        C: Ord,
+        I: Iterator<Item = (H, Retention<C>)>,
+    {
+        result.map(|result| {
+            (
+                result.subtree,
+                result.contains_marked,
+                result.incomplete,
+                result.max_insert_position,
+                result.checkpoints,
+            )
+        })
+    }
+
+    /// Returns a strategy for up to `max_count` leaves. Each kind of retention occurs. The
+    /// identifier of each checkpoint is the index of its leaf.
+    fn arb_leaves_of_each_retention<H>(
+        arb_leaf: H,
+        max_count: usize,
+    ) -> impl Strategy<Value = Vec<(H::Value, Retention<usize>)>>
+    where
+        H: Strategy,
+    {
+        let arb_marking = prop_oneof![
+            Just(Marking::None),
+            Just(Marking::Marked),
+            Just(Marking::Reference),
+        ];
+        // `None` stands for a checkpoint with the marking that follows it.
+        let arb_retention = prop_oneof![
+            4 => Just(Some(Retention::Ephemeral)),
+            1 => Just(Some(Retention::Marked)),
+            1 => Just(Some(Retention::Reference)),
+            2 => Just(None),
+        ];
+        proptest::collection::vec((arb_leaf, arb_retention, arb_marking), 0..=max_count).prop_map(
+            |leaves| {
+                leaves
+                    .into_iter()
+                    .enumerate()
+                    .map(|(id, (leaf, retention, marking))| {
+                        (
+                            leaf,
+                            retention.unwrap_or(Retention::Checkpoint { id, marking }),
+                        )
+                    })
+                    .collect()
+            },
+        )
+    }
+
+    #[test]
+    fn from_leaves_returns_none_for_no_leaves() {
+        let result = LocatedPrunableTree::<String>::from_leaves::<()>(
+            Position::from(3),
+            Level::from(2),
+            &[],
+        );
+        assert!(result.is_none());
+    }
+
+    #[test]
+    fn from_leaves_returns_none_when_the_last_position_exceeds_u64_max() {
+        let leaves = [
+            ("a".to_string(), Retention::<()>::Ephemeral),
+            ("b".to_string(), Retention::Ephemeral),
+        ];
+        let result =
+            LocatedPrunableTree::from_leaves(Position::from(u64::MAX), Level::from(2), &leaves);
+        assert!(result.is_none());
+    }
+
+    #[test]
+    fn from_leaves_builds_a_tree_that_ends_at_position_u64_max() {
+        let leaves = [
+            ("a".to_string(), Retention::<()>::Ephemeral),
+            ("b".to_string(), Retention::Ephemeral),
+            ("c".to_string(), Retention::Ephemeral),
+        ];
+        let result =
+            LocatedPrunableTree::from_leaves(Position::from(u64::MAX - 2), Level::from(2), &leaves)
+                .expect("the three leaves have positions of at most `u64::MAX`");
+
+        // The last two leaves are siblings. The first leaf is the right child of their uncle.
+        assert_eq!(
+            result.subtree,
+            LocatedTree {
+                root_addr: Address::from_parts(Level::from(2), u64::MAX >> 2),
+                root: parent(
+                    parent(
+                        crate::tree::tests::nil(),
+                        leaf(("a".to_string(), RetentionFlags::EPHEMERAL))
+                    ),
+                    leaf(("bc".to_string(), RetentionFlags::EPHEMERAL)),
+                ),
+            }
+        );
+        assert_eq!(result.max_insert_position, Position::from(u64::MAX));
+    }
+
+    #[test]
+    fn from_leaves_keeps_marked_leaves_and_checkpoints() {
+        let leaves = [
+            ("a".to_string(), Retention::Ephemeral),
+            ("b".to_string(), Retention::Marked),
+            (
+                "c".to_string(),
+                Retention::Checkpoint {
+                    id: 7,
+                    marking: Marking::None,
+                },
+            ),
+            ("d".to_string(), Retention::Ephemeral),
+            ("e".to_string(), Retention::Ephemeral),
+            ("f".to_string(), Retention::Ephemeral),
+            ("g".to_string(), Retention::Ephemeral),
+            (
+                "h".to_string(),
+                Retention::Checkpoint {
+                    id: 8,
+                    marking: Marking::None,
+                },
+            ),
+        ];
+        let mut result =
+            LocatedPrunableTree::from_leaves(Position::from(0), Level::from(3), &leaves)
+                .expect("there are leaves, and their positions are small");
+
+        assert_eq!(
+            result.subtree,
+            LocatedTree {
+                root_addr: Address::from_parts(Level::from(3), 0),
+                root: parent(
+                    parent(
+                        // The marked leaf `b` is kept, so its sibling is kept too.
+                        parent(
+                            leaf(("a".to_string(), RetentionFlags::EPHEMERAL)),
+                            leaf(("b".to_string(), RetentionFlags::MARKED)),
+                        ),
+                        // The checkpoint at `c` is at a left child, so `c` is not merged.
+                        parent(
+                            leaf(("c".to_string(), RetentionFlags::CHECKPOINT)),
+                            leaf(("d".to_string(), RetentionFlags::EPHEMERAL)),
+                        ),
+                    ),
+                    // The checkpoint at `h` is at the last position of each merged subtree.
+                    leaf(("efgh".to_string(), RetentionFlags::CHECKPOINT)),
+                ),
+            }
+        );
+        assert_eq!(
+            result.checkpoints,
+            BTreeMap::from([(7, Position::from(2)), (8, Position::from(7))])
+        );
+        assert_eq!(result.max_insert_position, Position::from(7));
+        assert_eq!(result.incomplete, vec![]);
+        assert_eq!(result.remainder.next(), None);
+    }
+
+    #[test]
+    fn from_leaves_hashes_each_level_with_one_call_to_combine_pairs() {
+        // The leaves have the positions 5 to 15. Their complete subtrees are the leaf 5, the
+        // leaves 6 to 7, and the leaves 8 to 15.
+        let leaves: Vec<(BatchOnly, Retention<()>)> = (5..16)
+            .map(|position: u64| (BatchOnly(position.to_string()), Retention::Ephemeral))
+            .collect();
+
+        take_batch_only_calls();
+        let result = LocatedPrunableTree::from_leaves(Position::from(5), Level::from(16), &leaves)
+            .expect("there are leaves, and their positions are small");
+
+        assert_eq!(
+            take_batch_only_calls(),
+            vec![
+                (Level::from(0), 5),
+                (Level::from(1), 2),
+                (Level::from(2), 1)
+            ]
+        );
+        assert_eq!(
+            result
+                .subtree
+                .subtree(Address::from_parts(Level::from(3), 1))
+                .map(|subtree| subtree.root),
+            Some(leaf((
+                BatchOnly("2(1(0(89)0(1011))1(0(1213)0(1415)))".to_string()),
+                RetentionFlags::EPHEMERAL
+            )))
+        );
+    }
+
+    /// A node whose `combine_pairs` returns one node too few.
+    #[derive(Clone, Debug, PartialEq, Eq)]
+    struct DropsLastParent(String);
+
+    impl Hashable for DropsLastParent {
+        fn empty_leaf() -> Self {
+            DropsLastParent(String::empty_leaf())
+        }
+
+        fn combine(level: Level, left: &Self, right: &Self) -> Self {
+            DropsLastParent(String::combine(level, &left.0, &right.0))
+        }
+
+        fn combine_pairs<'a, I>(level: Level, pairs: I) -> Vec<Self>
+        where
+            Self: 'a,
+            I: IntoIterator<Item = (&'a Self, &'a Self)>,
+        {
+            let mut parents: Vec<Self> = pairs
+                .into_iter()
+                .map(|(left, right)| Self::combine(level, left, right))
+                .collect();
+            parents.pop();
+            parents
+        }
+    }
+
+    #[test]
+    #[should_panic(
+        expected = "`Hashable::combine_pairs` must return exactly one node for each pair"
+    )]
+    fn from_leaves_panics_when_combine_pairs_drops_a_node() {
+        let leaves = [
+            (DropsLastParent("a".to_string()), Retention::<()>::Ephemeral),
+            (DropsLastParent("b".to_string()), Retention::Ephemeral),
+        ];
+        let _ = LocatedPrunableTree::from_leaves(Position::from(0), Level::from(1), &leaves);
+    }
+
+    proptest! {
+        #[test]
+        fn from_leaves_matches_from_iter(
+            start in 0u64..70,
+            prune_below in 0u8..9,
+            leaves in arb_leaves_of_each_retention(arb_test_node(), 70),
+        ) {
+            let start = Position::from(start);
+            let end = start + leaves.len() as u64;
+            let prune_below = Level::from(prune_below);
+
+            let expected: Option<ResultParts<TestNode, usize>> = result_parts(
+                LocatedPrunableTree::from_iter(start..end, prune_below, leaves.clone().into_iter()),
+            );
+            let actual = result_parts(LocatedPrunableTree::from_leaves(start, prune_below, &leaves));
+
+            prop_assert_eq!(actual, expected);
+        }
+
+        #[test]
+        fn from_leaves_calls_combine_pairs_at_most_once_for_each_level_below_prune_below(
+            start in 0u64..70,
+            prune_below in 0u8..9,
+            leaves in arb_leaves_of_each_retention("[a-z]".prop_map(BatchOnly), 70),
+        ) {
+            take_batch_only_calls();
+            // `BatchOnly::combine` panics, so this call fails if it hashes one pair at a time.
+            let _ = LocatedPrunableTree::from_leaves(
+                Position::from(start),
+                Level::from(prune_below),
+                &leaves,
+            );
+
+            let levels: Vec<u8> = take_batch_only_calls()
+                .into_iter()
+                .map(|(level, _)| u8::from(level))
+                .collect();
+            prop_assert!(levels.windows(2).all(|pair| pair[0] < pair[1]), "levels: {:?}", levels);
+            prop_assert!(levels.iter().all(|level| *level < prune_below), "levels: {:?}", levels);
         }
     }
 }

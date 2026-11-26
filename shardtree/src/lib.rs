@@ -1932,6 +1932,7 @@ impl<
 
 #[cfg(test)]
 mod tests {
+    use std::cell::RefCell;
     use std::convert::Infallible;
 
     use assert_matches::assert_matches;
@@ -1959,10 +1960,24 @@ mod tests {
         Tree,
     };
 
-    /// A node that shows whether a wrapper type forwards `Hashable::combine_pairs`. Its `combine`
-    /// panics, and each node that its `combine_pairs` returns records the level of the call.
+    thread_local! {
+        /// The level and the number of pairs of each call to `BatchOnly::combine_pairs` that the
+        /// current thread made after the last call to `take_batch_only_calls`.
+        static BATCH_ONLY_CALLS: RefCell<Vec<(Level, usize)>> = const { RefCell::new(Vec::new()) };
+    }
+
+    /// Returns the level and the number of pairs of each call to `BatchOnly::combine_pairs` that
+    /// the current thread made after the previous call to this function. The next call to this
+    /// function does not return these calls again.
+    pub(crate) fn take_batch_only_calls() -> Vec<(Level, usize)> {
+        BATCH_ONLY_CALLS.with(|calls| calls.take())
+    }
+
+    /// A node that shows whether the code under test hashes only through
+    /// `Hashable::combine_pairs`. Its `combine` panics. Each node that its `combine_pairs` returns
+    /// records the level of the call, and `take_batch_only_calls` returns each call.
     #[derive(Clone, Debug, PartialEq, Eq)]
-    struct BatchOnly(String);
+    pub(crate) struct BatchOnly(pub(crate) String);
 
     impl Hashable for BatchOnly {
         fn empty_leaf() -> Self {
@@ -1978,12 +1993,14 @@ mod tests {
             Self: 'a,
             I: IntoIterator<Item = (&'a Self, &'a Self)>,
         {
-            pairs
+            let parents: Vec<Self> = pairs
                 .into_iter()
                 .map(|(left, right)| {
                     BatchOnly(format!("{}({}{})", u8::from(level), left.0, right.0))
                 })
-                .collect()
+                .collect();
+            BATCH_ONLY_CALLS.with(|calls| calls.borrow_mut().push((level, parents.len())));
+            parents
         }
     }
 
