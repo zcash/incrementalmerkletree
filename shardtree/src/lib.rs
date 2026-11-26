@@ -73,6 +73,8 @@ use self::{
 mod batch;
 pub use self::batch::BatchInsertionResult;
 
+mod deferred;
+
 mod tree;
 pub use self::tree::{LocatedTree, Node, Tree};
 

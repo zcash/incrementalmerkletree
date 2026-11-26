@@ -11,6 +11,7 @@ use incrementalmerkletree::{
 };
 use tracing::{trace, warn};
 
+use crate::deferred::{DeferredHash, DeferredHashes, DeferredTree};
 use crate::error::{InsertionError, QueryError};
 use crate::{LocatedTree, Node, Tree};
 
@@ -499,10 +500,9 @@ where
     ///
     /// - Preconditions: `left` and `right` are siblings.
     /// - Inputs: `left` is the left sibling, and `right` is the right sibling.
-    /// - Outputs: `None` if either node is not a leaf, if `left` has a retention flag, or if
-    ///   `right` is marked or is a reference. Otherwise the hash of `left`, the hash of `right`,
-    ///   and the flags of `right`. The replacement leaf has the flags of `right`, so it keeps a
-    ///   checkpoint at the last position of `right`.
+    /// - Outputs: `None` if either node is not a leaf, or if [`merged_leaf_flags`] returns
+    ///   `None` for the flags of the two leaves. Otherwise the hash of `left`, the hash of
+    ///   `right`, and the flags of the replacement leaf.
     /// - Side effects: none.
     pub(crate) fn mergeable_leaves<'a>(
         left: &'a Self,
@@ -516,15 +516,31 @@ where
                 Node::Leaf {
                     value: (right_hash, right_flags),
                 },
-            ) if *left_flags == RetentionFlags::EPHEMERAL
-                && (*right_flags & (RetentionFlags::MARKED | RetentionFlags::REFERENCE))
-                    == RetentionFlags::EPHEMERAL =>
-            {
-                Some((left_hash, right_hash, *right_flags))
-            }
+            ) => merged_leaf_flags(*left_flags, *right_flags)
+                .map(|flags| (left_hash, right_hash, flags)),
             _ => None,
         }
     }
+}
+
+/// Returns the retention flags of the leaf that replaces two sibling leaves, if one leaf can
+/// replace them.
+///
+/// - Preconditions: none.
+/// - Inputs: `left` holds the flags of the left leaf, and `right` holds the flags of the right
+///   leaf.
+/// - Outputs: `None` if `left` has a flag, or if `right` is marked or is a reference. In those
+///   cases both leaves must be kept. Otherwise the flags of `right`. The replacement leaf has
+///   the flags of `right`, so it keeps a checkpoint at the last position of the right leaf.
+/// - Side effects: none.
+pub(crate) fn merged_leaf_flags(
+    left: RetentionFlags,
+    right: RetentionFlags,
+) -> Option<RetentionFlags> {
+    (left == RetentionFlags::EPHEMERAL
+        && (right & (RetentionFlags::MARKED | RetentionFlags::REFERENCE))
+            == RetentionFlags::EPHEMERAL)
+        .then_some(right)
 }
 
 /// A [`PrunableTree`] paired with the [`Address`] of its root.
@@ -1307,19 +1323,27 @@ where
 
     /// Clears the specified retention flags at all positions specified, pruning any branches
     /// that no longer need to be retained.
+    ///
+    /// - Preconditions: none.
+    /// - Inputs: `to_clear` maps each position to the retention flags to clear at that
+    ///   position.
+    /// - Outputs: this tree without those flags. One leaf replaces each pair of sibling leaves
+    ///   that the tree no longer needs to keep.
+    /// - Side effects:
+    ///   - Calls [`Hashable::combine_pairs`] at most once for each level of the tree. Does not
+    ///     call [`Hashable::combine`].
+    ///   - Panics if `Hashable::combine_pairs` does not return exactly one node for each pair.
     pub fn clear_flags(&self, to_clear: BTreeMap<Position, RetentionFlags>) -> Self {
         /// Pre-condition: `root_addr` must be the address of `root`.
-        fn go<H>(
+        fn go<'a, H>(
             to_clear: &[(Position, RetentionFlags)],
             root_addr: Address,
-            root: &PrunableTree<H>,
-        ) -> PrunableTree<H>
-        where
-            H: Hashable + Clone + PartialEq,
-        {
+            root: &'a PrunableTree<H>,
+            hashes: &mut DeferredHashes<'a, H>,
+        ) -> DeferredTree<'a, H> {
             if to_clear.is_empty() {
                 // nothing to do, so we just return the root
-                root.clone()
+                DeferredTree::Unchanged(root)
             } else {
                 match &root.0 {
                     Node::Parent { ann, left, right } => {
@@ -1334,12 +1358,9 @@ where
                             &to_clear[0..p],
                             &to_clear[p..],
                         );
-                        Tree::unite(
-                            l_addr.level(),
-                            ann.clone(),
-                            go(&to_clear[0..p], l_addr, left),
-                            go(&to_clear[p..], r_addr, right),
-                        )
+                        let left = go(&to_clear[0..p], l_addr, left, hashes);
+                        let right = go(&to_clear[p..], r_addr, right, hashes);
+                        DeferredTree::unite(hashes, l_addr.level(), ann, left, right)
                     }
                     Node::Leaf { value: (h, r) } => {
                         trace!("In {:?}, clearing {:?}", root_addr, to_clear);
@@ -1353,17 +1374,22 @@ where
                         let cleared = to_clear
                             .iter()
                             .fold(RetentionFlags::empty(), |acc, (_, flags)| acc | *flags);
-                        Tree::leaf((h.clone(), *r & !cleared))
+                        DeferredTree::Leaf(DeferredHash::Known(h), *r & !cleared)
                     }
-                    Node::Nil => Tree::empty(),
+                    Node::Nil => DeferredTree::Nil,
                 }
             }
         }
 
+        // Whether one leaf replaces two leaves depends only on their flags. So this method
+        // first decides which leaves to merge, and then hashes the merged pairs of each level
+        // with one call.
         let to_clear = to_clear.into_iter().collect::<Vec<_>>();
+        let mut hashes = DeferredHashes::new();
+        let cleared = go(&to_clear, self.root_addr, &self.root, &mut hashes);
         Self {
             root_addr: self.root_addr,
-            root: go(&to_clear, self.root_addr, &self.root),
+            root: cleared.into_tree(&hashes.compute()),
         }
     }
 
