@@ -103,11 +103,16 @@ where
 {
     /// The updated tree after all insertions have been performed.
     pub subtree: LocatedPrunableTree<H>,
-    /// A flag identifying whether the constructed subtree contains a marked node.
+    /// Whether an inserted leaf is marked: it has [`Retention::Marked`] retention, or it is a
+    /// checkpoint with [`Marking::Marked`].
+    ///
+    /// [`Marking::Marked`]: incrementalmerkletree::Marking::Marked
     pub contains_marked: bool,
-    /// The vector of addresses of [`Node::Nil`] nodes that were inserted into the tree as part of
-    /// the insertion operation, for nodes that are required in order to construct a witness for
-    /// each inserted leaf with [`Retention::Marked`] retention.
+    /// One entry for each [`Node::Nil`] node that the insertion added to the tree.
+    ///
+    /// The `required_for_witness` flag of each entry is equal to `contains_marked`. The witness
+    /// of a marked leaf needs the root of each subtree beside the path from that leaf to the
+    /// root of the tree, and each added `Node::Nil` node is in one of those subtrees.
     ///
     /// [`Node::Nil`]: crate::tree::Node::Nil
     pub incomplete: Vec<IncompleteAt>,
@@ -220,7 +225,7 @@ where
 
         // A stack of complete subtrees to be inserted as descendants into the subtree labeled
         // with the addresses at which they will be inserted, along with their root hashes.
-        let mut fragments: Vec<(Self, bool)> = vec![];
+        let mut fragments: Vec<Self> = vec![];
         let mut position = position_range.start;
         let mut checkpoints: BTreeMap<C, Position> = BTreeMap::new();
         while position < position_range.end {
@@ -238,19 +243,19 @@ where
                 if position.is_right_child() {
                     // At right-hand positions, we are completing a subtree and so we unite
                     // fragments up the stack until we get the largest possible subtree
-                    while let Some((potential_sibling, marked)) = fragments.pop() {
+                    while let Some(potential_sibling) = fragments.pop() {
                         if potential_sibling.root_addr.parent() == subtree.root_addr.parent() {
                             subtree = unite(potential_sibling, subtree, prune_below);
                         } else {
                             // this is not a sibling node, so we push it back on to the stack
                             // and are done
-                            fragments.push((potential_sibling, marked));
+                            fragments.push(potential_sibling);
                             break;
                         }
                     }
                 }
 
-                fragments.push((subtree, rflags.is_marked()));
+                fragments.push(subtree);
                 position += 1;
             } else {
                 break;
@@ -322,20 +327,11 @@ where
             })
             .collect();
 
-        // `from_iter` records for each complete subtree whether its last leaf is marked.
-        let is_marked = |offset: usize| {
-            leaves
-                .get(offset)
-                .is_some_and(|(_, retention)| RetentionFlags::from(retention).is_marked())
-        };
-
         // `nodes` holds the root of each complete subtree at `level` that the leaves form, in
         // order of position. `first_index` and `last_index` are the indices, at `level`, of the
-        // first and the last of these subtrees. `leaf_offsets` holds the offsets in `leaves` of
-        // the leaves of these subtrees.
+        // first and the last of these subtrees.
         let mut level = Level::from(0);
         let (mut first_index, mut last_index) = (first_position, last_position);
-        let mut leaf_offsets = 0..leaves.len();
         let mut nodes: Vec<PrunableTree<H>> = leaves
             .iter()
             .map(|(value, retention)| Tree::leaf((value.clone(), RetentionFlags::from(retention))))
@@ -343,19 +339,14 @@ where
 
         // The complete subtrees that have no sibling among the leaves. `left_fragments` is in
         // order of position, and `right_fragments` is in reverse order of position.
-        let mut left_fragments: Vec<(Self, bool)> = vec![];
-        let mut right_fragments: Vec<(Self, bool)> = vec![];
+        let mut left_fragments: Vec<Self> = vec![];
+        let mut right_fragments: Vec<Self> = vec![];
         while !nodes.is_empty() {
-            // Each subtree at `level` has this number of leaves.
-            let subtree_size = leaf_offsets.len() / nodes.len();
-
             // If the last subtree is a left child, its right sibling is not among the leaves.
             if last_index % 2 == 0 {
                 if let Some(root) = nodes.pop() {
                     let root_addr = Address::from_parts(level, last_index);
-                    let marked = is_marked(leaf_offsets.end - 1);
-                    right_fragments.push((LocatedTree { root_addr, root }, marked));
-                    leaf_offsets.end -= subtree_size;
+                    right_fragments.push(LocatedTree { root_addr, root });
                 }
             }
             // If the first subtree is a right child, its left sibling is not among the leaves.
@@ -363,9 +354,7 @@ where
             if first_index % 2 == 1 {
                 if let Some(root) = siblings.next() {
                     let root_addr = Address::from_parts(level, first_index);
-                    let marked = is_marked(leaf_offsets.start + subtree_size - 1);
-                    left_fragments.push((LocatedTree { root_addr, root }, marked));
-                    leaf_offsets.start += subtree_size;
+                    left_fragments.push(LocatedTree { root_addr, root });
                 }
             }
 
@@ -374,7 +363,7 @@ where
             last_index = last_index.saturating_sub(1) / 2;
             level = level + 1;
         }
-        let fragments: Vec<(Self, bool)> = left_fragments
+        let fragments: Vec<Self> = left_fragments
             .into_iter()
             .chain(right_fragments.into_iter().rev())
             .collect();
@@ -523,29 +512,44 @@ where
     unite(lroot, rroot, prune_below)
 }
 
-// Builds a single tree from the provided stack of subtrees, which must be non-overlapping
-// and in position order. Returns the resulting tree, a flag indicating whether the
-// resulting tree contains a `MARKED` node, and the vector of [`IncompleteAt`] values for
-// [`Node::Nil`] nodes that were introduced in the process of constructing the tree.
+/// Builds a single tree from a stack of complete subtrees.
+///
+/// - Preconditions: the subtrees in `xs` do not overlap and are in order of position. Each
+///   is within the subtree at `root_addr`.
+/// - Inputs: `xs` holds the subtrees. `root_addr` is the address of the root of the tree to
+///   build. `prune_below` is the level below which a pair of leaves can become one leaf.
+/// - Outputs: `None` if `xs` is empty. Otherwise:
+///   - the tree, which holds a [`Node::Nil`] node wherever no subtree of `xs` is;
+///   - whether a leaf of `xs` is marked;
+///   - one [`IncompleteAt`] for each `Node::Nil` node of the tree. Its `required_for_witness`
+///     is true if a leaf of `xs` is marked. The witness of a marked leaf needs the root of each
+///     subtree beside the path from that leaf to the root of the tree, and each `Node::Nil`
+///     node is in one of those subtrees.
+/// - Side effects: none.
+///
+/// [`Node::Nil`]: crate::tree::Node::Nil
+#[allow(clippy::type_complexity)]
 fn build_minimal_tree<H>(
-    mut xs: Vec<(LocatedPrunableTree<H>, bool)>,
+    mut xs: Vec<LocatedPrunableTree<H>>,
     root_addr: Address,
     prune_below: Level,
 ) -> Option<(LocatedPrunableTree<H>, bool, Vec<IncompleteAt>)>
 where
     H: Hashable + Clone + PartialEq,
 {
+    // A marked leaf is never pruned, so the subtrees still hold each marked leaf.
+    let contains_marked = xs.iter().any(|subtree| subtree.root.contains_marked());
+
     // First, consume the stack from the right, building up a single tree
     // until we can't combine any more.
-    if let Some((mut cur, mut contains_marked)) = xs.pop() {
+    if let Some(mut cur) = xs.pop() {
         let mut incomplete = vec![];
-        while let Some((top, top_marked)) = xs.pop() {
+        while let Some(top) = xs.pop() {
             while cur.root_addr.level() < top.root_addr.level() {
-                cur = combine_with_empty(cur, true, &mut incomplete, top_marked, prune_below);
+                cur = combine_with_empty(cur, true, &mut incomplete, contains_marked, prune_below);
             }
 
             if cur.root_addr.level() == top.root_addr.level() {
-                contains_marked = contains_marked || top_marked;
                 if cur.root_addr.is_right_child() {
                     // We have a left child and a right child, so unite them.
                     cur = unite(top, cur, prune_below);
@@ -553,14 +557,20 @@ where
                     // This is a left child, so we build it up one more level and then
                     // we've merged as much as we can from the right and need to work from
                     // the left
-                    xs.push((top, top_marked));
-                    cur = combine_with_empty(cur, true, &mut incomplete, top_marked, prune_below);
+                    xs.push(top);
+                    cur = combine_with_empty(
+                        cur,
+                        true,
+                        &mut incomplete,
+                        contains_marked,
+                        prune_below,
+                    );
                     break;
                 }
             } else {
                 // top.root_addr.level < cur.root_addr.level, so we've merged as much as we
                 // can from the right and now need to work from the left.
-                xs.push((top, top_marked));
+                xs.push(top);
                 break;
             }
         }
@@ -571,33 +581,31 @@ where
         }
 
         // push our accumulated max-height right hand node back on to the stack.
-        xs.push((cur, contains_marked));
+        xs.push(cur);
 
         // From the stack of subtrees, construct a single sparse tree that can be
         // inserted/merged into the existing tree
-        let res_tree = xs.into_iter().fold(
-            None,
-            |acc: Option<LocatedPrunableTree<H>>, (next_tree, next_marked)| {
-                if let Some(mut prev_tree) = acc {
-                    // add nil branches to build up the left tree until we can merge it
-                    // with the right
-                    while prev_tree.root_addr.level() < next_tree.root_addr.level() {
-                        contains_marked = contains_marked || next_marked;
-                        prev_tree = combine_with_empty(
-                            prev_tree,
-                            false,
-                            &mut incomplete,
-                            next_marked,
-                            prune_below,
-                        );
-                    }
+        let res_tree =
+            xs.into_iter()
+                .fold(None, |acc: Option<LocatedPrunableTree<H>>, next_tree| {
+                    if let Some(mut prev_tree) = acc {
+                        // add nil branches to build up the left tree until we can merge it
+                        // with the right
+                        while prev_tree.root_addr.level() < next_tree.root_addr.level() {
+                            prev_tree = combine_with_empty(
+                                prev_tree,
+                                false,
+                                &mut incomplete,
+                                contains_marked,
+                                prune_below,
+                            );
+                        }
 
-                    Some(unite(prev_tree, next_tree, prune_below))
-                } else {
-                    Some(next_tree)
-                }
-            },
-        );
+                        Some(unite(prev_tree, next_tree, prune_below))
+                    } else {
+                        Some(next_tree)
+                    }
+                });
 
         res_tree.map(|t| (t, contains_marked, incomplete))
     } else {

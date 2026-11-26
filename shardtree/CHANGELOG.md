@@ -14,6 +14,13 @@ and this project adheres to Rust's notion of
 - `shardtree::PrunableTree::prune` hashes two merged leaves at their own
   level. Before, it hashed them at the level of their parent, so the pruned
   tree had a different root for a hash function that depends on the level.
+- `shardtree::LocatedPrunableTree::from_iter` now sets
+  `BatchInsertionResult::contains_marked` whenever an inserted leaf is marked.
+  In that case it sets `IncompleteAt::required_for_witness` for each empty
+  node that it reports. Before, a marked leaf at some positions was not
+  reported in either value. The results of
+  `LocatedPrunableTree::batch_insert`, `LocatedPrunableTree::batch_append`,
+  and `ShardTree::batch_insert` change in the same way.
 
 ## [0.8.1] - 2026-11-25
 
