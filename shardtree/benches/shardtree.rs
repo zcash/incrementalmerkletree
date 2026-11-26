@@ -5,15 +5,24 @@
 //!
 //! For each operation, the output gives two kinds of number:
 //!
-//! - The number of calls to [`Hashable::combine`]. This number does not depend on the machine
-//!   or on the cost of the hash function.
+//! - Counts of hashes. These numbers do not depend on the machine or on the cost of the hash
+//!   function.
+//!   - `combines` is the number of parent nodes that the operation hashes.
+//!   - `in batches` is the number of those parent nodes that it hashes through
+//!     [`Hashable::combine_pairs`]. It hashes each other parent node with its own call to
+//!     [`Hashable::combine`].
+//!   - `batches` is the number of calls to `Hashable::combine_pairs`.
 //! - The time for the operation with a node type that has a cheap `combine`, and with a node
 //!   type that has a costly `combine`. The first time shows the cost of the work on the tree
 //!   structure. The second time shows the cost when hashing dominates.
 //!
 //! The first line of the output gives the measured cost of one `combine` for each node type.
-//! To estimate the time for another hash function, multiply the number of `combine` calls by
-//! the cost of that hash function, and add the time for the cheap node type.
+//! To estimate the time for another hash function, multiply the number of `combines` by the
+//! cost of that hash function, and add the time for the cheap node type.
+//!
+//! The node types of this benchmark hash a batch of pairs one pair at a time, so the times
+//! show no gain from a batch. A hash function that has a faster batch implementation gains on
+//! the parent nodes that `in batches` counts.
 //!
 //! For each workload, the output also counts the nodes of the tree that results. A parent node
 //! with a stored root holds one more node value than a parent node without one.
@@ -44,9 +53,38 @@ const MAX_CHECKPOINTS: usize = 100;
 /// The number of extra rounds of work in one `combine` of the costly node type.
 const COSTLY_ROUNDS: u32 = 8_000;
 
+/// Counts of the hashes that a thread has computed.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+struct HashCounts {
+    /// The number of parent nodes that were hashed.
+    combines: u64,
+    /// The number of those parent nodes that were hashed through `Hashable::combine_pairs`.
+    in_batches: u64,
+    /// The number of calls to `Hashable::combine_pairs`.
+    batches: u64,
+}
+
+impl HashCounts {
+    /// Returns the counts of the hashes that the thread computed after it had the counts
+    /// `earlier`.
+    fn since(self, earlier: HashCounts) -> HashCounts {
+        HashCounts {
+            combines: self.combines - earlier.combines,
+            in_batches: self.in_batches - earlier.in_batches,
+            batches: self.batches - earlier.batches,
+        }
+    }
+}
+
 thread_local! {
-    /// The number of calls to `Hashable::combine` that the current thread has made.
-    static COMBINE_CALLS: Cell<u64> = const { Cell::new(0) };
+    /// The counts of the hashes that the current thread has computed.
+    static HASH_COUNTS: Cell<HashCounts> = const {
+        Cell::new(HashCounts {
+            combines: 0,
+            in_batches: 0,
+            batches: 0,
+        })
+    };
 }
 
 /// A node value of 32 bytes. Its `combine` depends on the level and on the order of its two
@@ -104,16 +142,51 @@ fn empty_roots() -> &'static [[u64; 4]] {
     })
 }
 
+impl<const ROUNDS: u32> BenchNode<ROUNDS> {
+    /// Returns the parent of two nodes, and does the extra rounds of work of this node type.
+    ///
+    /// - Preconditions: none.
+    /// - Inputs: `level` is the level of the two children. `left` and `right` are the children.
+    /// - Outputs: the parent node.
+    /// - Side effects: none. This method does not count the hash.
+    fn parent(level: Level, left: &Self, right: &Self) -> Self {
+        let parent = mix(u8::from(level), &left.0, &right.0);
+        black_box(spin(ROUNDS, parent[0]));
+        BenchNode(parent)
+    }
+}
+
 impl<const ROUNDS: u32> Hashable for BenchNode<ROUNDS> {
     fn empty_leaf() -> Self {
         BenchNode(empty_roots()[0])
     }
 
     fn combine(level: Level, left: &Self, right: &Self) -> Self {
-        COMBINE_CALLS.with(|calls| calls.set(calls.get() + 1));
-        let parent = mix(u8::from(level), &left.0, &right.0);
-        black_box(spin(ROUNDS, parent[0]));
-        BenchNode(parent)
+        HASH_COUNTS.with(|counts| {
+            let mut current = counts.get();
+            current.combines += 1;
+            counts.set(current);
+        });
+        Self::parent(level, left, right)
+    }
+
+    fn combine_pairs<'a, I>(level: Level, pairs: I) -> Vec<Self>
+    where
+        Self: 'a,
+        I: IntoIterator<Item = (&'a Self, &'a Self)>,
+    {
+        let parents: Vec<Self> = pairs
+            .into_iter()
+            .map(|(left, right)| Self::parent(level, left, right))
+            .collect();
+        HASH_COUNTS.with(|counts| {
+            let mut current = counts.get();
+            current.combines += parents.len() as u64;
+            current.in_batches += parents.len() as u64;
+            current.batches += 1;
+            counts.set(current);
+        });
+        parents
     }
 
     fn empty_root(level: Level) -> Self {
@@ -289,6 +362,22 @@ fn build_subtrees<const ROUNDS: u32>(workload: &Workload) -> Vec<Subtree<ROUNDS>
         .collect()
 }
 
+/// Builds one subtree for each batch of `workload` from a slice of the leaves of the batch.
+/// The subtrees are equal to the subtrees that `build_subtrees` returns.
+fn build_subtrees_from_leaves<const ROUNDS: u32>(workload: &Workload) -> Vec<Subtree<ROUNDS>> {
+    workload
+        .batches()
+        .into_iter()
+        .map(|batch| {
+            let start = Position::from(batch.start);
+            let leaves = workload.leaves::<ROUNDS>(batch);
+            let built = LocatedPrunableTree::from_leaves(start, Level::from(SHARD_HEIGHT), &leaves)
+                .expect("each batch has at least one leaf");
+            (built.subtree, built.checkpoints)
+        })
+        .collect()
+}
+
 /// Inserts `subtrees` into `tree`, in the order given.
 fn insert_subtrees<const ROUNDS: u32>(
     mut tree: BenchTree<ROUNDS>,
@@ -403,8 +492,8 @@ impl Census {
 
 /// The result of the measurement of one operation.
 struct Measurement {
-    /// The number of calls to `Hashable::combine` in one run of the operation.
-    combine_calls: u64,
+    /// The counts of the hashes of one run of the operation.
+    hash_counts: HashCounts,
     /// The median of the times of the runs.
     median: Duration,
 }
@@ -413,29 +502,29 @@ struct Measurement {
 ///
 /// - Preconditions: none.
 /// - Inputs: `setup` makes the input for one run. `run` is the operation.
-/// - Outputs: the number of `combine` calls in one run of `run`, and the median of the times
-///   of the runs. The times do not include `setup`, and do not include the time to drop the
-///   result of `run`.
+/// - Outputs: the counts of the hashes of one run of `run`, and the median of the times of the
+///   runs. The times do not include `setup`, and do not include the time to drop the result
+///   of `run`.
 /// - Side effects: calls `setup` and `run` at least 3 times, and then until the runs have
 ///   taken one second in total or until there are 200 runs.
 fn measure<S, T>(mut setup: impl FnMut() -> S, mut run: impl FnMut(S) -> T) -> Measurement {
     let mut times = Vec::new();
-    let mut combine_calls = 0;
+    let mut hash_counts = HashCounts::default();
     let mut total = Duration::ZERO;
     while times.len() < 3 || (total < Duration::from_secs(1) && times.len() < 200) {
         let input = setup();
-        let calls_before = COMBINE_CALLS.with(Cell::get);
+        let counts_before = HASH_COUNTS.with(Cell::get);
         let start = Instant::now();
         let output = black_box(run(black_box(input)));
         let elapsed = start.elapsed();
-        combine_calls = COMBINE_CALLS.with(Cell::get) - calls_before;
+        hash_counts = HASH_COUNTS.with(Cell::get).since(counts_before);
         drop(output);
         total += elapsed;
         times.push(elapsed);
     }
     times.sort();
     Measurement {
-        combine_calls,
+        hash_counts,
         median: times[times.len() / 2],
     }
 }
@@ -463,6 +552,10 @@ fn measure_workload<const ROUNDS: u32>(
     selected: &dyn Fn(&str) -> bool,
 ) -> WorkloadResults {
     let subtrees = build_subtrees::<ROUNDS>(workload);
+    assert!(
+        subtrees == build_subtrees_from_leaves::<ROUNDS>(workload),
+        "`from_leaves` builds the subtrees that `from_iter` builds"
+    );
     let tree = batch_insert::<ROUNDS>(workload);
     let shard_roots = complete_shard_roots(workload, &tree);
     let checkpoint = workload.last_checkpoint();
@@ -476,6 +569,9 @@ fn measure_workload<const ROUNDS: u32>(
 
     add("from_iter, each batch", &mut || {
         measure(|| (), |()| build_subtrees::<ROUNDS>(workload))
+    });
+    add("from_leaves, each batch", &mut || {
+        measure(|| (), |()| build_subtrees_from_leaves::<ROUNDS>(workload))
     });
     add("insert_tree, in order", &mut || {
         measure(
@@ -620,18 +716,20 @@ fn main() {
             cheap.census.parents, cheap.census.stored_roots, cheap.census.leaves, cheap.root,
         );
         println!(
-            "  {:<32} {:>10} {:>12} {:>12}",
-            "operation", "combines", "cheap node", "costly node"
+            "  {:<32} {:>10} {:>11} {:>8} {:>12} {:>12}",
+            "operation", "combines", "in batches", "batches", "cheap node", "costly node"
         );
         for ((operation, cheap), (_, costly)) in cheap.operations.iter().zip(&costly.operations) {
             assert_eq!(
-                cheap.combine_calls, costly.combine_calls,
-                "the number of combine calls does not depend on the node type"
+                cheap.hash_counts, costly.hash_counts,
+                "the counts of the hashes do not depend on the node type"
             );
             println!(
-                "  {:<32} {:>10} {:>12} {:>12}",
+                "  {:<32} {:>10} {:>11} {:>8} {:>12} {:>12}",
                 operation,
-                cheap.combine_calls,
+                cheap.hash_counts.combines,
+                cheap.hash_counts.in_batches,
+                cheap.hash_counts.batches,
                 format_duration(cheap.median),
                 format_duration(costly.median),
             );
