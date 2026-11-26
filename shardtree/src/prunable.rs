@@ -354,7 +354,13 @@ where
                 }
                 (Tree(Node::Leaf { value }), parent @ Tree(Node::Parent { .. }))
                 | (parent @ Tree(Node::Parent { .. }), Tree(Node::Leaf { value })) => {
-                    let parent_hash = parent.root_hash(addr, no_default_fill);
+                    // The leaf is compared with the root of the parent only if that root can
+                    // be computed. `root_hash` hashes the complete parts of a tree before it
+                    // finds that the tree is incomplete, so do not call it in that case.
+                    let parent_hash = parent
+                        .has_computable_root()
+                        .then(|| parent.root_hash(addr, no_default_fill).ok())
+                        .flatten();
                     if parent_hash.iter().all(|r| r == &value.0) {
                         Ok(parent.reannotate_root(Some(Arc::new(value.0))))
                     } else {
@@ -363,8 +369,17 @@ where
                     }
                 }
                 (lparent, rparent) => {
-                    let lroot = lparent.root_hash(addr, no_default_fill).ok();
-                    let rroot = rparent.root_hash(addr, no_default_fill).ok();
+                    // The roots are compared only if both can be computed. `root_hash` hashes
+                    // the complete parts of a tree before it finds that the tree is
+                    // incomplete, so do not call it unless both trees are complete.
+                    let both_complete =
+                        lparent.has_computable_root() && rparent.has_computable_root();
+                    let lroot = both_complete
+                        .then(|| lparent.root_hash(addr, no_default_fill).ok())
+                        .flatten();
+                    let rroot = both_complete
+                        .then(|| rparent.root_hash(addr, no_default_fill).ok())
+                        .flatten();
                     // If both parents share the same root hash (or if one of them is absent),
                     // they can be merged
                     if lroot.iter().zip(&rroot).all(|(l, r)| l == r) {
@@ -2270,6 +2285,122 @@ mod tests {
             // in the shard.
             assert!(cleared.max_position() == pre_clearing_max_position);
             assert_eq!(to_retain, cleared.flag_positions());
+        }
+    }
+
+    /// Tests of how many times `PrunableTree::merge_checked` calls `Hashable::combine`.
+    mod merge_hashing {
+        use std::cell::Cell;
+        use std::sync::Arc;
+
+        use incrementalmerkletree::{Address, Hashable, Level};
+
+        use crate::{
+            prunable::{PrunableTree, RetentionFlags},
+            tree::tests::{leaf, nil, parent},
+        };
+
+        std::thread_local! {
+            /// The number of calls to `CountingNode::combine` that the current thread has made.
+            static COMBINE_CALLS: Cell<u64> = const { Cell::new(0) };
+        }
+
+        /// A node whose `combine` counts its calls.
+        #[derive(Clone, Debug, PartialEq, Eq)]
+        struct CountingNode(u64);
+
+        impl Hashable for CountingNode {
+            fn empty_leaf() -> Self {
+                CountingNode(0)
+            }
+
+            fn combine(level: Level, a: &Self, b: &Self) -> Self {
+                COMBINE_CALLS.with(|calls| calls.set(calls.get() + 1));
+                CountingNode(
+                    a.0.wrapping_mul(31)
+                        .wrapping_add(b.0)
+                        .wrapping_mul(31)
+                        .wrapping_add(u64::from(u8::from(level))),
+                )
+            }
+        }
+
+        /// Returns the number of calls to `CountingNode::combine` that `operation` makes, and
+        /// the result of `operation`.
+        fn count_combine_calls<T>(operation: impl FnOnce() -> T) -> (u64, T) {
+            let calls_before = COMBINE_CALLS.with(Cell::get);
+            let result = operation();
+            (COMBINE_CALLS.with(Cell::get) - calls_before, result)
+        }
+
+        /// Returns a complete tree of height 2 whose leaves are marked, so that the tree keeps
+        /// its parent nodes. The values of the leaves are `first` and the three numbers after
+        /// it.
+        fn marked_subtree(first: u64) -> PrunableTree<CountingNode> {
+            let marked = |value: u64| leaf((CountingNode(value), RetentionFlags::MARKED));
+            parent(
+                parent(marked(first), marked(first + 1)),
+                parent(marked(first + 2), marked(first + 3)),
+            )
+        }
+
+        #[test]
+        fn merge_of_two_incomplete_parents_does_not_hash() {
+            // The stored tree holds the leaves 0 to 3. The inserted tree holds the leaves 4 to
+            // 7. Neither tree has a root that can be computed, so no root can be compared.
+            let stored = parent(marked_subtree(0), nil());
+            let inserted = parent(nil(), marked_subtree(4));
+            let root_addr = Address::from_parts(Level::from(3), 0);
+
+            let (combine_calls, merged) =
+                count_combine_calls(|| stored.merge_checked(root_addr, inserted));
+
+            assert_eq!(
+                merged.expect("the trees do not conflict"),
+                parent(marked_subtree(0), marked_subtree(4))
+            );
+            assert_eq!(combine_calls, 0);
+        }
+
+        #[test]
+        fn merge_of_a_leaf_with_an_incomplete_parent_does_not_hash() {
+            // The stored tree is one leaf that holds the root of a subtree. The inserted tree
+            // holds only the leaves 0 to 3 of that subtree, so its root cannot be computed and
+            // cannot be compared with the stored root.
+            let stored_root = CountingNode(1234);
+            let stored = leaf((stored_root.clone(), RetentionFlags::EPHEMERAL));
+            let inserted = parent(marked_subtree(0), nil());
+            let root_addr = Address::from_parts(Level::from(3), 0);
+
+            let (combine_calls, merged) =
+                count_combine_calls(|| stored.merge_checked(root_addr, inserted.clone()));
+
+            assert_eq!(
+                merged.expect("the trees do not conflict"),
+                inserted.reannotate_root(Some(Arc::new(stored_root)))
+            );
+            assert_eq!(combine_calls, 0);
+        }
+
+        #[test]
+        fn merge_of_two_complete_parents_compares_their_roots() {
+            // Both trees hold the leaves 0 to 3, so both roots can be computed. The second
+            // tree has another value for its last leaf, so the roots differ.
+            let root_addr = Address::from_parts(Level::from(2), 0);
+            let stored = marked_subtree(0);
+            let conflicting = {
+                let marked = |value: u64| leaf((CountingNode(value), RetentionFlags::MARKED));
+                parent(parent(marked(0), marked(1)), parent(marked(2), marked(99)))
+            };
+
+            let (combine_calls, merged) =
+                count_combine_calls(|| stored.merge_checked(root_addr, conflicting));
+
+            assert_eq!(
+                merged,
+                Err(crate::prunable::MergeError::Conflict(root_addr))
+            );
+            assert!(combine_calls > 0);
         }
     }
 }
