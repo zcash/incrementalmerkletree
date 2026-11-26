@@ -1,0 +1,7 @@
+# Seeds for failure cases proptest has generated in the past. It is
+# automatically read and these particular cases re-run before any
+# novel cases are generated.
+#
+# It is recommended to check this file in to source control so that
+# everyone who runs the test benefits from these saved cases.
+cc a26f4f2cda95587effffef206fb95b4bfe41a3cb8dee942dd2a41dfcb428e27f # shrinks to start = 0, prune_below = 0, leaves = [("a", Ephemeral), ("a", Ephemeral), ("a", Ephemeral), ("a", Ephemeral), ("a", Ephemeral), ("a", Ephemeral), ("a", Ephemeral), ("a", Marked), ("a", Ephemeral), ("a", Ephemeral), ("a", Ephemeral), ("a", Ephemeral), ("a", Ephemeral), ("a", Ephemeral), ("a", Ephemeral), ("a", Ephemeral)]

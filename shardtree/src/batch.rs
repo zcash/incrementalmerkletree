@@ -836,7 +836,7 @@ mod from_leaves_tests {
 
     /// Returns a strategy for up to `max_count` leaves. Each kind of retention occurs. The
     /// identifier of each checkpoint is the index of its leaf.
-    fn arb_leaves_of_each_retention<H>(
+    pub(super) fn arb_leaves_of_each_retention<H>(
         arb_leaf: H,
         max_count: usize,
     ) -> impl Strategy<Value = Vec<(H::Value, Retention<usize>)>>
@@ -1089,6 +1089,148 @@ mod from_leaves_tests {
                 .collect();
             prop_assert!(levels.windows(2).all(|pair| pair[0] < pair[1]), "levels: {:?}", levels);
             prop_assert!(levels.iter().all(|level| *level < prune_below), "levels: {:?}", levels);
+        }
+    }
+}
+
+/// Tests of what [`LocatedPrunableTree::from_iter`] and [`LocatedPrunableTree::from_leaves`]
+/// report about marked leaves.
+#[cfg(test)]
+mod marked_leaves_tests {
+    use incrementalmerkletree::{Address, Level, Position, Retention};
+    use proptest::prelude::*;
+
+    use super::{
+        from_leaves_tests::arb_leaves_of_each_retention, LocatedPrunableTree, RetentionFlags,
+    };
+    use crate::{testing::arb_char_str, IncompleteAt};
+
+    /// The parts of a result that these tests examine: `subtree`, `contains_marked`, and
+    /// `incomplete`.
+    type Parts = (LocatedPrunableTree<String>, bool, Vec<IncompleteAt>);
+
+    /// Returns the parts of the result of `from_iter`, and then of `from_leaves`, for `leaves`
+    /// at the positions from `start`. Returns no parts if `leaves` is empty.
+    fn results(start: u64, prune_below: u8, leaves: &[(String, Retention<usize>)]) -> Vec<Parts> {
+        let start = Position::from(start);
+        let end = start + leaves.len() as u64;
+        let prune_below = Level::from(prune_below);
+        let from_iter =
+            LocatedPrunableTree::from_iter(start..end, prune_below, leaves.iter().cloned())
+                .map(|result| (result.subtree, result.contains_marked, result.incomplete));
+        let from_leaves = LocatedPrunableTree::from_leaves(start, prune_below, leaves)
+            .map(|result| (result.subtree, result.contains_marked, result.incomplete));
+        from_iter.into_iter().chain(from_leaves).collect()
+    }
+
+    /// Returns `count` leaves with the values `a`, `b`, and so on. The leaf at index `marked`
+    /// is marked, and the other leaves are ephemeral.
+    fn leaves_with_one_marked(count: u8, marked: Option<u8>) -> Vec<(String, Retention<usize>)> {
+        (0..count)
+            .map(|index| {
+                let value = char::from(b'a' + index).to_string();
+                if Some(index) == marked {
+                    (value, Retention::Marked)
+                } else {
+                    (value, Retention::Ephemeral)
+                }
+            })
+            .collect()
+    }
+
+    /// Returns the empty node at `position`, with the given flag.
+    fn empty_leaf_at(position: u64, required_for_witness: bool) -> IncompleteAt {
+        IncompleteAt {
+            address: Address::from_parts(Level::from(0), position),
+            required_for_witness,
+        }
+    }
+
+    #[test]
+    fn a_marked_leaf_that_is_not_the_last_leaf_of_its_subtree_is_reported() {
+        // The leaves have the positions 0 to 3, and the leaf at position 1 is marked.
+        let results = results(0, 2, &leaves_with_one_marked(4, Some(1)));
+
+        assert_eq!(results.len(), 2);
+        for (_, contains_marked, incomplete) in results {
+            assert!(contains_marked);
+            assert_eq!(incomplete, vec![]);
+        }
+    }
+
+    #[test]
+    fn an_empty_node_to_the_left_of_a_marked_leaf_is_required_for_its_witness() {
+        // The leaves have the positions 1 to 3, and the leaf at position 1 is marked. The
+        // node at position 0 is empty, and it is the sibling of the marked leaf.
+        let results = results(1, 2, &leaves_with_one_marked(3, Some(0)));
+
+        assert_eq!(results.len(), 2);
+        for (_, contains_marked, incomplete) in results {
+            assert!(contains_marked);
+            assert_eq!(incomplete, vec![empty_leaf_at(0, true)]);
+        }
+    }
+
+    #[test]
+    fn an_empty_node_to_the_right_of_a_marked_leaf_is_required_for_its_witness() {
+        // The leaves have the positions 0 to 2, so the node at position 3 is empty. The
+        // witness of each of the three leaves needs the root of a subtree that holds that
+        // node.
+        for marked in 0..3 {
+            let results = results(0, 2, &leaves_with_one_marked(3, Some(marked)));
+
+            assert_eq!(results.len(), 2);
+            for (_, contains_marked, incomplete) in results {
+                assert!(contains_marked, "marked leaf at position {marked}");
+                assert_eq!(
+                    incomplete,
+                    vec![empty_leaf_at(3, true)],
+                    "marked leaf at position {marked}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn no_empty_node_is_required_for_a_witness_when_no_leaf_is_marked() {
+        // The leaves have the positions 1 to 2, so the nodes at positions 0 and 3 are empty.
+        let results = results(1, 2, &leaves_with_one_marked(2, None));
+
+        assert_eq!(results.len(), 2);
+        for (_, contains_marked, incomplete) in results {
+            assert!(!contains_marked);
+            assert_eq!(
+                incomplete,
+                vec![empty_leaf_at(3, false), empty_leaf_at(0, false)]
+            );
+        }
+    }
+
+    proptest! {
+        #[test]
+        fn results_report_whether_any_leaf_is_marked(
+            start in 0u64..70,
+            prune_below in 0u8..9,
+            leaves in arb_leaves_of_each_retention(arb_char_str(), 70),
+        ) {
+            let any_marked = leaves
+                .iter()
+                .any(|(_, retention)| RetentionFlags::from(retention).is_marked());
+
+            for (subtree, contains_marked, incomplete) in results(start, prune_below, &leaves) {
+                prop_assert_eq!(contains_marked, any_marked);
+                // A marked leaf is never pruned, so the tree holds it.
+                prop_assert_eq!(subtree.root().contains_marked(), any_marked);
+                // The witness of a marked leaf needs the root of each subtree beside its
+                // path, and each empty node of the tree is in one of those subtrees.
+                for node in &incomplete {
+                    prop_assert_eq!(node.required_for_witness, any_marked);
+                }
+                // The result lists each empty node of the tree once.
+                let mut listed: Vec<Address> = incomplete.iter().map(|node| node.address).collect();
+                listed.sort_by_key(|address| address.position_range_start());
+                prop_assert_eq!(listed, subtree.incomplete_nodes());
+            }
         }
     }
 }
