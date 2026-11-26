@@ -2508,4 +2508,257 @@ mod tests {
             assert!(combine_calls > 0);
         }
     }
+
+    /// Tests of how `LocatedPrunableTree::clear_flags` hashes the leaves that it merges.
+    mod clear_flags_hashing {
+        use std::collections::BTreeMap;
+        use std::sync::Arc;
+
+        use incrementalmerkletree::{
+            frontier::testing::arb_test_node, Address, Hashable, Level, Marking, Position,
+            Retention,
+        };
+        use proptest::prelude::*;
+        use tracing::trace;
+
+        use crate::{
+            testing::arb_prunable_tree,
+            tests::{take_batch_only_calls, BatchOnly},
+            tree::{tests::leaf, LocatedTree, Node, Tree},
+            LocatedPrunableTree, PrunableTree, RetentionFlags,
+        };
+
+        /// Clears flags as `LocatedPrunableTree::clear_flags` does, but hashes one pair at a
+        /// time with `Hashable::combine`.
+        ///
+        /// - Preconditions: none.
+        /// - Inputs: `tree` is the tree to clear flags in. `to_clear` maps each position to the
+        ///   retention flags to clear at that position.
+        /// - Outputs: the tree that `tree.clear_flags(to_clear)` must return.
+        /// - Side effects: none.
+        fn clear_flags_one_pair_at_a_time<H>(
+            tree: &LocatedPrunableTree<H>,
+            to_clear: BTreeMap<Position, RetentionFlags>,
+        ) -> LocatedPrunableTree<H>
+        where
+            H: Hashable + Clone + PartialEq,
+        {
+            /// Pre-condition: `root_addr` must be the address of `root`.
+            fn go<H>(
+                to_clear: &[(Position, RetentionFlags)],
+                root_addr: Address,
+                root: &PrunableTree<H>,
+            ) -> PrunableTree<H>
+            where
+                H: Hashable + Clone + PartialEq,
+            {
+                if to_clear.is_empty() {
+                    root.clone()
+                } else {
+                    match &root.0 {
+                        Node::Parent { ann, left, right } => {
+                            let (l_addr, r_addr) = root_addr
+                                .children()
+                                .expect("has children because we checked `root` is a parent");
+
+                            let p =
+                                to_clear.partition_point(|(p, _)| p < &l_addr.position_range_end());
+                            trace!(
+                                "Tree::unite at {:?}, partitioned: {:?} {:?}",
+                                root_addr,
+                                &to_clear[0..p],
+                                &to_clear[p..],
+                            );
+                            Tree::unite(
+                                l_addr.level(),
+                                ann.clone(),
+                                go(&to_clear[0..p], l_addr, left),
+                                go(&to_clear[p..], r_addr, right),
+                            )
+                        }
+                        Node::Leaf { value: (h, r) } => {
+                            let cleared = to_clear
+                                .iter()
+                                .fold(RetentionFlags::empty(), |acc, (_, flags)| acc | *flags);
+                            Tree::leaf((h.clone(), *r & !cleared))
+                        }
+                        Node::Nil => Tree::empty(),
+                    }
+                }
+            }
+
+            let to_clear = to_clear.into_iter().collect::<Vec<_>>();
+            LocatedTree {
+                root_addr: tree.root_addr,
+                root: go(&to_clear, tree.root_addr, &tree.root),
+            }
+        }
+
+        /// Returns a strategy for the flags to clear at up to 24 positions below 128.
+        fn arb_flags_to_clear() -> impl Strategy<Value = BTreeMap<Position, RetentionFlags>> {
+            let arb_flags = proptest::sample::select(vec![
+                RetentionFlags::CHECKPOINT,
+                RetentionFlags::MARKED,
+                RetentionFlags::REFERENCE,
+                RetentionFlags::CHECKPOINT | RetentionFlags::MARKED,
+                RetentionFlags::CHECKPOINT | RetentionFlags::REFERENCE,
+            ]);
+            proptest::collection::btree_map((0u64..128).prop_map(Position::from), arb_flags, 0..24)
+        }
+
+        /// Returns the flags to clear for one test case.
+        ///
+        /// - Preconditions: none.
+        /// - Inputs: `tree` is the tree of the test case. `extra` holds flags to clear at
+        ///   arbitrary positions. `clear_each_flag` selects whether to also clear each flag that
+        ///   `tree` holds.
+        /// - Outputs: `extra`, and each flag of `tree` if `clear_each_flag` is `true`.
+        /// - Side effects: none.
+        fn flags_to_clear<H>(
+            tree: &LocatedPrunableTree<H>,
+            mut extra: BTreeMap<Position, RetentionFlags>,
+            clear_each_flag: bool,
+        ) -> BTreeMap<Position, RetentionFlags>
+        where
+            H: Hashable + Clone + PartialEq,
+        {
+            if clear_each_flag {
+                for (position, flags) in tree.flag_positions() {
+                    *extra.entry(position).or_insert(RetentionFlags::empty()) |= flags;
+                }
+            }
+            extra
+        }
+
+        #[test]
+        fn clear_flags_keeps_an_annotated_parent_of_two_empty_trees() {
+            // The parent of the positions 0 and 1 holds a root, and its children are pruned.
+            let root_addr = Address::from_parts(Level::from(2), 0);
+            let annotated: PrunableTree<String> = Tree::parent(
+                Some(Arc::new("ab".to_string())),
+                Tree::empty(),
+                Tree::empty(),
+            );
+            let tree = LocatedTree::from_parts(
+                root_addr,
+                Tree::parent(
+                    None,
+                    annotated.clone(),
+                    leaf(("cd".to_string(), RetentionFlags::CHECKPOINT)),
+                ),
+            )
+            .unwrap();
+
+            let cleared = tree.clear_flags(BTreeMap::from([
+                (Position::from(0), RetentionFlags::CHECKPOINT),
+                (Position::from(3), RetentionFlags::CHECKPOINT),
+            ]));
+
+            assert_eq!(
+                cleared,
+                LocatedTree::from_parts(
+                    root_addr,
+                    Tree::parent(
+                        None,
+                        annotated,
+                        leaf(("cd".to_string(), RetentionFlags::EPHEMERAL)),
+                    ),
+                )
+                .unwrap()
+            );
+        }
+
+        #[test]
+        fn clear_flags_hashes_each_level_with_one_call_to_combine_pairs() {
+            let checkpoint = |id| Retention::Checkpoint {
+                id,
+                marking: Marking::None,
+            };
+            let node = |position: u64| BatchOnly(position.to_string());
+            // The checkpoint at position 2 is at a left child, so the leaves 2 and 3 are kept.
+            // The checkpoint at position 5 moves to the leaf that replaces the leaves 4 and 5.
+            // That leaf is a left child, so it is not merged with the leaves 6 and 7.
+            let leaves = [
+                (node(0), Retention::Ephemeral),
+                (node(1), Retention::Ephemeral),
+                (node(2), checkpoint(0)),
+                (node(3), Retention::Ephemeral),
+                (node(4), Retention::Ephemeral),
+                (node(5), checkpoint(1)),
+                (node(6), Retention::Ephemeral),
+                (node(7), Retention::Ephemeral),
+            ];
+            let tree = LocatedPrunableTree::from_leaves(Position::from(0), Level::from(3), &leaves)
+                .expect("there are leaves, and their positions are small")
+                .subtree;
+            assert_eq!(take_batch_only_calls(), vec![(Level::from(0), 3)]);
+
+            // `BatchOnly::combine` panics, so this call fails if it hashes one pair at a time.
+            let cleared = tree.clear_flags(BTreeMap::from([
+                (Position::from(2), RetentionFlags::CHECKPOINT),
+                (Position::from(5), RetentionFlags::CHECKPOINT),
+            ]));
+
+            assert_eq!(
+                take_batch_only_calls(),
+                vec![
+                    (Level::from(0), 1),
+                    (Level::from(1), 2),
+                    (Level::from(2), 1)
+                ]
+            );
+            assert_eq!(
+                cleared,
+                LocatedTree {
+                    root_addr: Address::from_parts(Level::from(3), 0),
+                    root: leaf((
+                        BatchOnly("2(1(0(01)0(23))1(0(45)0(67)))".to_string()),
+                        RetentionFlags::EPHEMERAL
+                    )),
+                }
+            );
+        }
+
+        proptest! {
+            #[test]
+            fn clear_flags_matches_clearing_one_pair_at_a_time(
+                root in arb_prunable_tree(arb_test_node(), 8, 64),
+                extra in arb_flags_to_clear(),
+                clear_each_flag in any::<bool>(),
+            ) {
+                let root_addr = Address::from_parts(Level::from(7), 0);
+                let tree = LocatedTree::from_parts(root_addr, root).unwrap();
+                let to_clear = flags_to_clear(&tree, extra, clear_each_flag);
+
+                let expected = clear_flags_one_pair_at_a_time(&tree, to_clear.clone());
+                prop_assert_eq!(tree.clear_flags(to_clear), expected);
+            }
+
+            #[test]
+            fn clear_flags_calls_combine_pairs_at_most_once_for_each_level(
+                root in arb_prunable_tree("[a-z]".prop_map(BatchOnly), 8, 64),
+                extra in arb_flags_to_clear(),
+                clear_each_flag in any::<bool>(),
+            ) {
+                let root_addr = Address::from_parts(Level::from(7), 0);
+                let tree = LocatedTree::from_parts(root_addr, root).unwrap();
+                let to_clear = flags_to_clear(&tree, extra, clear_each_flag);
+
+                take_batch_only_calls();
+                // `BatchOnly::combine` panics, so this call fails if it hashes one pair at a
+                // time.
+                let _ = tree.clear_flags(to_clear);
+
+                let levels: Vec<u8> = take_batch_only_calls()
+                    .into_iter()
+                    .map(|(level, _)| u8::from(level))
+                    .collect();
+                prop_assert!(
+                    levels.windows(2).all(|pair| pair[0] < pair[1]),
+                    "levels: {:?}",
+                    levels
+                );
+            }
+        }
+    }
 }
