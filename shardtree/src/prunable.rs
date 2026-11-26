@@ -2365,7 +2365,8 @@ mod tests {
         }
     }
 
-    /// Tests of how many times `PrunableTree::merge_checked` calls `Hashable::combine`.
+    /// Tests of where `PrunableTree::merge_checked` reports a conflict, and of how many times
+    /// it calls `Hashable::combine`.
     mod merge_hashing {
         use std::cell::Cell;
         use std::sync::Arc;
@@ -2373,7 +2374,7 @@ mod tests {
         use incrementalmerkletree::{Address, Hashable, Level};
 
         use crate::{
-            prunable::{PrunableTree, RetentionFlags},
+            prunable::{MergeError, PrunableTree, RetentionFlags},
             tree::tests::{leaf, nil, parent},
         };
 
@@ -2459,10 +2460,30 @@ mod tests {
             assert_eq!(combine_calls, 0);
         }
 
+        /// Returns the root of `tree`, whose root node is at `root_addr`.
+        fn root_of(tree: &PrunableTree<CountingNode>, root_addr: Address) -> CountingNode {
+            tree.root_hash(root_addr, root_addr.position_range_end())
+                .expect("the tree is complete")
+        }
+
         #[test]
-        fn merge_of_two_complete_parents_compares_their_roots() {
-            // Both trees hold the leaves 0 to 3, so both roots can be computed. The second
-            // tree has another value for its last leaf, so the roots differ.
+        fn merge_of_two_complete_parents_does_not_hash() {
+            // Both trees hold the leaves 0 to 3, and neither holds a stored root. The merge
+            // compares the leaves, so it has no root to compute.
+            let root_addr = Address::from_parts(Level::from(2), 0);
+
+            let (combine_calls, merged) = count_combine_calls(|| {
+                marked_subtree(0).merge_checked(root_addr, marked_subtree(0))
+            });
+
+            assert_eq!(merged, Ok(marked_subtree(0)));
+            assert_eq!(combine_calls, 0);
+        }
+
+        #[test]
+        fn merge_of_two_complete_parents_reports_the_leaf_that_differs() {
+            // Both trees hold the leaves 0 to 3. The second tree has another value for its
+            // last leaf.
             let root_addr = Address::from_parts(Level::from(2), 0);
             let stored = marked_subtree(0);
             let conflicting = {
@@ -2475,9 +2496,338 @@ mod tests {
 
             assert_eq!(
                 merged,
-                Err(crate::prunable::MergeError::Conflict(root_addr))
+                Err(MergeError::Conflict(Address::from_parts(Level::from(0), 3)))
             );
-            assert!(combine_calls > 0);
+            assert_eq!(combine_calls, 0);
+        }
+
+        #[test]
+        fn merge_checks_a_stored_root_with_one_hash_for_each_parent() {
+            // The stored tree holds the root of the leaves 0 to 7, and the leaves 0 to 3. The
+            // inserted tree holds the leaves 0 to 7. The merged tree is complete, so the stored
+            // root is compared with the root of the merged children. The merged tree has 7
+            // parent nodes.
+            let root_addr = Address::from_parts(Level::from(3), 0);
+            let inserted = parent(marked_subtree(0), marked_subtree(4));
+            let root = Arc::new(root_of(&inserted, root_addr));
+            let stored = parent(marked_subtree(0), nil()).reannotate_root(Some(root.clone()));
+
+            let (combine_calls, merged) =
+                count_combine_calls(|| stored.merge_checked(root_addr, inserted.clone()));
+
+            assert_eq!(merged, Ok(inserted.reannotate_root(Some(root))));
+            assert_eq!(combine_calls, 7);
+        }
+
+        #[test]
+        fn merge_of_two_parents_with_different_stored_roots_reports_a_conflict() {
+            // Each tree holds a stored root and the leaves 0 to 3 of 8 leaves, so neither
+            // stored root can be compared with a root that is computed from leaves.
+            let root_addr = Address::from_parts(Level::from(3), 0);
+            let with_stored_root = |value: u64| {
+                parent(marked_subtree(0), nil())
+                    .reannotate_root(Some(Arc::new(CountingNode(value))))
+            };
+
+            let (combine_calls, merged) = count_combine_calls(|| {
+                with_stored_root(1).merge_checked(root_addr, with_stored_root(2))
+            });
+
+            assert_eq!(merged, Err(MergeError::Conflict(root_addr)));
+            assert_eq!(combine_calls, 0);
+        }
+
+        /// Returns a complete tree that holds the leaves 0 to 3, and a stored root that is not
+        /// the root of those leaves.
+        fn subtree_with_wrong_stored_root(root_addr: Address) -> PrunableTree<CountingNode> {
+            let wrong_root = CountingNode(root_of(&marked_subtree(0), root_addr).0 ^ 1);
+            marked_subtree(0).reannotate_root(Some(Arc::new(wrong_root)))
+        }
+
+        #[test]
+        fn merge_with_a_complete_parent_reports_a_stored_root_that_differs_from_its_children() {
+            let root_addr = Address::from_parts(Level::from(2), 0);
+            let stored = subtree_with_wrong_stored_root(root_addr);
+
+            assert_eq!(
+                stored.merge_checked(root_addr, marked_subtree(0)),
+                Err(MergeError::Conflict(root_addr))
+            );
+        }
+
+        #[test]
+        fn merge_with_an_incomplete_parent_reports_a_stored_root_that_differs_from_its_children() {
+            // The inserted tree holds only the leaf 0, so its root cannot be computed.
+            let root_addr = Address::from_parts(Level::from(2), 0);
+            let stored = subtree_with_wrong_stored_root(root_addr);
+            let inserted = parent(
+                parent(leaf((CountingNode(0), RetentionFlags::MARKED)), nil()),
+                nil(),
+            );
+
+            assert_eq!(
+                stored.merge_checked(root_addr, inserted),
+                Err(MergeError::Conflict(root_addr))
+            );
+        }
+    }
+
+    /// Tests of `PrunableTree::merge_checked` on trees that each hold a part of one sequence of
+    /// leaves. Such a tree is called a view of the leaves.
+    mod merge_of_views {
+        use std::sync::Arc;
+
+        use incrementalmerkletree::{Address, Level, Position};
+        use proptest::prelude::*;
+
+        use crate::{
+            prunable::{MergeError, PrunableTree, RetentionFlags},
+            testing::{arb_char_str, arb_retention_flags},
+            tree::{Node, Tree},
+        };
+
+        /// The height of the trees of these tests.
+        const HEIGHT: u8 = 4;
+
+        /// The address of the root of the trees of these tests.
+        fn root_addr() -> Address {
+            Address::from_parts(Level::from(HEIGHT), 0)
+        }
+
+        /// What a view holds at one node of the tree, and below it.
+        #[derive(Clone, Debug)]
+        enum Shape {
+            /// The view holds nothing.
+            Nil,
+            /// The view holds the root of the node, in a leaf node with these flags.
+            Root(RetentionFlags),
+            /// The view holds a parent node, which stores its root if `stored_root` is true.
+            Parent {
+                stored_root: bool,
+                left: Box<Shape>,
+                right: Box<Shape>,
+            },
+        }
+
+        fn arb_shape() -> impl Strategy<Value = Shape> {
+            let leaf = prop_oneof![
+                1 => Just(Shape::Nil),
+                3 => arb_retention_flags().prop_map(Shape::Root),
+            ];
+            leaf.prop_recursive(u32::from(HEIGHT), 32, 2, |inner| {
+                (proptest::bool::weighted(0.25), inner.clone(), inner).prop_map(
+                    |(stored_root, left, right)| Shape::Parent {
+                        stored_root,
+                        left: Box::new(left),
+                        right: Box::new(right),
+                    },
+                )
+            })
+        }
+
+        /// Returns a strategy for the leaves of a tree of height `HEIGHT`.
+        fn arb_leaves() -> impl Strategy<Value = Vec<String>> {
+            proptest::collection::vec(arb_char_str(), 1 << HEIGHT)
+        }
+
+        /// Returns the root of the subtree of `leaves` at `level` whose first leaf is at index
+        /// `start`. The `combine` of `String` joins its two arguments, so the root is the
+        /// leaves in order.
+        fn root(leaves: &[String], level: u8, start: usize) -> String {
+            leaves[start..start + (1 << level)].concat()
+        }
+
+        /// Returns the view of `leaves` that `shape` describes.
+        ///
+        /// - Preconditions: `leaves` holds the leaves from `start` to `start + 2^level`.
+        /// - Inputs: `shape` describes the view at the node at `level` whose first leaf is at
+        ///   index `start`, and below that node.
+        /// - Outputs: a tree in which each leaf node and each stored root holds the root of its
+        ///   subtree of `leaves`. A parent node at level 0 becomes a leaf node.
+        /// - Side effects: none.
+        fn view(shape: &Shape, leaves: &[String], level: u8, start: usize) -> PrunableTree<String> {
+            match (shape, level.checked_sub(1)) {
+                (Shape::Nil, _) => Tree::empty(),
+                (Shape::Root(flags), _) => Tree::leaf((root(leaves, level, start), *flags)),
+                (Shape::Parent { .. }, None) => {
+                    Tree::leaf((root(leaves, level, start), RetentionFlags::EPHEMERAL))
+                }
+                (
+                    Shape::Parent {
+                        stored_root,
+                        left,
+                        right,
+                    },
+                    Some(child_level),
+                ) => {
+                    let left = view(left, leaves, child_level, start);
+                    let right = view(right, leaves, child_level, start + (1 << child_level));
+                    let ann = stored_root.then(|| Arc::new(root(leaves, level, start)));
+                    if ann.is_none() && left.is_nil() && right.is_nil() {
+                        Tree::empty()
+                    } else {
+                        Tree::parent(ann, left, right)
+                    }
+                }
+            }
+        }
+
+        /// Merges two trees as `PrunableTree::merge_checked` did when it compared the roots of
+        /// two parent nodes before it merged their children.
+        ///
+        /// - Preconditions: `addr` is the address of the root of `t0` and of `t1`.
+        /// - Inputs: the two trees to merge.
+        /// - Outputs: the merged tree. If the roots of two parent nodes can both be computed
+        ///   and differ, the error holds the address of those nodes, and the nodes below them
+        ///   are not compared.
+        /// - Side effects: none.
+        fn merge_comparing_roots(
+            addr: Address,
+            t0: PrunableTree<String>,
+            t1: PrunableTree<String>,
+        ) -> Result<PrunableTree<String>, MergeError> {
+            let no_default_fill = addr.position_range_end();
+            match (t0, t1) {
+                (Tree(Node::Nil), other) | (other, Tree(Node::Nil)) => Ok(other),
+                (Tree(Node::Leaf { value: vl }), Tree(Node::Leaf { value: vr })) => {
+                    if vl.0 == vr.0 {
+                        Ok(Tree::leaf((vl.0, vl.1 | vr.1)))
+                    } else {
+                        Err(MergeError::Conflict(addr))
+                    }
+                }
+                (Tree(Node::Leaf { value }), parent @ Tree(Node::Parent { .. }))
+                | (parent @ Tree(Node::Parent { .. }), Tree(Node::Leaf { value })) => {
+                    let parent_hash = parent
+                        .has_computable_root()
+                        .then(|| parent.root_hash(addr, no_default_fill).ok())
+                        .flatten();
+                    if parent_hash.iter().all(|r| r == &value.0) {
+                        Ok(parent.reannotate_root(Some(Arc::new(value.0))))
+                    } else {
+                        Err(MergeError::Conflict(addr))
+                    }
+                }
+                (lparent, rparent) => {
+                    let both_complete =
+                        lparent.has_computable_root() && rparent.has_computable_root();
+                    let lroot = both_complete
+                        .then(|| lparent.root_hash(addr, no_default_fill).ok())
+                        .flatten();
+                    let rroot = both_complete
+                        .then(|| rparent.root_hash(addr, no_default_fill).ok())
+                        .flatten();
+                    if lroot.iter().zip(&rroot).all(|(l, r)| l == r) {
+                        if let (
+                            Tree(Node::Parent {
+                                ann: lann,
+                                left: ll,
+                                right: lr,
+                            }),
+                            Tree(Node::Parent {
+                                ann: rann,
+                                left: rl,
+                                right: rr,
+                            }),
+                        ) = (lparent, rparent)
+                        {
+                            let (l_addr, r_addr) =
+                                addr.children().ok_or(MergeError::TreeMalformed(addr))?;
+                            let ann = lann.or(rann);
+                            let verified = ann.is_none()
+                                || (ll.has_computable_root() && lr.has_computable_root())
+                                || (rl.has_computable_root() && rr.has_computable_root());
+                            let new_left = merge_comparing_roots(
+                                l_addr,
+                                ll.as_ref().clone(),
+                                rl.as_ref().clone(),
+                            )?;
+                            let new_right = merge_comparing_roots(
+                                r_addr,
+                                lr.as_ref().clone(),
+                                rr.as_ref().clone(),
+                            )?;
+                            if !verified {
+                                PrunableTree::check_annotation(addr, &ann, &new_left, &new_right)?;
+                            }
+                            Ok(Tree::unite(addr.level() - 1, ann, new_left, new_right))
+                        } else {
+                            unreachable!()
+                        }
+                    } else {
+                        Err(MergeError::Conflict(addr))
+                    }
+                }
+            }
+        }
+
+        proptest! {
+            #[test]
+            fn two_views_of_the_same_leaves_merge_without_conflict(
+                leaves in arb_leaves(),
+                a in arb_shape(),
+                b in arb_shape(),
+            ) {
+                let a = view(&a, &leaves, HEIGHT, 0);
+                let b = view(&b, &leaves, HEIGHT, 0);
+
+                prop_assert!(a.merge_checked(root_addr(), b).is_ok());
+            }
+
+            #[test]
+            fn merge_does_not_depend_on_the_order_of_its_arguments(
+                leaves in arb_leaves(),
+                changed in proptest::option::of((0..(1usize << HEIGHT), arb_char_str())),
+                a in arb_shape(),
+                b in arb_shape(),
+            ) {
+                let mut other_leaves = leaves.clone();
+                if let Some((index, leaf)) = changed {
+                    other_leaves[index] = leaf;
+                }
+                let a = view(&a, &leaves, HEIGHT, 0);
+                let b = view(&b, &other_leaves, HEIGHT, 0);
+
+                prop_assert_eq!(
+                    a.clone().merge_checked(root_addr(), b.clone()),
+                    b.merge_checked(root_addr(), a)
+                );
+            }
+
+            #[test]
+            fn merge_matches_the_merge_that_compares_roots(
+                leaves in arb_leaves(),
+                (index, leaf) in (0..(1usize << HEIGHT), arb_char_str()),
+                a in arb_shape(),
+                b in arb_shape(),
+            ) {
+                // The second view is a view of leaves that differ from the first in at most
+                // one leaf, so the two views can conflict only above that leaf.
+                let mut other_leaves = leaves.clone();
+                other_leaves[index] = leaf;
+                let a = view(&a, &leaves, HEIGHT, 0);
+                let b = view(&b, &other_leaves, HEIGHT, 0);
+
+                let expected = merge_comparing_roots(root_addr(), a.clone(), b.clone());
+                let merged = a.merge_checked(root_addr(), b);
+
+                match (expected, merged) {
+                    (Ok(expected), Ok(merged)) => prop_assert_eq!(expected, merged),
+                    (
+                        Err(MergeError::Conflict(expected)),
+                        Err(MergeError::Conflict(reported)),
+                    ) => {
+                        // The conflict is reported at the node that the other merge reports,
+                        // or below it, and above the leaf that differs.
+                        prop_assert!(expected.contains(&reported));
+                        let position = Position::from(u64::try_from(index).unwrap());
+                        prop_assert!(reported.position_range().contains(&position));
+                    }
+                    (expected, merged) => {
+                        prop_assert!(false, "expected {:?}, merged {:?}", expected, merged)
+                    }
+                }
+            }
         }
     }
 }
