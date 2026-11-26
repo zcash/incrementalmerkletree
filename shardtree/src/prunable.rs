@@ -326,20 +326,45 @@ where
         }
     }
 
-    /// Merge two subtrees having the same root address.
+    /// Merges two trees that have the same root address.
     ///
-    /// The merge operation is checked to be strictly additive and returns an error if merging
-    /// would cause information loss or if a conflict between root hashes occurs at a node. A
-    /// stored root (a leaf or a parent's cached annotation) conflicts with the root computed from
-    /// the children beneath it once those children are complete. The returned error contains the
-    /// address of the node where such a conflict occurred.
+    /// - Preconditions: `root_addr` is the address of the root of `self` and of `other`.
+    /// - Inputs: the two trees to merge. Each holds a part of the nodes at and below
+    ///   `root_addr`.
+    /// - Outputs: a tree that holds the nodes of both trees. A leaf node that both trees hold
+    ///   keeps the retention flags of both. If the two trees conflict, the result is
+    ///   `MergeError::Conflict` with the address of the node at which they conflict.
+    /// - Side effects: none.
     ///
-    /// Stored trees are assumed to be internally consistent: where a parent's cached annotation
-    /// sits over children whose roots can be computed, the annotation equals the root of those
-    /// children. The insertion and merge operations of this crate preserve this property, but
-    /// do not establish it for their inputs: a tree constructed directly (for example with
+    /// The two trees conflict at a node if one of these comparisons fails there:
+    ///
+    /// - Two leaf nodes must hold the same value.
+    /// - A leaf node must hold the root of a parent node, if that root can be computed. The root
+    ///   of a parent node that stores its root (a cached annotation) is the stored root.
+    /// - The stored roots of two parent nodes must be equal.
+    /// - The stored root of a parent node that both trees hold must be the root of the merged
+    ///   children of that node, if the roots of both merged children can be computed.
+    ///
+    /// The merge compares the children of a node before it compares a stored root of that node
+    /// with their root, and the left child before the right child. The error is for the first
+    /// comparison that fails.
+    ///
+    /// The merge does not compare the roots of two parent nodes that store no root, because the
+    /// comparisons below those nodes fail if the roots differ. The merge hashes only to compare
+    /// a stored value with a root, and to join two leaf nodes that need not be kept apart.
+    ///
+    /// A stored root is not compared with the children below it in these cases, so a stored
+    /// root that differs from the root of its children is not detected there:
+    ///
+    /// - The roots of the merged children cannot both be computed.
+    /// - Only one of the two trees holds the node.
+    /// - The other tree holds a leaf node at that address. The leaf is compared with the stored
+    ///   root.
+    ///
+    /// The insertion and merge operations of this crate do not store a root that differs from
+    /// the root of complete children. A tree constructed directly (for example with
     /// [`Tree::parent`]) or read from a [`ShardStore`](crate::store::ShardStore) written by other
-    /// code is not checked, and an inconsistency already present in it is not detected.
+    /// code can hold one.
     #[tracing::instrument()]
     pub fn merge_checked(self, root_addr: Address, other: Self) -> Result<Self, MergeError> {
         /// Pre-condition: `root_addr` must be the address of `t0` and `t1`.
@@ -382,59 +407,36 @@ where
                         Err(MergeError::Conflict(addr))
                     }
                 }
-                (lparent, rparent) => {
-                    // The roots are compared only if both can be computed. `root_hash` hashes
-                    // the complete parts of a tree before it finds that the tree is
-                    // incomplete, so do not call it unless both trees are complete.
-                    let both_complete =
-                        lparent.has_computable_root() && rparent.has_computable_root();
-                    let lroot = both_complete
-                        .then(|| lparent.root_hash(addr, no_default_fill).ok())
-                        .flatten();
-                    let rroot = both_complete
-                        .then(|| rparent.root_hash(addr, no_default_fill).ok())
-                        .flatten();
-                    // If both parents share the same root hash (or if one of them is absent),
-                    // they can be merged
-                    if lroot.iter().zip(&rroot).all(|(l, r)| l == r) {
-                        // using `if let` here to bind variables; we need to borrow the trees for
-                        // root hash calculation but binding the children of the parent node
-                        // interferes with binding a reference to the parent.
-                        if let (
-                            Tree(Node::Parent {
-                                ann: lann,
-                                left: ll,
-                                right: lr,
-                            }),
-                            Tree(Node::Parent {
-                                ann: rann,
-                                left: rl,
-                                right: rr,
-                            }),
-                        ) = (lparent, rparent)
-                        {
-                            let (l_addr, r_addr) =
-                                addr.children().ok_or(MergeError::TreeMalformed(addr))?;
-                            let ann = lann.or(rann);
-                            // If either input already has complete children, the merged
-                            // children have the same root. That root was already compared
-                            // with the annotation, either when that input was built or by the
-                            // root comparison above.
-                            let verified = ann.is_none()
-                                || (ll.has_computable_root() && lr.has_computable_root())
-                                || (rl.has_computable_root() && rr.has_computable_root());
-                            let new_left = go(l_addr, ll.as_ref().clone(), rl.as_ref().clone())?;
-                            let new_right = go(r_addr, lr.as_ref().clone(), rr.as_ref().clone())?;
-                            if !verified {
-                                PrunableTree::check_annotation(addr, &ann, &new_left, &new_right)?;
-                            }
-                            Ok(Tree::unite(addr.level() - 1, ann, new_left, new_right))
-                        } else {
-                            unreachable!()
-                        }
-                    } else {
-                        trace!(left = ?lroot, right = ?rroot, "Merge conflict for nodes");
+                (
+                    Tree(Node::Parent {
+                        ann: lann,
+                        left: ll,
+                        right: lr,
+                    }),
+                    Tree(Node::Parent {
+                        ann: rann,
+                        left: rl,
+                        right: rr,
+                    }),
+                ) => {
+                    // The roots of the two parents are not computed and compared here. If
+                    // neither parent stores a root, the roots differ only if a comparison
+                    // below this node fails.
+                    if lann.iter().zip(&rann).any(|(l, r)| l != r) {
+                        trace!(left = ?lann, right = ?rann, "Merge conflict for stored roots");
                         Err(MergeError::Conflict(addr))
+                    } else {
+                        let (l_addr, r_addr) =
+                            addr.children().ok_or(MergeError::TreeMalformed(addr))?;
+                        let ann = lann.or(rann);
+                        let new_left = go(l_addr, ll.as_ref().clone(), rl.as_ref().clone())?;
+                        let new_right = go(r_addr, lr.as_ref().clone(), rr.as_ref().clone())?;
+                        // A stored root is compared with the root of the merged children
+                        // whenever that root can be computed, also when one input already had
+                        // complete children. This detects a stored root that does not match
+                        // the children stored below it.
+                        PrunableTree::check_annotation(addr, &ann, &new_left, &new_right)?;
+                        Ok(Tree::unite(addr.level() - 1, ann, new_left, new_right))
                     }
                 }
             }
@@ -947,8 +949,12 @@ where
     /// hashes. A stored root (a leaf or a parent's cached annotation) conflicts with the root
     /// computed from the leaves inserted beneath it once those leaves form a complete subtree.
     ///
-    /// The same consistency assumption as for [`PrunableTree::merge_checked`] applies to
-    /// `self`.
+    /// At and below the root address of `subtree`, this method compares the two trees as
+    /// [`PrunableTree::merge_checked`] does, and the address in the error is the address that
+    /// `merge_checked` reports. Above that address, it compares a stored root of `self` with
+    /// the children below it only when the insertion makes those children complete. It does
+    /// not check a node of `self` that is not above, at, or below the root address of
+    /// `subtree`.
     pub fn insert_subtree(
         &self,
         subtree: Self,

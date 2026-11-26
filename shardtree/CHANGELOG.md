@@ -11,6 +11,19 @@ and this project adheres to Rust's notion of
 - `shardtree::PrunableTree::prune` hashes two merged leaves at their own
   level. Before, it hashed them at the level of their parent, so the pruned
   tree had a different root for a hash function that depends on the level.
+- `shardtree::PrunableTree::merge_checked` and
+  `shardtree::LocatedPrunableTree::insert_subtree` now return a conflict error
+  when the stored root of a parent node that both trees hold differs from the
+  root of the merged children of that node. Before, they returned this error
+  only when the root of the other tree at that node could be computed.
+  `ShardTree::insert_frontier_nodes`, `ShardTree::insert_tree`, and
+  `ShardTree::batch_insert` return
+  `ShardTreeError::Insert(InsertionError::Conflict(_))` in this case.
+- The conflict error of `shardtree::PrunableTree::merge_checked` and
+  `shardtree::LocatedPrunableTree::insert_subtree` now contains the address of
+  the node at which the two trees hold different values. Before, it contained
+  the address of the highest node at which the roots of both trees could be
+  computed and differed.
 
 ## [0.8.1] - 2026-11-25
 
